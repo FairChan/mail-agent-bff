@@ -51,7 +51,8 @@ The Gateway token is operator-grade credential and should not be exposed to brow
 - `POST /api/mail/connections/outlook/launch-auth`
   - Force-starts Outlook OAuth flow and returns Composio external auth link (`connect.composio.dev`)
   - Server calls `COMPOSIO_MANAGE_CONNECTIONS` with `reinitiate_all=true` to guarantee login-link generation
-  - If no `redirectUrl` is returned, route fails fast with `OUTLOOK_AUTH_REDIRECT_MISSING`
+  - If upstream does not return `redirectUrl`, route falls back to `COMPOSIO_PLATFORM_URL` so WebUI button still opens an external Composio page
+  - If Composio consumer key is invalid, route returns `503` with `errorCode=COMPOSIO_CONSUMER_KEY_INVALID` and includes fallback `redirectUrl`
 - `POST /api/mail/sources/auto-connect/outlook`
   - Fully-automatic Outlook source onboarding for "large third-party mailbox connect" UX:
     - checks/initiates Composio authorization
@@ -143,6 +144,7 @@ cp apps/webui/.env.example apps/webui/.env
 
 3. Fill `apps/bff/.env` with your real `OPENCLAW_GATEWAY_BEARER` and a strong `BFF_API_KEY` (min 16 chars)
    - If deployed behind reverse proxy, set `TRUST_PROXY` to hop count (for example `1`) or proxy CIDR list; avoid `true` on internet-facing deployments.
+   - Optional: set `COMPOSIO_PLATFORM_URL` to your workspace/project page (used as OAuth fallback open target)
 
 4. Start BFF
 
@@ -235,6 +237,7 @@ npm run dev:web
 ## Notes
 
 - If `POST /api/agent/query` returns 404, enable `gateway.http.endpoints.responses.enabled=true` in OpenClaw config.
+- If mail routes return `503` with `COMPOSIO_CONSUMER_KEY_INVALID`, your OpenClaw Composio plugin key is invalid (`plugins.entries.composio.config.consumerKey`). Update it to a valid `ck_...` key, restart gateway, then retry.
 - BFF defaults to `HOST=127.0.0.1`; do not bind publicly unless you also add reverse proxy auth, rate limiting, and audit logging.
 - `/api/mail/insights` date parsing semantics and boundaries (today/tomorrow/horizon) use `tz` when provided, otherwise fallback to the BFF runtime timezone.
 - `horizonDays` uses inclusive day-window semantics (day 1 = today in selected `tz`).

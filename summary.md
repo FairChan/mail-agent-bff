@@ -1257,3 +1257,183 @@
   - 本轮双子代理：`m27_backend_audit`、`m27_frontend_audit`
   - 初审发现的 Medium 项均已回修。
   - 最终复审结论：`Critical/High/Medium/Low = 0/0/0/0`（前后端均清零）。
+
+### 2026-03-27T19:48:14+08:00
+
+- Scope: 基于 M20+1 的生产部署。
+- Task type: Build + Deploy
+- Main changes:
+- 执行全量构建: npm run build
+- 前端静态资源发布: rsync --delete apps/webui/dist/ -> /var/www/true-sight.asia/
+- 重启后端服务: systemctl restart openclaw-mail-bff.service
+- Validation completed:
+- BFF 健康检查: http://127.0.0.1:8787/live -> 200
+- 线上页面: https://true-sight.asia/ -> 200
+- 线上邮件页: https://true-sight.asia/mailbox-viewer.html -> 200
+- Sub-agent audit findings:
+  - 审计子代理: /root/deploy_verify_m20
+  - 结论: HEAD=8de9191(M20+1), service=active, web checks=200
+
+
+
+
+### 2026-03-27T20:25:56+08:00
+
+- Scope: 修复 UI 授权异常与 Composio 上游错误可观测性（M28）。
+- Task type: Backend + Frontend + Deploy + Audit
+- Main changes:
+- Backend:
+  - 在 mail tool 解析链路中识别 Composio 上游纯文本错误，映射结构化错误码，避免原先的模糊 502 文案。
+  - 对 Invalid consumer API key 统一返回 503，errorCode=COMPOSIO_CONSUMER_KEY_INVALID，并附带 fallback redirectUrl。
+  - launch-auth 无 redirect 场景改为 fallback 到 COMPOSIO_PLATFORM_URL。
+  - 新增专用 fallback URL 校验，仅允许 platform.composio.dev 或本地调试 host。
+  - Gateway 错误兜底增强：除 errorCode 外，补充 message/error/detail 字段检测。
+- Frontend:
+  - 修复 Outlook 授权失败分支：弹窗被关闭时可重开并继续跳转授权页面。
+  - 修复提示冲突：fallback 跳转成功后不再强制红色错误提示。
+  - 发起新授权前清理旧 redirectUrl 和 connectedAccountId，避免状态串场。
+- Config and Docs:
+  - 新增环境变量 COMPOSIO_PLATFORM_URL（用于授权页 fallback）。
+  - README 同步更新 launch-auth/fallback/consumer key 故障说明。
+- Validation completed:
+- npm run check passed.
+- npm run build passed.
+- Smoke tests:
+  - https://true-sight.asia/ -> 200
+  - https://true-sight.asia/mailbox-viewer.html -> 200
+  - http://127.0.0.1:8787/live -> 200
+  - POST /api/mail/connections/outlook/launch-auth -> 503 + COMPOSIO_CONSUMER_KEY_INVALID + redirectUrl
+  - GET /api/mail/triage -> 503 + COMPOSIO_CONSUMER_KEY_INVALID + redirectUrl
+- Deployment:
+  - openclaw-mail-bff.service restarted and active.
+  - Frontend assets synced to /var/www/true-sight.asia via rsync --delete.
+- Sub-agent audit findings:
+  - Backend audit: /root/m28_backend_audit (initial Medium/Low, recheck 0/0/0/0)
+  - Frontend audit: /root/m28_frontend_audit (initial Medium/Low, recheck 0/0/0/0)
+
+### 2026-03-27T21:18:40+08:00
+
+- Scope: M28.1 稳定性加固（Composio 插件兼容 + 邮件响应解析抗形态漂移）并完成线上再部署。
+- Task type: Backend + Plugin + Deploy + Audit
+- Main changes:
+- Backend `apps/bff/src/mail.ts`:
+  - `COMPOSIO_MULTI_EXECUTE_TOOL` 文本解析增强：支持 code-fence JSON、字符串 JSON 多层反序列化。
+  - `OUTLOOK_QUERY_EMAILS` 响应提取改为 BFS 深层扫描，兼容 `data/result/payload/body/response/result_data` 等多种嵌套形态。
+  - 修复空数组误判与误命中非邮件数组：仅白名单键位允许空数组，根数组空结果受控放行。
+  - 扩展鉴权错误识别：新增 `invalid api key / unauthorized...api key / missing authentication...api key` 归一匹配。
+- Backend `apps/bff/src/server.ts`:
+  - Composio key 识别规则同步扩展；统一返回结构化 `503 + COMPOSIO_CONSUMER_KEY_INVALID`。
+  - 错误文案调整为通用 `auth key`，避免仅绑定 `consumerKey` 语义。
+- Plugin `/root/.openclaw/extensions/composio`:
+  - 新增配置：`apiKey`、`authHeader(auto|x-consumer-api-key|x-api-key|authorization)`。
+  - `fetchToolsSync` 改为稳健 SSE 解析（按事件边界聚合多行 `data:` 并回溯最后可解析 JSON）。
+  - 当 tools/list 失败时注册 fallback meta-tools（`COMPOSIO_*`），避免 BFF 侧出现 404 工具缺失。
+  - 工具执行链路增加 MCP ready 超时（10s）并清理 timer，避免高并发下卡死/计时器泄漏。
+  - `openclaw.plugin.json` 为 `authHeader` 增加 `enum` 约束；`config.ts` 对非法值显式报错。
+- Validation completed:
+- `npm run check` passed.
+- `npm run build` passed.
+- Smoke tests:
+  - `https://true-sight.asia/` -> 200
+  - `https://true-sight.asia/mailbox-viewer.html` -> 200
+  - `http://127.0.0.1:8787/live` -> 200
+  - `POST /api/mail/connections/outlook/launch-auth` -> 503 + `COMPOSIO_CONSUMER_KEY_INVALID` + `redirectUrl`
+  - `GET /api/mail/triage` -> 503 + `COMPOSIO_CONSUMER_KEY_INVALID`（不再退化为 404）
+- Deployment:
+  - `openclaw gateway restart` 完成（已加载插件新逻辑）。
+  - `openclaw-mail-bff.service` 重启并保持 `active`。
+  - 前端资源已同步到 `/var/www/true-sight.asia`（`rsync --delete`）。
+- Sub-agent audit findings:
+  - 初审：`m28_backend_audit` 给出 `0/1/3/1`（含空数组误判、SSE 解析、mcpReady 超时、schema 约束问题）。
+  - 回修后复审：`Critical/High/Medium/Low = 0/0/0/0`。
+
+### 2026-03-27T23:05:30+08:00
+
+- Scope: M29 上线恢复（Composio 单工具 MCP 兼容、Outlook 一键授权弹窗闭环、错误语义与部署收口）。
+- Task type: Backend + Plugin + Frontend + Deploy + Audit
+- Main changes:
+- Gateway Plugin `/root/.openclaw/extensions/composio`:
+  - 将 Composio 配置切换为 `x-api-key + /v3/mcp/{serverId}/mcp?user_id=...`。
+  - `src/config.ts`：`ak_` key 在 `auto` 模式下默认走 `x-api-key`。
+  - `index.ts`：为 single-toolkit MCP 注入兼容 meta-tools（`COMPOSIO_MANAGE_CONNECTIONS/WAIT_FOR_CONNECTIONS/MULTI_EXECUTE_TOOL`）。
+  - 兼容层新增 Outlook OAuth API 调用（自动创建 `auth_config`、发起 `connected_accounts`、返回 `redirect_url`）。
+  - 安全加固：去除 `curl -L` 跨域重定向传密钥风险；`composio.dev` 域名匹配收紧；Composio REST 请求增加 12s 超时；避免覆盖已存在原生 `COMPOSIO_*` 工具执行器。
+- BFF `/root/.openclaw/workspace/apps/bff/src`:
+  - `mail.ts`：`COMPOSIO_MULTI_EXECUTE_TOOL` 失败时优先透传首个真实错误（不再只有 `1 out of 1 tools failed`）。
+  - `server.ts`：新增 `OUTLOOK_CONNECTION_REQUIRED` 统一语义，未授权邮箱时返回 `412 + errorCode + redirectUrl`。
+  - `server.ts`：`GatewayHttpError` 与非 Gateway 异常路径都统一映射 `OUTLOOK_CONNECTION_REQUIRED`。
+  - `server.ts` 与 `mail.ts`：收紧 `COMPOSIO_CONSUMER_KEY_INVALID` 判定，避免把“未连接 Outlook”误判成 key 无效。
+- Frontend `/root/.openclaw/workspace/apps/webui/src/App.tsx`:
+  - 授权按钮继续保持“新开弹窗不覆盖原页”；成功与 fallback 跳转均注册 `focus -> refreshDashboard`。
+  - 新增 `OUTLOOK_CONNECTION_REQUIRED` 用户友好提示。
+  - 新增授权请求 `requestSeq` 防回写（登出后旧请求结果不会回填 UI）。
+  - 新增 focus 监听清理（注册前清理、登出清理、组件卸载清理）。
+  - 登出时清理 Outlook 授权状态（info/error/redirect/accountId/busy）。
+- Runtime config:
+  - `/root/.openclaw/openclaw.json` 的 composio config 已更新为：
+    - `authHeader: x-api-key`
+    - `mcpUrl: https://backend.composio.dev/v3/mcp/fd2312d4-04dc-460d-9acf-9d06998a2627/mcp?user_id=openclaw_mail_agent`
+- Validation completed:
+- `npm run check` passed.
+- `npm run build` passed.
+- Gateway logs:
+  - Composio tools loaded: `Ready — 300 tools registered`
+  - MCP client connected
+- Smoke tests:
+  - `POST /api/mail/connections/outlook/launch-auth` -> `200`，返回 `status=initiated + redirectUrl`
+  - `GET /api/mail/triage`（未完成 OAuth）-> `412 OUTLOOK_CONNECTION_REQUIRED`
+  - `GET /api/mail/insights`（未完成 OAuth）-> `412 OUTLOOK_CONNECTION_REQUIRED`
+- Deployment:
+  - `openclaw-gateway` restarted and active.
+  - `openclaw-mail-bff.service` restarted and active.
+  - Frontend assets synced to `/var/www/true-sight.asia` via `rsync --delete`.
+- Sub-agent audit findings:
+  - 初审：
+    - backend `0/2/3/0`（重定向泄钥、compat 覆盖、错误判定/超时等）
+    - frontend `0/0/2/1`（412 映射、fallback 刷新、logout 清理）
+  - 回修后复审：
+    - backend `0/0/0/0`
+    - frontend `0/0/0/0`
+
+### 2026-03-27T23:14:20+08:00
+
+- Scope: M29.1 修复 Outlook 授权弹窗“误报被拦截”问题并再次部署。
+- Task type: Frontend + Deploy + Audit
+- Main changes:
+- `apps/webui/src/App.tsx`:
+  - 修复弹窗误判：不再因 `window.open` 句柄为空立即报“被拦截”；改为优先生成授权链接并尝试复用/重开弹窗，失败时提供“打开授权页”链接继续授权。
+  - 新增 `openOutlookAuthPopup` helper，统一弹窗创建与安全处理。
+  - 安全收口：若 `popup.opener = null` 失败，立即关闭弹窗并回退链接模式，避免潜在 opener 风险。
+  - 统一文案：提示与入口统一为“打开授权页”。
+- Validation completed:
+- `npm run check` passed.
+- `npm run build` passed.
+- 前端资源已同步至 `/var/www/true-sight.asia`，线上入口引用已更新为 `index-DAwoEJYx.js`。
+- Sub-agent audit findings:
+  - 复审：`m28_frontend_audit`
+  - 最终结论：`Critical/High/Medium/Low = 0/0/0/0`
+
+### 2026-03-27T23:33:20+08:00
+
+- Scope: M29.2 修复“已连接后再次点登录导致反复重授权/看似未连接”问题。
+- Task type: Backend + Frontend + Deploy + Audit
+- Main changes:
+- Backend `apps/bff/src/server.ts`:
+  - `POST /api/mail/connections/outlook/launch-auth` 不再默认 `reinitiate_all=true`（避免每次点击都重置授权态）。
+  - 若当前连接已 `active`（或 `hasActiveConnection=true`），直接返回成功且 `needsUserAction=false`，不再要求再次 OAuth。
+- Frontend `apps/webui/src/App.tsx`:
+  - 登录 Outlook 响应若为 `active`，直接提示“已连接，无需重复授权”并刷新数据。
+  - 修复 active 分支残留授权链接的低优先级 UX 问题（active 时清空 `outlookRedirectUrl`）。
+- Validation completed:
+- `npm run check` passed.
+- `npm run build` passed.
+- 线上验证：
+  - `launch-auth` 返回 `status=active, hasActiveConnection=true, redirectUrl=null`
+  - `triage` 返回 `200`（不再 412）
+- Deployment:
+  - `openclaw-mail-bff.service` 重启并 active。
+  - 前端资源同步到 `/var/www/true-sight.asia`，入口更新为 `index-CiVm60nO.js`。
+- Sub-agent audit findings:
+  - backend 复审：`0/0/0/0`
+  - frontend 初审：`0/0/0/1`（active 分支链接残留）
+  - 回修后 frontend 复审：`0/0/0/0`

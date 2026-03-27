@@ -895,6 +895,113 @@ function sanitizeOutlookRedirectUrl(rawUrl: string | null | undefined): string |
   }
 }
 
+function normalizedErrorText(input: string): string {
+  return input.replace(/\s+/g, " ").trim();
+}
+
+function isComposioConsumerKeyInvalidText(input: string): boolean {
+  const normalized = normalizedErrorText(input);
+  return (
+    /invalid (consumer )?api key/i.test(normalized) ||
+    /unauthorized[^.]*api key/i.test(normalized) ||
+    /missing authentication[^.]*api key/i.test(normalized)
+  );
+}
+
+function isOutlookConnectionRequiredText(input: string): boolean {
+  const normalized = normalizedErrorText(input);
+  return (
+    /no connected account found/i.test(normalized) ||
+    (/toolkit outlook/i.test(normalized) && /connected account/i.test(normalized)) ||
+    (/outlook/i.test(normalized) && /authorization/i.test(normalized) && /required|failed/i.test(normalized))
+  );
+}
+
+function outlookConnectionRequiredResponse() {
+  const fallbackRedirect = sanitizeComposioPlatformFallbackUrl(env.COMPOSIO_PLATFORM_URL);
+  return {
+    ok: false as const,
+    error: "Outlook 尚未完成授权，请先点击“登录 Outlook”完成连接。",
+    errorCode: "OUTLOOK_CONNECTION_REQUIRED",
+    ...(fallbackRedirect ? { redirectUrl: fallbackRedirect } : {}),
+  };
+}
+
+function sanitizeComposioPlatformFallbackUrl(rawUrl: string | null | undefined): string | null {
+  const normalized = rawUrl?.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(normalized);
+    const host = parsed.hostname.toLowerCase();
+    const isLocalhost = host === "localhost" || host === "127.0.0.1";
+    const isAllowedHost = isLocalhost || host === "platform.composio.dev";
+    if (!isAllowedHost) {
+      return null;
+    }
+
+    if (parsed.protocol === "http:" && !isLocalhost) {
+      return null;
+    }
+
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function composioConsumerKeyInvalidResponse() {
+  const fallbackRedirect = sanitizeComposioPlatformFallbackUrl(env.COMPOSIO_PLATFORM_URL);
+  return {
+    ok: false as const,
+    error: "Composio auth key is invalid. Please update OpenClaw composio key configuration and retry.",
+    errorCode: "COMPOSIO_CONSUMER_KEY_INVALID",
+    ...(fallbackRedirect ? { redirectUrl: fallbackRedirect } : {}),
+  };
+}
+
+function isComposioConsumerKeyInvalidGatewayError(error: GatewayHttpError): boolean {
+  const code = gatewayErrorCode(error.body);
+  if (code === "COMPOSIO_CONSUMER_KEY_INVALID") {
+    return true;
+  }
+
+  if (isRecord(error.body)) {
+    const messageCandidates = [error.body.message, error.body.error, error.body.detail];
+    for (const candidate of messageCandidates) {
+      if (typeof candidate === "string" && isComposioConsumerKeyInvalidText(candidate)) {
+        return true;
+      }
+    }
+  }
+
+  return isComposioConsumerKeyInvalidText(error.message);
+}
+
+function isOutlookConnectionRequiredGatewayError(error: GatewayHttpError): boolean {
+  const code = gatewayErrorCode(error.body);
+  if (code === "OUTLOOK_CONNECTION_REQUIRED") {
+    return true;
+  }
+
+  if (isRecord(error.body)) {
+    const messageCandidates = [error.body.message, error.body.error, error.body.detail];
+    for (const candidate of messageCandidates) {
+      if (typeof candidate === "string" && isOutlookConnectionRequiredText(candidate)) {
+        return true;
+      }
+    }
+  }
+
+  return isOutlookConnectionRequiredText(error.message);
+}
+
 function collectMailboxUserIdCandidates(value: unknown, depth = 0): string[] {
   if (depth > 3) {
     return [];
@@ -991,6 +1098,21 @@ function gatewayErrorSummary(body: unknown): string | null {
   }
 
   return "upstream_error_object";
+}
+
+function gatewayErrorCode(body: unknown): string | null {
+  if (!isRecord(body)) {
+    return null;
+  }
+
+  const candidates = [body.errorCode, body.code];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+
+  return null;
 }
 
 function gatewayErrorLogContext(
@@ -1479,6 +1601,22 @@ async function runOutlookConnectionTool(
   const text = extractToolTextPayload(raw);
   if (!text) {
     throw new Error("Invalid COMPOSIO_MANAGE_CONNECTIONS response: missing text payload");
+  }
+
+  const normalizedText = normalizedErrorText(text);
+  if (isComposioConsumerKeyInvalidText(normalizedText)) {
+    throw new GatewayHttpError(
+      503,
+      "Composio consumer key is invalid. Please update OpenClaw composio consumerKey (ck_...) and retry.",
+      {
+        errorCode: "COMPOSIO_CONSUMER_KEY_INVALID",
+      }
+    );
+  }
+  if (/^error calling composio_[a-z0-9_]+:/i.test(normalizedText)) {
+    throw new GatewayHttpError(502, normalizedText.slice(0, 320), {
+      errorCode: "COMPOSIO_TOOL_TEXT_ERROR",
+    });
   }
 
   let parsedJson: unknown = null;
@@ -3600,14 +3738,28 @@ server.post("/api/mail/connections/outlook", async (request, reply) => {
 
     if (error instanceof GatewayHttpError) {
       server.log.warn(gatewayErrorLogContext(error), "Outlook connection request failed");
+      const errorCode = gatewayErrorCode(error.body);
+      if (isComposioConsumerKeyInvalidGatewayError(error)) {
+        reply.status(503);
+        return composioConsumerKeyInvalidResponse();
+      }
+      if (isOutlookConnectionRequiredGatewayError(error)) {
+        reply.status(412);
+        return outlookConnectionRequiredResponse();
+      }
       reply.status(error.status);
       return {
         ok: false,
         error: error.message,
+        ...(errorCode ? { errorCode } : {}),
       };
     }
 
     const message = error instanceof Error ? error.message : String(error);
+    if (isComposioConsumerKeyInvalidText(message)) {
+      reply.status(503);
+      return composioConsumerKeyInvalidResponse();
+    }
     server.log.warn({ message }, "Outlook connection request parse failed");
     reply.status(502);
     return {
@@ -3657,7 +3809,6 @@ server.post("/api/mail/connections/outlook/launch-auth", async (request, reply) 
       sessionToken,
       {
         toolkits: ["OUTLOOK"],
-        reinitiate_all: true,
       },
       null
     );
@@ -3670,13 +3821,38 @@ server.post("/api/mail/connections/outlook/launch-auth", async (request, reply) 
       };
     }
 
-    if (!result.redirectUrl) {
-      reply.status(502);
+    if (result.hasActiveConnection || result.status === "active") {
       return {
-        ok: false,
-        error: "Outlook authorization was initiated but no redirect URL was returned",
-        errorCode: "OUTLOOK_AUTH_REDIRECT_MISSING",
-        ...(result.sessionInstructions ? { sessionInstructions: result.sessionInstructions } : {}),
+        ok: true,
+        result: {
+          ...result,
+          needsUserAction: false,
+          message: result.message ?? "Outlook already connected",
+        },
+      };
+    }
+
+    if (!result.redirectUrl) {
+      const fallbackRedirect = sanitizeComposioPlatformFallbackUrl(env.COMPOSIO_PLATFORM_URL);
+      if (!fallbackRedirect) {
+        reply.status(502);
+        return {
+          ok: false,
+          error: "Outlook authorization was initiated but no redirect URL was returned",
+          errorCode: "OUTLOOK_AUTH_REDIRECT_MISSING",
+          ...(result.sessionInstructions ? { sessionInstructions: result.sessionInstructions } : {}),
+        };
+      }
+
+      return {
+        ok: true,
+        result: {
+          ...result,
+          redirectUrl: fallbackRedirect,
+          sessionInstructions:
+            result.sessionInstructions ??
+            "No redirect URL returned by Composio. Opened fallback Composio page.",
+        },
       };
     }
 
@@ -3696,14 +3872,29 @@ server.post("/api/mail/connections/outlook/launch-auth", async (request, reply) 
 
     if (error instanceof GatewayHttpError) {
       server.log.warn(gatewayErrorLogContext(error), "Outlook launch-auth request failed");
+      const errorCode = gatewayErrorCode(error.body);
+      if (isComposioConsumerKeyInvalidGatewayError(error)) {
+        reply.status(503);
+        return composioConsumerKeyInvalidResponse();
+      }
+      if (isOutlookConnectionRequiredGatewayError(error)) {
+        reply.status(412);
+        return outlookConnectionRequiredResponse();
+      }
+
       reply.status(error.status);
       return {
         ok: false,
         error: error.message,
+        ...(errorCode ? { errorCode } : {}),
       };
     }
 
     const message = error instanceof Error ? error.message : String(error);
+    if (isComposioConsumerKeyInvalidText(message)) {
+      reply.status(503);
+      return composioConsumerKeyInvalidResponse();
+    }
     server.log.warn({ message }, "Outlook launch-auth request parse failed");
     reply.status(502);
     return {
@@ -3961,14 +4152,28 @@ server.post("/api/mail/sources/auto-connect/outlook", async (request, reply) => 
 
     if (error instanceof GatewayHttpError) {
       server.log.warn(gatewayErrorLogContext(error), "Outlook auto-connect request failed");
+      const errorCode = gatewayErrorCode(error.body);
+      if (isComposioConsumerKeyInvalidGatewayError(error)) {
+        reply.status(503);
+        return composioConsumerKeyInvalidResponse();
+      }
+      if (isOutlookConnectionRequiredGatewayError(error)) {
+        reply.status(412);
+        return outlookConnectionRequiredResponse();
+      }
       reply.status(error.status);
       return {
         ok: false,
         error: error.message,
+        ...(errorCode ? { errorCode } : {}),
       };
     }
 
     const message = error instanceof Error ? error.message : String(error);
+    if (isComposioConsumerKeyInvalidText(message)) {
+      reply.status(503);
+      return composioConsumerKeyInvalidResponse();
+    }
     server.log.warn({ message }, "Outlook auto-connect parse failed");
     reply.status(502);
     return {
@@ -4829,15 +5034,33 @@ server.get("/api/mail/triage", async (request, reply) => {
   } catch (error) {
     if (error instanceof GatewayHttpError) {
       server.log.warn(gatewayErrorLogContext(error), "Mail triage request failed");
+      const errorCode = gatewayErrorCode(error.body);
+      if (isComposioConsumerKeyInvalidGatewayError(error)) {
+        reply.status(503);
+        return composioConsumerKeyInvalidResponse();
+      }
+      if (isOutlookConnectionRequiredGatewayError(error)) {
+        reply.status(412);
+        return outlookConnectionRequiredResponse();
+      }
 
       reply.status(error.status);
       return {
         ok: false,
         error: error.message,
+        ...(errorCode ? { errorCode } : {}),
       };
     }
 
     const message = error instanceof Error ? error.message : String(error);
+    if (isComposioConsumerKeyInvalidText(message)) {
+      reply.status(503);
+      return composioConsumerKeyInvalidResponse();
+    }
+    if (isOutlookConnectionRequiredText(message)) {
+      reply.status(412);
+      return outlookConnectionRequiredResponse();
+    }
     server.log.warn({ message }, "Mail triage parse/classification failed");
     reply.status(502);
     return {
@@ -4938,15 +5161,33 @@ server.get("/api/mail/insights", async (request, reply) => {
   } catch (error) {
     if (error instanceof GatewayHttpError) {
       server.log.warn(gatewayErrorLogContext(error), "Mail insights request failed");
+      const errorCode = gatewayErrorCode(error.body);
+      if (isComposioConsumerKeyInvalidGatewayError(error)) {
+        reply.status(503);
+        return composioConsumerKeyInvalidResponse();
+      }
+      if (isOutlookConnectionRequiredGatewayError(error)) {
+        reply.status(412);
+        return outlookConnectionRequiredResponse();
+      }
 
       reply.status(error.status);
       return {
         ok: false,
         error: error.message,
+        ...(errorCode ? { errorCode } : {}),
       };
     }
 
     const message = error instanceof Error ? error.message : String(error);
+    if (isComposioConsumerKeyInvalidText(message)) {
+      reply.status(503);
+      return composioConsumerKeyInvalidResponse();
+    }
+    if (isOutlookConnectionRequiredText(message)) {
+      reply.status(412);
+      return outlookConnectionRequiredResponse();
+    }
     server.log.warn({ message }, "Mail insights parse/extract failed");
     reply.status(502);
     return {
@@ -5017,14 +5258,32 @@ server.get("/api/mail/inbox/view", async (request, reply) => {
   } catch (error) {
     if (error instanceof GatewayHttpError) {
       server.log.warn(gatewayErrorLogContext(error, { sourceId }), "Mail inbox viewer request failed");
+      const errorCode = gatewayErrorCode(error.body);
+      if (isComposioConsumerKeyInvalidGatewayError(error)) {
+        reply.status(503);
+        return composioConsumerKeyInvalidResponse();
+      }
+      if (isOutlookConnectionRequiredGatewayError(error)) {
+        reply.status(412);
+        return outlookConnectionRequiredResponse();
+      }
       reply.status(error.status);
       return {
         ok: false,
         error: error.message,
+        ...(errorCode ? { errorCode } : {}),
       };
     }
 
     const message = error instanceof Error ? error.message : String(error);
+    if (isComposioConsumerKeyInvalidText(message)) {
+      reply.status(503);
+      return composioConsumerKeyInvalidResponse();
+    }
+    if (isOutlookConnectionRequiredText(message)) {
+      reply.status(412);
+      return outlookConnectionRequiredResponse();
+    }
     server.log.warn({ message, sourceId }, "Mail inbox viewer parse failed");
     reply.status(502);
     return {
@@ -5118,15 +5377,32 @@ server.post("/api/mail/query", async (request, reply) => {
   } catch (error) {
     if (error instanceof GatewayHttpError) {
       server.log.warn(gatewayErrorLogContext(error, { questionLength: question.length }), "Mail QA request failed");
-
+      const errorCode = gatewayErrorCode(error.body);
+      if (isComposioConsumerKeyInvalidGatewayError(error)) {
+        reply.status(503);
+        return composioConsumerKeyInvalidResponse();
+      }
+      if (isOutlookConnectionRequiredGatewayError(error)) {
+        reply.status(412);
+        return outlookConnectionRequiredResponse();
+      }
       reply.status(error.status);
       return {
         ok: false,
         error: error.message,
+        ...(errorCode ? { errorCode } : {}),
       };
     }
 
     const message = error instanceof Error ? error.message : String(error);
+    if (isComposioConsumerKeyInvalidText(message)) {
+      reply.status(503);
+      return composioConsumerKeyInvalidResponse();
+    }
+    if (isOutlookConnectionRequiredText(message)) {
+      reply.status(412);
+      return outlookConnectionRequiredResponse();
+    }
     server.log.warn({ message, questionLength: question.length }, "Mail QA parse/classification failed");
     reply.status(502);
     return {
@@ -5198,15 +5474,32 @@ server.get("/api/mail/message", async (request, reply) => {
   } catch (error) {
     if (error instanceof GatewayHttpError) {
       server.log.warn(gatewayErrorLogContext(error, { messageId: parsed.data.messageId }), "Mail detail request failed");
-
+      const errorCode = gatewayErrorCode(error.body);
+      if (isComposioConsumerKeyInvalidGatewayError(error)) {
+        reply.status(503);
+        return composioConsumerKeyInvalidResponse();
+      }
+      if (isOutlookConnectionRequiredGatewayError(error)) {
+        reply.status(412);
+        return outlookConnectionRequiredResponse();
+      }
       reply.status(error.status);
       return {
         ok: false,
         error: error.message,
+        ...(errorCode ? { errorCode } : {}),
       };
     }
 
     const message = error instanceof Error ? error.message : String(error);
+    if (isComposioConsumerKeyInvalidText(message)) {
+      reply.status(503);
+      return composioConsumerKeyInvalidResponse();
+    }
+    if (isOutlookConnectionRequiredText(message)) {
+      reply.status(412);
+      return outlookConnectionRequiredResponse();
+    }
     server.log.warn({ message, messageId: parsed.data.messageId }, "Mail detail parse failed");
     reply.status(502);
     return {

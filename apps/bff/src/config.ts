@@ -6,6 +6,7 @@ const envSchema = z.object({
   TRUST_PROXY: z.string().default("false"),
   OPENCLAW_GATEWAY_BASE_URL: z.url().default("http://127.0.0.1:18789"),
   OPENCLAW_GATEWAY_BEARER: z.string().min(1),
+  COMPOSIO_PLATFORM_URL: z.url().default("https://platform.composio.dev/"),
   BFF_API_KEY: z.string().min(16),
   OPENCLAW_AGENT_ID: z.string().min(1).default("main"),
   GATEWAY_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(10000),

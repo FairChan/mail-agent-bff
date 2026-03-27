@@ -73,10 +73,14 @@ type MailQueryEnvelope = {
 type OutlookLaunchEnvelope = {
   ok: boolean;
   result: {
+    status: "active" | "initiated" | "failed";
+    hasActiveConnection: boolean;
+    needsUserAction: boolean;
     redirectUrl: string | null;
     connectedAccountId: string | null;
     mailboxUserIdHint: string | null;
     sessionInstructions: string | null;
+    message: string | null;
   };
 };
 
@@ -142,6 +146,20 @@ function safeJson(raw: string): unknown {
   }
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function readOptionalStringField(value: unknown, field: string): string | null {
+  const record = asRecord(value);
+  const candidate = record?.[field];
+  return typeof candidate === "string" && candidate.trim().length > 0 ? candidate : null;
+}
+
 function errorMessage(error: unknown): string {
   if (error instanceof HttpError) {
     return error.message;
@@ -150,6 +168,22 @@ function errorMessage(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+function errorCode(error: unknown): string | null {
+  if (!(error instanceof HttpError)) {
+    return null;
+  }
+
+  return readOptionalStringField(error.payload, "errorCode");
+}
+
+function userFacingErrorMessage(error: unknown): string {
+  const code = errorCode(error);
+  if (code === "OUTLOOK_CONNECTION_REQUIRED") {
+    return "请先点击“登录 Outlook”完成授权，然后返回此页重试。";
+  }
+  return errorMessage(error);
 }
 
 function sanitizeHttpUrl(rawUrl: string | undefined | null): URL | null {
@@ -357,6 +391,8 @@ export default function App() {
   const [outlookRedirectUrl, setOutlookRedirectUrl] = useState<string | null>(null);
   const [connectedAccountId, setConnectedAccountId] = useState<string | null>(null);
   const dashboardRequestSeqRef = useRef(0);
+  const outlookRequestSeqRef = useRef(0);
+  const focusRefreshCleanupRef = useRef<(() => void) | null>(null);
 
   const counts = useMemo(
     () =>
@@ -548,7 +584,7 @@ export default function App() {
         setTriage(null);
         setInsights(null);
       } else {
-        setDashboardError(errorMessage(error));
+        setDashboardError(userFacingErrorMessage(error));
       }
     } finally {
       if (requestSeq === dashboardRequestSeqRef.current) {
@@ -572,6 +608,15 @@ export default function App() {
         setAuthChecking(false);
       }
     })();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (focusRefreshCleanupRef.current) {
+        focusRefreshCleanupRef.current();
+        focusRefreshCleanupRef.current = null;
+      }
+    };
   }, []);
 
   async function onLogin(event: FormEvent<HTMLFormElement>) {
@@ -605,6 +650,11 @@ export default function App() {
 
   async function onLogout() {
     dashboardRequestSeqRef.current += 1;
+    outlookRequestSeqRef.current += 1;
+    if (focusRefreshCleanupRef.current) {
+      focusRefreshCleanupRef.current();
+      focusRefreshCleanupRef.current = null;
+    }
     setAuthBusy(true);
     try {
       await fetchJson<{ ok: boolean }>("/api/auth/logout", {
@@ -625,6 +675,45 @@ export default function App() {
     setDashboardError(null);
     setAgentAnswer(null);
     setAgentError(null);
+    setOutlookBusy(false);
+    setOutlookInfo(null);
+    setOutlookError(null);
+    setOutlookRedirectUrl(null);
+    setConnectedAccountId(null);
+  }
+
+  function registerRefreshOnFocus() {
+    if (focusRefreshCleanupRef.current) {
+      focusRefreshCleanupRef.current();
+      focusRefreshCleanupRef.current = null;
+    }
+
+    const onFocus = () => {
+      window.removeEventListener("focus", onFocus);
+      focusRefreshCleanupRef.current = null;
+      void refreshDashboard();
+    };
+    window.addEventListener("focus", onFocus, { once: true });
+    focusRefreshCleanupRef.current = () => {
+      window.removeEventListener("focus", onFocus);
+    };
+  }
+
+  function openOutlookAuthPopup(initialUrl = "about:blank"): Window | null {
+    const popup = window.open(initialUrl, "composio_outlook_auth", "popup=yes,width=520,height=760");
+    if (popup) {
+      try {
+        popup.opener = null;
+      } catch {
+        try {
+          popup.close();
+        } catch {
+          // Ignore close failures and fallback to link mode.
+        }
+        return null;
+      }
+    }
+    return popup;
   }
 
   async function onLaunchOutlookWindow() {
@@ -632,33 +721,49 @@ export default function App() {
       return;
     }
 
-    const popup = window.open(
-      "about:blank",
-      "composio_outlook_auth",
-      "popup=yes,width=520,height=760,noopener,noreferrer"
-    );
+    const popup = openOutlookAuthPopup();
+    const popupUnavailableMessage = "浏览器未自动打开授权弹窗，请点击下方“打开授权页”链接完成 Outlook 登录。";
 
-    if (!popup) {
-      setOutlookError("浏览器拦截了授权弹窗，请允许弹窗后重试。");
-      return;
-    }
+    const requestSeq = ++outlookRequestSeqRef.current;
+    const isStale = () => requestSeq !== outlookRequestSeqRef.current;
 
     setOutlookBusy(true);
     setOutlookError(null);
     setOutlookInfo(null);
+    setOutlookRedirectUrl(null);
+    setConnectedAccountId(null);
 
     try {
       const response = await fetchJson<OutlookLaunchEnvelope>("/api/mail/connections/outlook/launch-auth", {
         method: "POST",
         body: JSON.stringify({}),
       });
+      if (isStale()) {
+        if (popup && !popup.closed) {
+          popup.close();
+        }
+        return;
+      }
 
       const safeRedirectUrl = sanitizeOutlookAuthLink(response.result.redirectUrl);
-      setOutlookRedirectUrl(safeRedirectUrl);
       setConnectedAccountId(response.result.connectedAccountId);
 
+      if (response.result.hasActiveConnection || response.result.status === "active") {
+        setOutlookRedirectUrl(null);
+        if (popup && !popup.closed) {
+          popup.close();
+        }
+        setOutlookInfo(response.result.message ?? "Outlook 已连接，无需重复授权。");
+        void refreshDashboard();
+        return;
+      }
+
+      setOutlookRedirectUrl(safeRedirectUrl);
+
       if (!safeRedirectUrl) {
-        popup.close();
+        if (popup && !popup.closed) {
+          popup.close();
+        }
         if (response.result.sessionInstructions) {
           setOutlookInfo(`授权已发起：${response.result.sessionInstructions}`);
           return;
@@ -667,20 +772,73 @@ export default function App() {
         return;
       }
 
-      popup.location.replace(safeRedirectUrl);
-      popup.focus();
-      setOutlookInfo("已打开 Composio 授权窗口，请完成 Outlook 登录。");
-
-      const onFocus = () => {
-        window.removeEventListener("focus", onFocus);
-        void refreshDashboard();
-      };
-      window.addEventListener("focus", onFocus, { once: true });
+      const reusablePopup = popup && !popup.closed ? popup : openOutlookAuthPopup();
+      if (reusablePopup) {
+        reusablePopup.location.replace(safeRedirectUrl);
+        reusablePopup.focus();
+        setOutlookInfo("已打开 Composio 授权窗口，请完成 Outlook 登录。");
+        registerRefreshOnFocus();
+      } else {
+        setOutlookInfo(popupUnavailableMessage);
+      }
     } catch (error) {
-      popup.close();
-      setOutlookError(errorMessage(error));
+      if (isStale()) {
+        if (popup && !popup.closed) {
+          popup.close();
+        }
+        return;
+      }
+
+      const payload = error instanceof HttpError ? error.payload : null;
+      const fallbackRedirect = sanitizeOutlookAuthLink(readOptionalStringField(payload, "redirectUrl"));
+      const serverErrorCode = readOptionalStringField(payload, "errorCode");
+      const sessionInstructions = readOptionalStringField(payload, "sessionInstructions");
+      let redirected = false;
+
+      if (fallbackRedirect) {
+        setOutlookRedirectUrl(fallbackRedirect);
+        try {
+          const reusablePopup = popup && !popup.closed ? popup : openOutlookAuthPopup();
+          if (reusablePopup) {
+            reusablePopup.location.replace(fallbackRedirect);
+            reusablePopup.focus();
+            redirected = true;
+            setOutlookInfo("自动授权接口返回异常，已打开 Composio 页面，请继续完成 Outlook 授权。");
+            registerRefreshOnFocus();
+          }
+        } catch {
+          redirected = false;
+        }
+      }
+
+      if (!redirected) {
+        if (popup && !popup.closed) {
+          popup.close();
+        }
+      }
+
+      if (sessionInstructions) {
+        setOutlookInfo((previous) => (previous ? `${previous} ${sessionInstructions}` : sessionInstructions));
+      }
+
+      if (serverErrorCode === "COMPOSIO_CONSUMER_KEY_INVALID") {
+        const advisory = "Composio Consumer Key 无效，请先在服务器更新 consumerKey（ck_...）。";
+        if (redirected) {
+          setOutlookInfo((previous) => (previous ? `${previous} ${advisory}` : advisory));
+        } else {
+          setOutlookError(advisory);
+        }
+      } else if (!redirected) {
+        if (fallbackRedirect) {
+          setOutlookInfo((previous) => (previous ? `${previous} ${popupUnavailableMessage}` : popupUnavailableMessage));
+        } else {
+          setOutlookError(userFacingErrorMessage(error));
+        }
+      }
     } finally {
-      setOutlookBusy(false);
+      if (!isStale()) {
+        setOutlookBusy(false);
+      }
     }
   }
 
@@ -719,7 +877,7 @@ export default function App() {
       });
       setAgentAnswer(response.result.answer);
     } catch (error) {
-      setAgentError(errorMessage(error));
+      setAgentError(userFacingErrorMessage(error));
     } finally {
       setAgentBusy(false);
     }

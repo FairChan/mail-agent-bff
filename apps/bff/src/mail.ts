@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { invokeTool } from "./gateway.js";
+import { GatewayHttpError, invokeTool } from "./gateway.js";
 
 const rawToolContentItemSchema = z.object({
   type: z.string(),
@@ -580,11 +580,82 @@ function parseToolTextJson(value: unknown): ComposioMultiExecutePayload {
     throw new Error("Tool response missing text payload");
   }
 
+  const stripJsonCodeFence = (raw: string): string => {
+    const trimmed = raw.trim();
+    if (!trimmed.startsWith("```")) {
+      return raw;
+    }
+    return trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  };
+
+  const normalizedText = text.replace(/\s+/g, " ").trim();
+  const parseCandidates = [text, stripJsonCodeFence(text)].filter(
+    (item, index, array) => array.indexOf(item) === index
+  );
+
   let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
+  for (const candidate of parseCandidates) {
+    try {
+      parsed = JSON.parse(candidate);
+      break;
+    } catch {
+      // Continue trying the next candidate.
+    }
+  }
+
+  const isComposioAuthKeyInvalidText = (input: string): boolean => {
+    const normalized = input.replace(/\s+/g, " ").trim();
+    return (
+      /invalid (consumer )?api key/i.test(normalized) ||
+      /unauthorized[^.]*api key/i.test(normalized) ||
+      /missing authentication[^.]*api key/i.test(normalized)
+    );
+  };
+
+  if (parsed === undefined) {
+    if (isComposioAuthKeyInvalidText(normalizedText)) {
+      throw new GatewayHttpError(
+        503,
+        "Composio auth key is invalid. Update OpenClaw composio key config and retry.",
+        {
+          errorCode: "COMPOSIO_CONSUMER_KEY_INVALID",
+        }
+      );
+    }
+
+    if (/^error calling composio_[a-z0-9_]+:/i.test(normalizedText)) {
+      throw new GatewayHttpError(502, normalizedText.slice(0, 320), {
+        errorCode: "COMPOSIO_TOOL_TEXT_ERROR",
+      });
+    }
+
     throw new Error("Tool text payload is not valid JSON");
+  }
+
+  if (typeof parsed === "string" && isComposioAuthKeyInvalidText(parsed)) {
+    throw new GatewayHttpError(
+      503,
+      "Composio auth key is invalid. Update OpenClaw composio key config and retry.",
+      {
+        errorCode: "COMPOSIO_CONSUMER_KEY_INVALID",
+      }
+    );
+  }
+
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const parsedRecord = parsed as Record<string, unknown>;
+    const messageCandidates = [parsedRecord.error, parsedRecord.message, parsedRecord.detail];
+    for (const candidate of messageCandidates) {
+      if (typeof candidate === "string" && isComposioAuthKeyInvalidText(candidate)) {
+        throw new GatewayHttpError(
+          503,
+          "Composio auth key is invalid. Update OpenClaw composio key config and retry.",
+          {
+            errorCode: "COMPOSIO_CONSUMER_KEY_INVALID",
+          }
+        );
+      }
+    }
   }
 
   const validated = composioMultiExecutePayloadSchema.safeParse(parsed);
@@ -598,29 +669,68 @@ function parseToolTextJson(value: unknown): ComposioMultiExecutePayload {
   return validated.data;
 }
 
+function parseJsonStringCandidate(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return value;
+  }
+
+  if (
+    !(trimmed.startsWith("{") && trimmed.endsWith("}")) &&
+    !(trimmed.startsWith("[") && trimmed.endsWith("]")) &&
+    !(trimmed.startsWith("\"{") && trimmed.endsWith("}\"")) &&
+    !(trimmed.startsWith("\"[") && trimmed.endsWith("]\""))
+  ) {
+    return value;
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+function normalizeJsonLike(value: unknown, maxDepth = 3): unknown {
+  let current = value;
+  for (let depth = 0; depth < maxDepth; depth += 1) {
+    const parsed = parseJsonStringCandidate(current);
+    if (parsed === current) {
+      break;
+    }
+    current = parsed;
+  }
+  return current;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const normalized = normalizeJsonLike(value);
+  if (!normalized || typeof normalized !== "object" || Array.isArray(normalized)) {
     return null;
   }
 
-  return value as Record<string, unknown>;
+  return normalized as Record<string, unknown>;
 }
 
 function extractComposioResponseData(result: ComposioToolResult): unknown {
   const response = asRecord(result.response);
   if (!response) {
-    return undefined;
+    return normalizeJsonLike(result.response);
   }
 
   if ("data" in response) {
-    return response.data;
+    return normalizeJsonLike(response.data);
   }
 
   if ("value" in response || "messages" in response || "items" in response) {
-    return response;
+    return normalizeJsonLike(response);
   }
 
-  const nestedKeys = ["result", "output", "payload", "body", "response"];
+  const nestedKeys = ["result", "output", "payload", "body", "response", "result_data"];
   for (const key of nestedKeys) {
     const nested = asRecord(response[key]);
     if (!nested) {
@@ -628,15 +738,15 @@ function extractComposioResponseData(result: ComposioToolResult): unknown {
     }
 
     if ("data" in nested) {
-      return nested.data;
+      return normalizeJsonLike(nested.data);
     }
 
     if ("value" in nested || "messages" in nested || "items" in nested) {
-      return nested;
+      return normalizeJsonLike(nested);
     }
   }
 
-  return undefined;
+  return normalizeJsonLike(response);
 }
 
 function isComposioResponseSuccessful(response: ComposioToolResult["response"]): boolean {
@@ -686,7 +796,13 @@ function requireResultItem(
   expectedToolSlug: "OUTLOOK_QUERY_EMAILS" | "OUTLOOK_GET_MESSAGE" | "OUTLOOK_CREATE_ME_EVENT"
 ): ComposioToolResult {
   if (!isComposioPayloadSuccessful(payload)) {
-    throw new Error(payload.error ?? "Composio multi execute failed");
+    const firstResult = payload.data?.results?.[0];
+    const nestedError =
+      firstResult?.response?.error ??
+      firstResult?.error ??
+      payload.error ??
+      "Composio multi execute failed";
+    throw new Error(nestedError);
   }
 
   const result = payload.data?.results?.[0];
@@ -711,7 +827,7 @@ function requireResultData(
 ): Record<string, unknown> {
   const result = requireResultItem(payload, expectedToolSlug);
   const responseData = extractComposioResponseData(result);
-  const data = asRecord(responseData);
+  const data = asRecord(normalizeJsonLike(responseData));
 
   if (!data) {
     const responseKeys = asRecord(result.response) ? Object.keys(asRecord(result.response) ?? {}) : [];
@@ -723,34 +839,71 @@ function requireResultData(
 }
 
 function extractOutlookQueryMessages(responseData: unknown): unknown[] | null {
-  if (Array.isArray(responseData)) {
-    return responseData;
-  }
-
-  const data = asRecord(responseData);
-  if (!data) {
-    return null;
-  }
-
-  const directKeys = ["value", "messages", "items"];
-  for (const key of directKeys) {
-    const candidate = data[key];
-    if (Array.isArray(candidate)) {
-      return candidate;
+  const isLikelyOutlookMessage = (value: unknown): boolean => {
+    const record = asRecord(value);
+    if (!record) {
+      return false;
     }
-  }
 
-  const nestedKeys = ["data", "result", "payload", "body", "response"];
-  for (const key of nestedKeys) {
-    const nested = asRecord(data[key]);
-    if (!nested) {
+    const messageLikeKeys = ["id", "subject", "from", "receivedDateTime", "bodyPreview", "webLink", "isRead"];
+    return messageLikeKeys.some((key) => key in record);
+  };
+
+  const isLikelyOutlookMessageArray = (value: unknown[], allowEmptyArray: boolean): boolean => {
+    if (value.length === 0) {
+      return allowEmptyArray;
+    }
+    return value.slice(0, 5).some((item) => isLikelyOutlookMessage(item));
+  };
+
+  const directKeys = new Set(["value", "messages", "items", "mail", "emails"]);
+  const queue: Array<{ node: unknown; depth: number; fromKey?: string }> = [{ node: responseData, depth: 0 }];
+  const seenObjects = new WeakSet<object>();
+  const maxDepth = 6;
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) {
+      break;
+    }
+
+    const normalizedNode = normalizeJsonLike(current.node);
+    if (Array.isArray(normalizedNode)) {
+      const fromWhitelistedKey = Boolean(current.fromKey && directKeys.has(current.fromKey));
+      const allowEmptyArray = fromWhitelistedKey || current.depth === 0;
+      if (isLikelyOutlookMessageArray(normalizedNode, allowEmptyArray)) {
+        return normalizedNode;
+      }
       continue;
     }
-    for (const directKey of directKeys) {
-      const candidate = nested[directKey];
-      if (Array.isArray(candidate)) {
-        return candidate;
+
+    const record = asRecord(normalizedNode);
+    if (!record) {
+      continue;
+    }
+
+    if (seenObjects.has(record)) {
+      continue;
+    }
+    seenObjects.add(record);
+
+    for (const [key, candidate] of Object.entries(record)) {
+      const normalizedCandidate = normalizeJsonLike(candidate);
+      if (
+        directKeys.has(key) &&
+        Array.isArray(normalizedCandidate) &&
+        isLikelyOutlookMessageArray(normalizedCandidate, true)
+      ) {
+        return normalizedCandidate;
       }
+    }
+
+    if (current.depth >= maxDepth) {
+      continue;
+    }
+
+    for (const [key, value] of Object.entries(record)) {
+      queue.push({ node: value, depth: current.depth + 1, fromKey: key });
     }
   }
 
