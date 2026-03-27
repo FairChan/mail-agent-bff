@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Outlook 授权中</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: "Manrope", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui,
+          sans-serif;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(circle at 20% 20%, rgba(96, 165, 250, 0.2), transparent 36%),
+          radial-gradient(circle at 78% 12%, rgba(16, 185, 129, 0.15), transparent 30%),
+          linear-gradient(180deg, #f8fafc 0%, #e8edf5 100%);
+      }
+      .panel {
+        width: min(92vw, 440px);
+        border: 1px solid rgba(255, 255, 255, 0.78);
+        background: rgba(255, 255, 255, 0.9);
+        box-shadow: 0 16px 48px rgba(15, 23, 42, 0.16);
+        border-radius: 18px;
+        padding: 18px 16px;
+      }
+      .kicker {
+        margin: 0;
+        font-size: 11px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: #64748b;
+        font-weight: 700;
+      }
+      h1 {
+        margin: 8px 0 0;
+        font-size: 19px;
+        line-height: 1.35;
+        color: #0f172a;
+      }
+      p {
+        margin: 8px 0 0;
+        color: #334155;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+      .hint {
+        color: #64748b;
+        font-size: 12px;
+      }
+      .error {
+        color: #b91c1c;
+      }
+      .link {
+        margin-top: 12px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 34px;
+        padding: 0 12px;
+        border-radius: 10px;
+        border: 1px solid #d4d4d8;
+        color: #1f2937;
+        text-decoration: none;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .link:hover {
+        border-color: #0f172a;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="panel">
+      <p class="kicker">True Sight</p>
+      <h1>正在初始化 Outlook 授权</h1>
+      <p id="status">请稍候，系统正在与 Composio 建立授权会话。</p>
+      <p id="hint" class="hint">完成登录后，返回主页面会自动刷新状态。</p>
+      <a id="manual-link" class="link" href="#" target="_blank" rel="noreferrer" hidden>打开授权页</a>
+    </main>
+
+    <script>
+      const statusEl = document.getElementById("status");
+      const hintEl = document.getElementById("hint");
+      const manualLinkEl = document.getElementById("manual-link");
+
+      function setStatus(text, isError = false) {
+        statusEl.textContent = text;
+        statusEl.className = isError ? "error" : "";
+      }
+
+      function setHint(text) {
+        hintEl.textContent = text;
+      }
+
+      function sanitizeAuthUrl(rawUrl) {
+        if (!rawUrl || typeof rawUrl !== "string") {
+          return null;
+        }
+
+        let parsed;
+        try {
+          parsed = new URL(rawUrl);
+        } catch {
+          return null;
+        }
+
+        const host = parsed.hostname.toLowerCase();
+        const allowlist = ["composio.dev", "composio.com", "connect.composio.dev", "login.microsoftonline.com", "login.live.com"];
+        const hostAllowed =
+          allowlist.includes(host) ||
+          host.endsWith(".composio.dev") ||
+          host.endsWith(".composio.com") ||
+          host.endsWith(".microsoftonline.com") ||
+          host.endsWith(".live.com");
+
+        if (!hostAllowed) {
+          return null;
+        }
+
+        if (parsed.protocol !== "https:" && parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1") {
+          return null;
+        }
+
+        return parsed.toString();
+      }
+
+      function showManualLink(url) {
+        manualLinkEl.href = url;
+        manualLinkEl.hidden = false;
+      }
+
+      async function startAuth() {
+        try {
+          const response = await fetch("/api/mail/connections/outlook/launch-auth", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          });
+
+          const payload = await response.json().catch(() => ({}));
+          const result = payload && typeof payload === "object" ? payload.result : null;
+          const redirectUrl = sanitizeAuthUrl(result && result.redirectUrl ? result.redirectUrl : payload.redirectUrl || null);
+
+          if (!response.ok) {
+            if (response.status === 401) {
+              setStatus("会话已过期，请返回主页面重新登录后再试。", true);
+              setHint("登录后可再次点击“登录 Outlook”。");
+              return;
+            }
+
+            if (redirectUrl) {
+              setStatus("授权已初始化，请点击按钮继续。", false);
+              setHint("如果页面未自动跳转，可手动打开授权页。 ");
+              showManualLink(redirectUrl);
+              return;
+            }
+
+            setStatus((payload && payload.error) || "授权初始化失败，请返回主页面重试。", true);
+            return;
+          }
+
+          if (result && (result.hasActiveConnection || result.status === "active")) {
+            setStatus(result.message || "Outlook 已连接，无需重复授权。", false);
+            setHint("现在可以关闭此窗口，返回主页面刷新查看。");
+            return;
+          }
+
+          if (redirectUrl) {
+            setStatus("正在跳转到 Composio 授权页...", false);
+            window.location.replace(redirectUrl);
+            return;
+          }
+
+          setStatus("授权已发起，但未拿到可用跳转地址。", true);
+          setHint(result && result.sessionInstructions ? result.sessionInstructions : "请返回主页面查看错误详情。");
+        } catch (error) {
+          setStatus("授权请求失败，请检查网络后重试。", true);
+          setHint(error instanceof Error ? error.message : String(error));
+        }
+      }
+
+      startAuth();
+    </script>
+  </body>
+</html>

@@ -1437,3 +1437,51 @@
   - backend 复审：`0/0/0/0`
   - frontend 初审：`0/0/0/1`（active 分支链接残留）
   - 回修后 frontend 复审：`0/0/0/0`
+
+### 2026-03-28T02:03:22+08:00
+
+- Scope: M30 前端可达性修复 + OAuth 弹窗链路重构 + 现代化 UI 重做 + 线上部署。
+- Task type: Frontend + Backend + Deploy + Sub-agent Audit
+- Main changes:
+- Frontend `apps/webui/src/App.tsx`:
+  - 修复“统计/日历/设置进不去”：将底部/侧边导航改为真实可切换视图（`inbox/stats/calendar/settings`），并完成对应内容面板。
+  - 完整重做 UI：新布局改为 `left nav + main workspace + right assistant rail`，移动端保留底部导航；视觉改为现代化玻璃面板与高信息密度布局。
+  - OAuth 授权改为安全桥接页模式：`登录 Outlook` 按钮打开 `outlook-auth-bridge.html` 新窗口，桥接页再调用 BFF `launch-auth` 并跳转 Composio；主页面不再直接驱动第三方授权 URL。
+  - 弹窗安全加固：`window.open(..., noopener,noreferrer)`，消除 `window.opener` 风险。
+  - 401 统一收敛：新增 `handleUnauthorizedError`，在设置/问答/日历等非 dashboard 操作触发会话过期时统一回到登录态。
+  - 412 Fail-fast 闭环：数据源失效时自动尝试回滚到可用源；无可用源时清空视图并给出可执行提示。
+  - 运行时契约校验：为 `sources/triage/insights/query/calendar` 等关键响应增加 shape 校验与 normalize，避免 UI 因后端字段漂移崩溃。
+  - 错误文案优化：新增 502/503/504 用户可读提示。
+- Frontend `apps/webui/src/styles.css`:
+  - 更新字体与视觉变量（Manrope + JetBrains Mono）。
+  - 新增 `app-bg/glass-panel` 风格体系；移除全局 `outline-none`，保留可访问焦点样式。
+- Frontend static `apps/webui/public/outlook-auth-bridge.html`:
+  - 新增 Outlook 授权桥接页：负责发起 `/api/mail/connections/outlook/launch-auth` 并安全跳转；支持 401/失败态提示与手动授权链接回退。
+- Backend `apps/bff/src/server.ts`:
+  - 新增 `GET /api/auth/session`（公开、只读会话状态）。
+  - `onRequest` 白名单新增 `/api/auth/session`，避免其被 `/api/*` 统一鉴权拦截。
+  - 会话状态路由改为只读校验（不续期），并增加限流与缓存控制响应头：`Cache-Control: private, no-store` / `Pragma: no-cache` / `Vary: Cookie`。
+
+- Validation completed:
+- `npm run check` passed.
+- `npm run build` passed.
+- 线上 smoke:
+  - `https://true-sight.asia/` -> 200
+  - `https://true-sight.asia/outlook-auth-bridge.html` -> 200
+  - `GET /api/auth/session`（未登录）-> `{"ok":true,"authenticated":false}`
+  - 登录后 `GET /api/auth/session` -> `{"ok":true,"authenticated":true}`
+  - 登录后 `GET /api/mail/sources` -> 200
+  - 登录后 `GET /api/mail/triage?limit=10&sourceId=default_outlook` -> 200
+
+- Deployment:
+- 前端静态资源已同步到 `/var/www/true-sight.asia`（含新桥接页 `outlook-auth-bridge.html`）。
+- `openclaw-mail-bff.service` 已重启并 `active`。
+- `nginx` 已重启并 `active`。
+
+- Sub-agent audit findings:
+- 初审发现：
+  - frontend `High`: popup opener 风险；`Medium`: 401 非统一处理/响应形态浅校验等。
+  - backend `Medium`: `/session` 路由会话续期语义与潜在放大点。
+- 回修后复审：
+  - frontend `Critical/High/Medium/Low = 0/0/0/0`
+  - backend `Critical/High/Medium/Low = 0/0/0/0`

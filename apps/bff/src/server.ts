@@ -168,6 +168,7 @@ const notificationPrefsWriteRateLimitPerMin = 24;
 const notificationPollRateLimitPerMin = 60;
 const notificationStreamConnectRateLimitPerMin = 24;
 const mailInboxViewRateLimitPerMin = 60;
+const sessionStatusRateLimitPerMin = 180;
 const gatewayInvokeDenylist = new Set([
   "COMPOSIO_MULTI_EXECUTE_TOOL",
   "COMPOSIO_MANAGE_CONNECTIONS",
@@ -437,6 +438,21 @@ function touchSessionIfActive(sessionToken: string, now: number): boolean {
 
   setLruEntry(sessions, sessionToken, now + env.SESSION_TTL_MS);
   enforceSessionEntryLimit();
+  return true;
+}
+
+function isSessionActiveWithoutTouch(sessionToken: string, now: number): boolean {
+  maybePurgeExpiredSessions(now);
+  const expiresAt = sessions.get(sessionToken);
+  if (!expiresAt) {
+    return false;
+  }
+
+  if (expiresAt <= now) {
+    clearSessionState(sessionToken);
+    return false;
+  }
+
   return true;
 }
 
@@ -2505,7 +2521,11 @@ server.addHook("onRequest", async (request, reply) => {
 
   const pathname = request.url.split("?")[0];
 
-  if (pathname === "/api/auth/login" || pathname === "/api/auth/logout") {
+  if (
+    pathname === "/api/auth/login" ||
+    pathname === "/api/auth/logout" ||
+    pathname === "/api/auth/session"
+  ) {
     return;
   }
 
@@ -3076,6 +3096,28 @@ server.get("/ready", async (_request, reply) => {
 server.get("/health", async (_request, reply) => {
   const result = await readinessProbe();
   return reply.status(result.statusCode).send(result.payload);
+});
+
+server.get("/api/auth/session", async (request, reply) => {
+  const now = Date.now();
+  if (isBatchRouteRateLimited("session_status_public", request.ip, now, sessionStatusRateLimitPerMin)) {
+    reply.header("Retry-After", "60");
+    reply.status(429);
+    return {
+      ok: false,
+      error: "Too many session status requests",
+    };
+  }
+
+  const token = getSessionToken(request.headers.cookie);
+  const authenticated = token ? isSessionActiveWithoutTouch(token, now) : false;
+  reply.header("Cache-Control", "private, no-store, max-age=0");
+  reply.header("Pragma", "no-cache");
+  reply.header("Vary", "Cookie");
+  return {
+    ok: true,
+    authenticated,
+  };
 });
 
 server.post("/api/auth/login", async (request, reply) => {
