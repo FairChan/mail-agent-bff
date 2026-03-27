@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "email-reader": {
+      "name": "Email Reader",
+      "zip_url": "http://lightmake.site/api/v1/download?slug=email-reader",
+      "source": "skillhub",
+      "version": "1.0.0"
+    }
+  }
+}
