@@ -1,0 +1,72 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String       @id @default(uuid())
+  email        String       @unique
+  displayName  String
+  passwordSalt String
+  passwordHash String
+  locale       String       @default("zh-CN")
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  sessions     AppSession[]
+  mailSources  MailSource[]
+  priorityRules PriorityRule[]
+
+  @@index([createdAt])
+}
+
+model AppSession {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([userId, expiresAt])
+}
+
+model MailSource {
+  id                 String         @id @default(cuid())
+  externalId         String
+  userId             String
+  user               User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label              String
+  provider           String
+  emailHint          String
+  mailboxUserId      String?
+  connectedAccountId String?
+  enabled            Boolean        @default(true)
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  priorityRules      PriorityRule[]
+
+  @@unique([userId, externalId])
+  @@index([userId, createdAt])
+}
+
+model PriorityRule {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId  String?
+  source    MailSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  name      String
+  pattern   String
+  field     String
+  quadrant  String
+  enabled   Boolean  @default(true)
+  priority  Int      @default(1000)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, sourceId, enabled, priority])
+}

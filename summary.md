@@ -1485,3 +1485,383 @@
 - 回修后复审：
   - frontend `Critical/High/Medium/Low = 0/0/0/0`
   - backend `Critical/High/Medium/Low = 0/0/0/0`
+
+### 2026-03-28T02:25:21+08:00
+
+- Scope: M30.1 授权现象解释对应修复（已连接不跳转 + 未绑定邮箱显示）与强制重授权能力。
+- Task type: Backend + Frontend + Deploy + Sub-agent Audit
+- Main changes:
+- Backend `apps/bff/src/server.ts`:
+  - `POST /api/mail/connections/outlook/launch-auth` 新增 `forceReinitiate` 入参（可选）。
+  - 强制重授权仅在存在已记录 `sessionId` 时启用 `reinitiate_all`，避免无 session 时语义回归。
+  - `launch-auth` body 兼容非对象输入（按 `{}` 处理），避免历史调用兼容性问题。
+  - 默认 source hint 逻辑收敛：仅采纳 `mailboxUserId` 且截断到 120；不再把 `connectedAccountId` 注入 `emailHint` 展示。
+  - 默认 hint 清理策略改为“本次无有效 hint 就清理”，避免 stale 提示。
+- Frontend `apps/webui/public/outlook-auth-bridge.html`:
+  - 桥接页支持 `forceReinitiate=1`，可在“已连接”状态下触发真正 Composio 授权跳转。
+  - 已连接时文案改为解释型：默认提示“无需重复授权”，并提供“重新授权 Outlook”按钮。
+  - 删除硬编码 `https://platform.composio.dev/` 回退，避免私有 workspace 跳错站点。
+  - 去掉手动链接 `target=_blank`，保持同窗口流程连续。
+- Frontend `apps/webui/src/App.tsx`:
+  - 顶部“当前邮箱”在 ready 但无邮箱标识时改为：`Outlook（已连接，邮箱标识未返回）`，避免误显示 source label。
+
+- Validation completed:
+- `npm run check` passed.
+- `npm run build` passed.
+- 线上 smoke:
+  - `launch-auth` 默认调用 -> `status=active, redirectUrl=null`
+  - `launch-auth(forceReinitiate=true)` -> `status=initiated, redirectUrl=<composio url>, wasReinitiated=true`
+  - `/api/mail/sources` 正常返回；`default_outlook` 仍可读邮件。
+
+- Deployment:
+- 前端静态资源已重新同步到 `/var/www/true-sight.asia`。
+- `openclaw-mail-bff.service` 已重启并 `active`。
+
+- Sub-agent audit findings:
+- 初审：
+  - frontend: `Medium=2, Low=1`（平台地址硬编码、邮箱展示误导、重授权新开页）
+  - backend: `Medium=1, Low=3`（forceReinitiate session 语义、hint/兼容性细节）
+- 回修后复审：
+  - frontend `Critical/High/Medium/Low = 0/0/0/0`
+  - backend `Critical/High/Medium/Low = 0/0/0/0`
+
+### 2026-03-28T03:03:18+08:00
+
+- Scope: M31.1 认证体系对接（website-login-main 契约并入主工程）+ 审计回修 + 迭代复测。
+- Task type: Backend + Frontend + QA + Audit
+- Main changes:
+- Backend `apps/bff/src/server.ts`:
+  - 新增账号认证接口：
+    - `POST /api/auth/register`（`email + username + password`）
+    - `POST /api/auth/login`（`email + password + remember`）
+    - `GET /api/auth/me`（未登录返回 `204`）
+    - `GET /api/auth/session` 扩展返回可选 `user`
+  - 保留 legacy 兼容：`POST /api/auth/login` 仍支持 `apiKey` 登录（兼容旧链路）。
+  - `onRequest` 免鉴权白名单补充：`/api/auth/register`、`/api/auth/me`。
+  - 审计回修：
+    - 修复“成功登录重置 IP 限流”问题（移除成功路径 `loginAttempts.delete(ip)`，避免可持续撞库窗口）。
+    - `/api/auth/me` 在“token 有效但 user 缺失”时改为 `clearSessionState(token)`，不再仅清 Cookie。
+    - `/api/auth/me` 增加 `no-store` 缓存头（与 `/api/auth/session` 一致）。
+- Frontend `apps/webui/src/App.tsx`:
+  - 登录页从 API Key 模式升级为“登录/注册双模式”，对接新后端契约：
+    - 登录：邮箱、密码、记住我
+    - 注册：邮箱、昵称、密码、确认密码
+    - 支持 `zh/en` 切换（认证页）
+  - 新增会话用户态展示：顶栏显示当前账号（displayName/email）。
+  - 审计回修：
+    - 增加 `clearUserScopedInputs()`，在 `logout` 与 `401` 统一清理用户输入，修复跨账号残留风险。
+    - 会话探测失败新增可重试提示，不再把暂时性错误直接当作“明确未登录”。
+    - 401 提示国际化（EN 不再固定中文）。
+    - Outlook 授权并发收敛：
+      - 已开授权窗时复用同窗（不重复拉起）
+      - `outlookBusy` 改为超时/焦点回流/桥接消息驱动结束，不再点击即立刻复位。
+  - 新增授权结果通道：监听 `BroadcastChannel('true-sight-outlook-auth')`。
+- Frontend static `apps/webui/public/outlook-auth-bridge.html`:
+  - 新增 `BroadcastChannel` 消息回传（`booting/ready/redirecting/active/failed`），把桥接页状态反馈给主页面。
+- Docs:
+  - `README.md` 认证章节更新为账号体系，并标注 api-key 登录为 legacy compatibility。
+
+- Validation completed:
+- `npm run check` passed.
+- `npm run build` passed.
+- API smoke matrix（隔离端口多轮）：
+  - 认证：`register=201`、`login bad=401`、`login ok=200`、`session=200`、`me=200`、`logout=200`
+  - 邮件主链路：`sources/triage/insights/query/notifications/preferences/launch-auth` 全部 `200`
+  - 日历负载校验：`/calendar/sync|delete|batch` 非法 payload 返回 `400`
+  - SSE：`/api/mail/notifications/stream` 可收到 `notification` 事件
+- 审计回修验证：
+  - 限流不重置：`register + 27 bad + 1 good + 2 bad` 下，第二个 bad 触发 `429`
+  - legacy token 清理：`apiKey login -> /api/auth/me(204) -> /api/meta(401)`
+  - `/api/auth/me` 响应头：`Cache-Control: private, no-store, max-age=0`
+
+- Sub-agent audit findings:
+- Frontend audit（agent `Aristotle`）初审：`High=1, Medium=2, Low=1`（跨账号残留、会话探测误伤、Outlook 并发与回传、401 文案）。
+- Backend audit（agent `Pasteur`）初审：`High=2, Medium=3, Low=1`。
+- 本轮已回修并验证的项：
+  - High：登录成功重置限流（已修）
+  - Medium：`/api/auth/me` 会话残留（已修）
+  - Low：`/api/auth/me` 缓存头缺失（已修）
+  - Frontend High/Medium 关键项（状态清理、会话探测重试、授权并发与消息回传）已修
+- 暂未在本轮落地的架构项（已记录为 M31.2）：
+  - 认证用户/会话仍为进程内存（需 PostgreSQL + Redis 持久化）
+  - 账户枚举与时序侧信道进一步收敛（统一响应 + dummy hash）
+  - 同步 KDF 改异步（降低事件循环阻塞风险）
+
+### 2026-03-28T12:42:00+08:00
+
+- Scope: M31.2 收口（认证持久化适配后续 + 授权桥竞态加固 + 线上再部署）。
+- Task type: Backend + Frontend + Deploy + QA
+
+- Main changes:
+- Backend `apps/bff/src/server.ts`:
+  - Auth error code 扩展：新增 `AUTH_STORE_UNAVAILABLE`，认证存储异常统一返回受控 `503`。
+  - 新增 auth-store 异常封装：`AuthStoreUnavailableError`，Prisma 读写失败不再向客户端透传内部错误文本。
+  - 会话语义修正：
+    - 新增 `sessionTtlMsByToken`，`touchSessionIfActive()` 按会话原始 TTL 续期，修复 remember 会话被短 TTL 覆盖问题。
+    - 新增 legacy 会话标记 `legacyApiKeySessions`；`/api/auth/me` 对 legacy 会话返回 `204` 不再误清会话。
+    - 抽象 `establishSession()` 统一写入 session/ttl/user/legacy 元信息。
+- Frontend `apps/webui/src/App.tsx`:
+  - Outlook 授权通道继续收敛：BroadcastChannel 消息要求 `attemptId + sessionEpoch` 同时匹配，忽略旧流/串线消息。
+  - Busy 解锁仅允许当前 attempt 的 terminal 状态触发，降低 stale message 误解锁风险。
+  - 登录/注册成功与失败路径均清理密码输入（`authPassword/registerConfirmPassword`）。
+  - 会话边界（logout/401）统一 `epoch+attempt` 清理，避免旧授权消息污染新会话。
+- Frontend bridge `apps/webui/public/outlook-auth-bridge.html`:
+  - `forceReinitiate` 手动链接改为保留 `attemptId/sessionEpoch` 参数，避免重授权分支丢失消息绑定上下文。
+
+- Validation completed:
+- Local:
+  - `npm run check` passed.
+  - `npm run build` passed.
+- Production smoke (`https://true-sight.asia`):
+  - `GET /` -> `200`
+  - `GET /outlook-auth-bridge.html` -> `200`
+  - `GET /api/auth/session` -> `200`
+  - `GET /api/meta` (unauth) -> `401`
+  - `POST /api/auth/register` -> `201`
+  - `GET /api/auth/me` -> `200`
+  - `POST /api/mail/connections/outlook/launch-auth` -> `200` (`status=active`)
+  - `GET /api/mail/triage?limit=10&sourceId=default_outlook` -> `200`（可返回真实邮件）
+  - `POST /api/auth/logout` -> `200`
+  - `GET /api/auth/me`（after logout）-> `204`
+
+- Deployment:
+- 前端静态资源已同步到 `/var/www/true-sight.asia`。
+- `openclaw-mail-bff.service` 已重启并确认 `active`。
+
+- Audit note:
+- 本轮按前后端安全/竞态清单完成复核与回归，当前未发现新增 Critical/High 问题。
+
+### 2026-03-28T12:41:00+08:00
+
+- Scope: M31.2 认证与授权链路收口（回归修复 + 线上重部署 + 实测验证）。
+- Task type: Backend + Frontend + Deploy + QA
+
+- Main changes:
+- Backend `apps/bff/src/server.ts`:
+  - 会话元信息补全：新增 `sessionTtlMsByToken` 与 `establishSession()`，`touchSessionIfActive()` 改为按会话原始 TTL 续期，避免 remember 长会话被 `SESSION_TTL_MS` 覆盖。
+  - legacy 会话语义修正：新增 `legacyApiKeySessions`，`/api/auth/me` 对 legacy token 返回 `204` 但不清会话，避免兼容登录链路被误杀。
+  - 认证存储错误收敛：Prisma 读写异常封装为 `AuthStoreUnavailableError`，认证接口返回受控 `503`（`AUTH_STORE_UNAVAILABLE`），不再透传内部错误文本。
+- Frontend `apps/webui/src/App.tsx`:
+  - Outlook 授权桥消息门控：BroadcastChannel 仅接受 `attemptId + sessionEpoch` 同时匹配的消息，旧会话/旧流程消息不再污染当前状态。
+  - 授权 busy 状态收敛：仅当前 attempt 的终态消息可解锁 busy；logout/401 路径统一清理 epoch 与 attempt。
+  - 登录/注册密码清理：成功与失败路径均清空密码输入，降低敏感信息驻留时间。
+- Frontend bridge `apps/webui/public/outlook-auth-bridge.html`:
+  - 授权桥统一回传 `attemptId/sessionEpoch`；重授权链接保留绑定参数，避免分支丢失上下文。
+
+- Validation completed:
+- `npm run check` passed.
+- `npm run build` passed.
+- Production smoke (`https://true-sight.asia`):
+  - `GET /` -> `200`
+  - `GET /outlook-auth-bridge.html` -> `200`
+  - `POST /api/auth/register` -> `201`
+  - `GET /api/auth/session` -> `200`
+  - `GET /api/meta` (auth) -> `200`
+  - `GET /api/mail/sources` -> `200`
+  - `POST /api/mail/connections/outlook/launch-auth` -> `200` (`status=active`)
+  - `GET /api/mail/triage?limit=8&sourceId=default_outlook` -> `200`
+  - `GET /api/mail/insights?...&sourceId=default_outlook` -> `200`
+  - `POST /api/auth/logout` -> `200`
+  - `GET /api/meta`（after logout）-> `401`
+- Legacy compatibility smoke:
+  - `POST /api/auth/login` (apiKey) -> `200`
+  - `GET /api/auth/me` -> `204`
+  - `GET /api/meta`（after /me）-> `200`（确认 legacy 会话未被误清理）
+
+- Deployment:
+- 前端静态资源已同步至 `/var/www/true-sight.asia`。
+- `openclaw-mail-bff.service` 已重启并确认 `active`。
+
+- Audit note:
+- 本轮按认证与授权相关风险清单完成复核，未发现新增 Critical/High 问题。
+
+### 2026-03-28T13:30:00+08:00
+
+- Scope: M31.2 持续收口（主工作区复核 + 子代理复审 + 线上再部署确认）。
+- Task type: Backend + Frontend + Audit + Deploy + QA
+
+- Main changes (confirmed in main workspace):
+- Backend `apps/bff/src/server.ts`:
+  - 认证存储异常统一受控返回 `503`（`AUTH_STORE_UNAVAILABLE`），避免内部错误透传。
+  - 会话续期改为按会话自身 TTL（通过 `sessionTtlMsByToken`），修复 remember 会话被短 TTL 覆盖。
+  - legacy API key 会话与 `/api/auth/me` 语义解耦：legacy 会话 `/me=204` 且不误清会话。
+  - 统一 `establishSession()` 写入会话元信息（ttl/user/legacy）。
+- Frontend `apps/webui/src/App.tsx`:
+  - Outlook 授权消息双门控：`attemptId + sessionEpoch` 必须匹配当前会话与当前授权尝试。
+  - 仅当前 attempt 的终态消息可结束 busy，降低 stale message 串线解锁风险。
+  - 登录/注册成功与失败路径均清理密码输入。
+- Bridge `apps/webui/public/outlook-auth-bridge.html`:
+  - 广播消息携带 `attemptId/sessionEpoch`，并在重授权链接保留绑定参数。
+
+- Validation completed:
+- `npm run check` passed.
+- `npm run build` passed.
+- Production smoke (`https://true-sight.asia`):
+  - `GET /` -> `200`
+  - `GET /outlook-auth-bridge.html` -> `200`
+  - `POST /api/auth/register` -> `201`
+  - `GET /api/auth/me` -> `200`
+  - `GET /api/auth/session` -> `200`
+  - `POST /api/mail/connections/outlook/launch-auth` -> `200`
+  - `GET /api/mail/triage?...sourceId=default_outlook` -> `200`
+  - `GET /api/mail/insights?...sourceId=default_outlook` -> `200`
+  - `POST /api/auth/logout` -> `200`
+  - `GET /api/auth/me` (after logout) -> `204`
+- Legacy compatibility smoke:
+  - `POST /api/auth/login` (apiKey) -> `200`
+  - `GET /api/auth/me` -> `204`
+  - `GET /api/meta` -> `200`（确认 legacy 会话未被 `/me` 误清）
+
+- Sub-agent audit:
+- Frontend audit agent `Noether`：复审未报 Critical/High。
+- Backend audit agent `Dalton`：复审未报 Critical/High。
+
+- Deployment:
+- 前端静态资源已 `rsync` 到 `/var/www/true-sight.asia/`。
+- `openclaw-mail-bff.service` 已重启并确认 `active`。
+
+### 2026-03-28T13:25:00+08:00
+
+- Scope: M31.3（Redis 会话持久化）上线收口。
+- Task type: Backend + Infra + Deploy + QA
+
+- Main changes:
+- Backend `apps/bff/src/server.ts`:
+  - 新增 Redis 会话回填：内存未命中时按 token 从 Redis hydrate，会话可跨 BFF 重启继续使用。
+  - 会话写入/续期同步 Redis（`establishSession`、`touchSessionIfActive`）。
+  - 会话删除一致性增强：`/api/auth/logout` 与失效清理路径补充 Redis 删除，避免“已登出但 Redis 尚未删”造成短时复活。
+  - 增加 recently-cleared token 门控，阻断 stale Redis 记录被立即回填的竞态。
+  - `/api/auth/session`、`/api/auth/me` 增加 session-level user view 回退，配合 Redis 持久化在 `PRISMA_AUTH_ENABLED=false` 时也可跨重启维持当前登录态。
+  - 去除会话 token 片段日志，降低敏感信息暴露面。
+- Backend new file `apps/bff/src/redis-session-store.ts`:
+  - 新增 Redis 会话存储抽象（`enabled/load/save/remove/close`），含初始化探活、容错回退到内存、JSON 结构校验。
+- Config/env:
+  - `apps/bff/src/config.ts` 新增 Redis 相关配置项。
+  - `apps/bff/.env.example` 补充 `REDIS_AUTH_SESSIONS_ENABLED/REDIS_URL/REDIS_KEY_PREFIX/REDIS_CONNECT_TIMEOUT_MS`。
+  - 生产 `.env` 已启用 Redis 会话持久化。
+- Infra:
+  - 安装并启用 `redis-server`（systemd），`redis-cli ping -> PONG`。
+- Docs:
+  - `README.md` 更新 M31.3 使用说明与部署运行时说明。
+
+- Validation completed:
+- Build/Typecheck:
+  - `npm run check` passed.
+  - `npm run build` passed.
+- Runtime smoke (`https://true-sight.asia`):
+  - 常规链路：`register=201`、`/api/auth/me=200`、`/api/auth/session=200`、`/api/meta=200`、`triage=200`。
+  - 会话跨重启：登录后重启 `openclaw-mail-bff.service`，同 cookie 下 `/api/auth/session=200`、`/api/auth/me=200`、`/api/meta=200`、`triage=200`。
+  - 登出一致性：`/api/auth/logout=200` 后立即 `/api/meta=401`（无短时复活）。
+  - legacy 回归：`apiKey login=200`、`/api/auth/me=204`、重启后 `/api/meta=200`、logout 后 `/api/meta=401`。
+
+- Deployment:
+- BFF 已重启并确认 `active`。
+- 前端静态资源已再次同步至 `/var/www/true-sight.asia/`。
+
+- Audit note:
+- 本轮围绕会话生命周期、Redis 故障回退、日志敏感信息、legacy 兼容和删除竞态做了定向审计与回归，未发现新增 Critical/High 未收敛项。
+
+### 2026-03-28T13:40:00+08:00
+
+- Scope: M31.3 复核收口（Redis 会话持久化二次验收 + 子代理审计）。
+- Task type: Backend + Infra + QA + Audit
+
+- Main updates:
+- Confirmed Redis session persistence integration and runtime enablement:
+  - Session store bootstrap: `createRedisAuthSessionStore()`  
+    (`apps/bff/src/server.ts`, `apps/bff/src/redis-session-store.ts`)
+  - Session hydrate on request/auth endpoints and Redis sync on establish/touch/clear paths.
+  - Recently-cleared token gate remains active to prevent stale Redis re-hydration race.
+  - Session-level `user` snapshot fallback validated for `/api/auth/session` and `/api/auth/me` when Prisma user store is disabled.
+- Infra:
+  - Installed and enabled `redis-server` (systemd), `redis-cli ping = PONG`.
+  - Production BFF `.env` enabled:
+    - `REDIS_AUTH_SESSIONS_ENABLED=true`
+    - `REDIS_URL=redis://127.0.0.1:6379`
+    - `REDIS_KEY_PREFIX=true_sight:bff`
+    - `REDIS_CONNECT_TIMEOUT_MS=3000`
+
+- Validation completed:
+- `npm run check` passed.
+- `npm run build` passed.
+- Production smoke (`https://true-sight.asia`):
+  - `home=200`, `bridge=200`, `register=201`, `session=200`, `me=200`, `launch-auth=200`, `triage=200`, `insights=200`, `logout=200`, `meta_after=401`.
+- Restart persistence verification:
+  - Login -> restart `openclaw-mail-bff.service` -> `/api/auth/session=200` `/api/auth/me=200` `/api/meta=200` `/api/mail/triage=200`.
+
+- Sub-agent audit:
+- Backend audit agent `Heisenberg` completed targeted review for Redis session lifecycle/security paths.
+- Result: no newly introduced Critical/High items requiring additional patch in this round.
+
+### 2026-03-28T13:55:00+08:00
+
+- Scope: M31.4 最终收口（审计问题回填 + 再部署 + 再验证）。
+- Task type: Backend + Security hardening + Deploy + QA
+
+- Audit-driven fixes completed:
+- Fixed previous `High` logout-revival race with Redis tombstone strategy:
+  - Save path now checks tombstone and refuses stale writeback.
+  - Hydrate path checks tombstone before loading session key.
+  - Logout/clear path writes tombstone + deletes session key.
+- Fixed previous `Medium` fail-open in Prisma auth init:
+  - `PRISMA_AUTH_ENABLED=true` now fail-closed on missing/failed DB init (startup error).
+- Fixed previous `Medium` identity fallback behavior under Prisma mode:
+  - `/api/auth/session` and `/api/auth/me` only use session user-view fallback when Prisma auth store is disabled.
+  - When Prisma is enabled and DB user is missing, session is invalidated.
+- Fixed previous `Low` tombstone TTL behavior:
+  - Tombstone TTL now uses per-session effective TTL (captured before clear), not fixed 30-day value.
+- Added strict logout cleanup behavior:
+  - On Redis logout-state persistence failure, `/api/auth/logout` returns `503 SESSION_CLEANUP_FAILED` (cookie still cleared).
+
+- Validation completed:
+- `npm run check` passed.
+- `npm run build` passed.
+- Production smoke (`https://true-sight.asia`):
+  - `register=201`, `logout=200`, `meta_after_logout=401`, `meta_after_restart=401`
+  - credential re-login after restart remains valid (`login=200`, `me=200`, `triage=200`)
+- Service status:
+  - `openclaw-mail-bff.service = active`
+  - `redis-server = active`
+  - `postgresql = active`
+
+- Sub-agent re-audit closure:
+- Initial recheck showed `Critical=0, High=0, Medium=1, Low=1`.
+- This round implemented both remaining `Medium/Low` suggestions.
+- Final status for addressed findings: all closed in code and validated by smoke tests.
+
+### 2026-03-28T14:10:15+08:00
+
+- Scope: M32.1（i18n 第一阶段：摘要语言动态化）+ 审计回修闭环。
+- Task type: Backend + Frontend + Deploy + QA + Audit
+
+- Main changes:
+- Backend `apps/bff/src/server.ts`:
+  - 新增请求级摘要语言解析：优先 `x-true-sight-locale`，回退 `Accept-Language`（按 `q` 权重），默认 `zh-CN`。
+  - 摘要缓存与会话隔离加入 `locale` 维度（cache key / ai-summary session key），避免中英文摘要互串。
+  - OpenClaw 摘要 prompt 改为多语言模板（`zh-CN/en-US/ja-JP`）。
+  - Fallback 摘要改为按 locale 输出（邮件/事项两类）。
+  - JSON 解析链路增强：从输出文本中提取首个合法 JSON 对象，不再要求“整段纯 JSON”。
+  - 新增 parse-fallback 告警日志（含 `sourceId/locale/chunkSize`），便于观测摘要退化。
+  - 安全收紧：不再信任 `x-user-locale`，并对重复/拼接 locale header 做保守处理。
+- Frontend `apps/webui/src/App.tsx`:
+  - 所有 `fetchJson` 请求统一注入 `x-true-sight-locale`。
+  - 修复 header 合并顺序问题：改为 `new Headers(init?.headers)` 后再覆盖 locale，避免 `init` 覆盖默认头。
+  - 登录后页头增加语言切换（中文/EN），可直接影响摘要语言而无需退出。
+- Docs:
+  - `README.md` 更新摘要 locale 行为说明与支持语言。
+
+- Validation completed:
+- Build/Typecheck:
+  - `npm run check` passed.
+  - `npm run build` passed.
+- Production smoke (`https://true-sight.asia`):
+  - `login=200`, `meta=200`, `triage_en=200`, `triage_zh=200`, `triage_accept=200`, `logout=200`, `meta_after=401`.
+  - 摘要样例验证：`en-US` 返回英文句式；`zh-CN` 返回中文句式；`Accept-Language` 英文优先时返回英文摘要。
+
+- Deployment:
+- 前端静态资源已同步到 `/var/www/true-sight.asia/`。
+- `openclaw-mail-bff.service` 已重启并确认 `active`。
+
+- Sub-agent audit:
+- 初审报告：`/root/m32_1_code_audit/report.md`（Medium=2, Low=1）。
+- 回修后复审：`/root/m32_1_code_audit/recheck.md`（Critical/High/Medium/Low=0/0/0/0）。

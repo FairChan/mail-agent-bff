@@ -20,6 +20,10 @@ const envSchema = z.object({
   CORS_ORIGINS: z
     .string()
     .default("http://127.0.0.1:5173,http://localhost:5173"),
+  REDIS_AUTH_SESSIONS_ENABLED: z.string().default("false"),
+  REDIS_URL: z.string().min(1).default("redis://127.0.0.1:6379"),
+  REDIS_KEY_PREFIX: z.string().min(1).default("true_sight:bff"),
+  REDIS_CONNECT_TIMEOUT_MS: z.coerce.number().int().min(500).max(30000).default(3000),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -51,6 +55,11 @@ function parseTrustProxy(raw: string): boolean | number | string[] {
     .filter((item) => item.length > 0);
 }
 
+function parseBooleanFlag(raw: string): boolean {
+  const value = raw.trim().toLowerCase();
+  return value === "true" || value === "yes" || value === "1";
+}
+
 export const env = {
   ...parsed.data,
   trustProxy: parseTrustProxy(parsed.data.TRUST_PROXY),
@@ -62,6 +71,7 @@ export const env = {
   corsOrigins: parsed.data.CORS_ORIGINS.split(",")
     .map((item) => item.trim())
     .filter((item) => item.length > 0),
+  redisAuthSessionsEnabled: parseBooleanFlag(parsed.data.REDIS_AUTH_SESSIONS_ENABLED),
 };
 
 export type Env = typeof env;

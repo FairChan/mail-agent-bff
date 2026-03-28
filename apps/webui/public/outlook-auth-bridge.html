@@ -80,13 +80,40 @@
       <h1>正在初始化 Outlook 授权</h1>
       <p id="status">请稍候，系统正在与 Composio 建立授权会话。</p>
       <p id="hint" class="hint">完成登录后，返回主页面会自动刷新状态。</p>
-      <a id="manual-link" class="link" href="#" target="_blank" rel="noreferrer" hidden>打开授权页</a>
+      <a id="manual-link" class="link" href="#" rel="noreferrer" hidden>打开授权页</a>
     </main>
 
     <script>
       const statusEl = document.getElementById("status");
       const hintEl = document.getElementById("hint");
       const manualLinkEl = document.getElementById("manual-link");
+      const params = new URLSearchParams(window.location.search);
+      const forceReinitiate = params.get("forceReinitiate") === "1";
+      const rawAttemptId = params.get("attemptId");
+      const attemptId = typeof rawAttemptId === "string" && rawAttemptId.trim().length > 0 ? rawAttemptId.trim().slice(0, 120) : null;
+      const rawSessionEpoch = params.get("sessionEpoch");
+      const parsedSessionEpoch = rawSessionEpoch === null ? Number.NaN : Number.parseInt(rawSessionEpoch, 10);
+      const sessionEpoch = Number.isInteger(parsedSessionEpoch) && parsedSessionEpoch >= 0 ? parsedSessionEpoch : null;
+      const authChannel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("true-sight-outlook-auth") : null;
+
+      function notify(status, details = {}) {
+        if (!authChannel) {
+          return;
+        }
+
+        try {
+          authChannel.postMessage({
+            type: "outlook-auth-bridge",
+            status,
+            at: new Date().toISOString(),
+            ...(attemptId ? { attemptId } : {}),
+            ...(sessionEpoch !== null ? { sessionEpoch } : {}),
+            ...details,
+          });
+        } catch {
+          // Ignore cross-context channel failures.
+        }
+      }
 
       function setStatus(text, isError = false) {
         statusEl.textContent = text;
@@ -129,18 +156,34 @@
         return parsed.toString();
       }
 
-      function showManualLink(url) {
+      function showManualLink(url, label = "打开授权页") {
         manualLinkEl.href = url;
+        manualLinkEl.textContent = label;
         manualLinkEl.hidden = false;
       }
 
+      function buildBridgeUrl(force) {
+        const url = new URL(window.location.pathname, window.location.origin);
+        if (attemptId) {
+          url.searchParams.set("attemptId", attemptId);
+        }
+        if (sessionEpoch !== null) {
+          url.searchParams.set("sessionEpoch", String(sessionEpoch));
+        }
+        if (force) {
+          url.searchParams.set("forceReinitiate", "1");
+        }
+        return url.toString();
+      }
+
       async function startAuth() {
+        notify("booting", { message: "正在初始化 Outlook 授权流程。" });
         try {
           const response = await fetch("/api/mail/connections/outlook/launch-auth", {
             method: "POST",
             credentials: "include",
             headers: { "Content-Type": "application/json" },
-            body: "{}",
+            body: JSON.stringify({ forceReinitiate }),
           });
 
           const payload = await response.json().catch(() => ({}));
@@ -151,6 +194,7 @@
             if (response.status === 401) {
               setStatus("会话已过期，请返回主页面重新登录后再试。", true);
               setHint("登录后可再次点击“登录 Outlook”。");
+              notify("failed", { error: "会话已过期，请重新登录后重试。" });
               return;
             }
 
@@ -158,34 +202,74 @@
               setStatus("授权已初始化，请点击按钮继续。", false);
               setHint("如果页面未自动跳转，可手动打开授权页。 ");
               showManualLink(redirectUrl);
+              notify("ready", {
+                message: "授权已初始化，可继续跳转授权页。",
+                redirectUrl,
+              });
               return;
             }
 
             setStatus((payload && payload.error) || "授权初始化失败，请返回主页面重试。", true);
+            notify("failed", {
+              error: (payload && payload.error) || "授权初始化失败，请返回主页面重试。",
+            });
             return;
           }
 
           if (result && (result.hasActiveConnection || result.status === "active")) {
-            setStatus(result.message || "Outlook 已连接，无需重复授权。", false);
-            setHint("现在可以关闭此窗口，返回主页面刷新查看。");
+            if (!forceReinitiate) {
+              setStatus(result.message || "Outlook 已连接，无需重复授权。", false);
+              setHint("如果你想重新走 Composio 授权流程（例如切换账号），点击下方按钮。");
+              showManualLink(buildBridgeUrl(true), "重新授权 Outlook");
+              notify("active", {
+                message: result.message || "Outlook 已连接，无需重复授权。",
+                connectedAccountId: result.connectedAccountId || null,
+              });
+              return;
+            }
+
+            setStatus("当前连接已激活，Composio 未返回新的授权跳转。", false);
+            setHint("你可以关闭此窗口返回主页面刷新，或再次点击“重新授权 Outlook”。");
+            showManualLink(buildBridgeUrl(true), "重新授权 Outlook");
+            notify("active", {
+              message: "当前连接已激活，Composio 未返回新的授权跳转。",
+              connectedAccountId: result.connectedAccountId || null,
+            });
             return;
           }
 
           if (redirectUrl) {
             setStatus("正在跳转到 Composio 授权页...", false);
+            notify("redirecting", {
+              message: "正在跳转到 Composio 授权页。",
+              redirectUrl,
+              connectedAccountId: result && result.connectedAccountId ? result.connectedAccountId : null,
+            });
             window.location.replace(redirectUrl);
             return;
           }
 
           setStatus("授权已发起，但未拿到可用跳转地址。", true);
           setHint(result && result.sessionInstructions ? result.sessionInstructions : "请返回主页面查看错误详情。");
+          notify("failed", {
+            error: "授权已发起，但未拿到可用跳转地址。",
+          });
         } catch (error) {
           setStatus("授权请求失败，请检查网络后重试。", true);
           setHint(error instanceof Error ? error.message : String(error));
+          notify("failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
       }
 
       startAuth();
+
+      window.addEventListener("beforeunload", () => {
+        if (authChannel) {
+          authChannel.close();
+        }
+      });
     </script>
   </body>
 </html>

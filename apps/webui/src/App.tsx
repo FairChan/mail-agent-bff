@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type ViewKey = "inbox" | "stats" | "calendar" | "settings";
+type AuthLocale = "zh" | "en" | "ja";
+type AuthMode = "login" | "register";
 
 type MailQuadrant =
   | "urgent_important"
@@ -171,6 +173,31 @@ type AutoConnectEnvelope = {
 type SessionEnvelope = {
   ok: boolean;
   authenticated: boolean;
+  user?: AuthUser;
+};
+
+type AuthUser = {
+  id: string;
+  email: string;
+  displayName: string;
+  locale: "zh-CN" | "en-US" | "ja-JP";
+};
+
+type AuthLoginEnvelope = {
+  user: AuthUser;
+};
+
+type AuthRegisterEnvelope = {
+  user: AuthUser;
+};
+
+type AuthMeEnvelope = {
+  user: AuthUser;
+};
+
+type AuthPreferencesEnvelope = {
+  ok: boolean;
+  user: AuthUser;
 };
 
 type CalendarSyncEnvelope = {
@@ -212,45 +239,209 @@ class HttpError extends Error {
 
 const bffBaseUrl = (import.meta.env.VITE_BFF_BASE_URL ?? "").replace(/\/$/, "");
 const clientTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+const authLocaleStorageKey = "true-sight-auth-locale";
+const requestLocaleHeaderName = "x-true-sight-locale";
 
-const viewItems: Array<{ key: ViewKey; label: string; short: string }> = [
-  { key: "inbox", label: "收件箱", short: "主页" },
-  { key: "stats", label: "统计", short: "统计" },
-  { key: "calendar", label: "日历", short: "日历" },
-  { key: "settings", label: "设置", short: "设置" },
-];
+const authMessages: Record<
+  AuthLocale,
+  {
+    brand: string;
+    titleLogin: string;
+    titleRegister: string;
+    subtitleLogin: string;
+    subtitleRegister: string;
+    emailLabel: string;
+    passwordLabel: string;
+    usernameLabel: string;
+    confirmPasswordLabel: string;
+    rememberLabel: string;
+    submitLogin: string;
+    submitRegister: string;
+    switchToLogin: string;
+    switchToRegister: string;
+    registerHint: string;
+    loginHint: string;
+  }
+> = {
+  zh: {
+    brand: "True Sight",
+    titleLogin: "登录 Email AI Agent",
+    titleRegister: "创建你的账号",
+    subtitleLogin: "登录后进入邮件工作台。",
+    subtitleRegister: "创建账号后会自动登录。",
+    emailLabel: "邮箱",
+    passwordLabel: "密码",
+    usernameLabel: "昵称",
+    confirmPasswordLabel: "确认密码",
+    rememberLabel: "记住我（30 天）",
+    submitLogin: "登录",
+    submitRegister: "注册并进入",
+    switchToLogin: "已有账号？去登录",
+    switchToRegister: "没有账号？去注册",
+    registerHint: "建议使用常用邮箱，便于后续找回和多端同步。",
+    loginHint: "如果你是首次使用，请先注册账号。",
+  },
+  en: {
+    brand: "True Sight",
+    titleLogin: "Sign In to Email AI Agent",
+    titleRegister: "Create Your Account",
+    subtitleLogin: "Sign in to access your mail workspace.",
+    subtitleRegister: "You will be signed in automatically after registration.",
+    emailLabel: "Email",
+    passwordLabel: "Password",
+    usernameLabel: "Display Name",
+    confirmPasswordLabel: "Confirm Password",
+    rememberLabel: "Remember me (30 days)",
+    submitLogin: "Sign In",
+    submitRegister: "Create Account",
+    switchToLogin: "Already have an account? Sign in",
+    switchToRegister: "New here? Create an account",
+    registerHint: "Use your primary email for easier recovery and multi-device access.",
+    loginHint: "If this is your first time, create an account first.",
+  },
+  ja: {
+    brand: "True Sight",
+    titleLogin: "Email AI Agent にログイン",
+    titleRegister: "アカウント作成",
+    subtitleLogin: "ログインしてメールワークスペースに入ります。",
+    subtitleRegister: "登録後に自動でログインします。",
+    emailLabel: "メールアドレス",
+    passwordLabel: "パスワード",
+    usernameLabel: "表示名",
+    confirmPasswordLabel: "パスワード確認",
+    rememberLabel: "ログイン状態を保持（30日）",
+    submitLogin: "ログイン",
+    submitRegister: "アカウント作成",
+    switchToLogin: "既存アカウントでログイン",
+    switchToRegister: "初めての方は登録",
+    registerHint: "主要メールを使うと復旧と複数端末同期が簡単です。",
+    loginHint: "初回利用の場合は先にアカウントを作成してください。",
+  },
+};
 
-const quadrantMeta: Record<MailQuadrant, { label: string; tone: string; badge: string }> = {
+const viewItems: Array<{ key: ViewKey }> = [{ key: "inbox" }, { key: "stats" }, { key: "calendar" }, { key: "settings" }];
+
+const viewLabelsByLocale: Record<AuthLocale, Record<ViewKey, { label: string; short: string }>> = {
+  zh: {
+    inbox: { label: "收件箱", short: "主页" },
+    stats: { label: "统计", short: "统计" },
+    calendar: { label: "日历", short: "日历" },
+    settings: { label: "设置", short: "设置" },
+  },
+  en: {
+    inbox: { label: "Inbox", short: "Home" },
+    stats: { label: "Stats", short: "Stats" },
+    calendar: { label: "Calendar", short: "Cal" },
+    settings: { label: "Settings", short: "Settings" },
+  },
+  ja: {
+    inbox: { label: "受信箱", short: "ホーム" },
+    stats: { label: "統計", short: "統計" },
+    calendar: { label: "カレンダー", short: "予定" },
+    settings: { label: "設定", short: "設定" },
+  },
+};
+
+function resolveRequestLocaleHeaderValue(): string {
+  if (typeof window !== "undefined") {
+    const storedLocale = window.localStorage.getItem(authLocaleStorageKey);
+    if (storedLocale === "en") {
+      return "en-US";
+    }
+    if (storedLocale === "zh") {
+      return "zh-CN";
+    }
+    if (storedLocale === "ja") {
+      return "ja-JP";
+    }
+
+    const browserLocale = window.navigator.language || "";
+    if (/^ja\b/i.test(browserLocale)) {
+      return "ja-JP";
+    }
+    if (/^en\b/i.test(browserLocale)) {
+      return "en-US";
+    }
+  }
+
+  return "zh-CN";
+}
+
+const quadrantMeta: Record<MailQuadrant, { tone: string; badge: string }> = {
   urgent_important: {
-    label: "紧急重要",
     tone: "text-red-700",
     badge: "bg-red-50 text-red-700 ring-red-200",
   },
   not_urgent_important: {
-    label: "不紧急重要",
     tone: "text-blue-700",
     badge: "bg-blue-50 text-blue-700 ring-blue-200",
   },
   urgent_not_important: {
-    label: "紧急不重要",
     tone: "text-orange-700",
     badge: "bg-orange-50 text-orange-700 ring-orange-200",
   },
   not_urgent_not_important: {
-    label: "不紧急不重要",
     tone: "text-zinc-700",
     badge: "bg-zinc-100 text-zinc-700 ring-zinc-200",
   },
 };
 
+const quadrantLabelsByLocale: Record<AuthLocale, Record<MailQuadrant, string>> = {
+  zh: {
+    urgent_important: "紧急重要",
+    not_urgent_important: "不紧急重要",
+    urgent_not_important: "紧急不重要",
+    not_urgent_not_important: "不紧急不重要",
+  },
+  en: {
+    urgent_important: "Urgent & Important",
+    not_urgent_important: "Important",
+    urgent_not_important: "Urgent",
+    not_urgent_not_important: "Later",
+  },
+  ja: {
+    urgent_important: "緊急・重要",
+    not_urgent_important: "重要",
+    urgent_not_important: "緊急",
+    not_urgent_not_important: "後回し",
+  },
+};
+
+function toAuthLocaleFromUserLocale(locale: AuthUser["locale"] | undefined | null): AuthLocale {
+  if (!locale) {
+    return "zh";
+  }
+  const normalized = locale.toLowerCase();
+  if (normalized.startsWith("en")) {
+    return "en";
+  }
+  if (normalized.startsWith("ja")) {
+    return "ja";
+  }
+  return "zh";
+}
+
+function toUserLocaleFromAuthLocale(locale: AuthLocale): AuthUser["locale"] {
+  if (locale === "en") {
+    return "en-US";
+  }
+  if (locale === "ja") {
+    return "ja-JP";
+  }
+  return "zh-CN";
+}
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  headers.set(requestLocaleHeaderName, resolveRequestLocaleHeaderValue());
+
   const response = await fetch(`${bffBaseUrl}${path}`, {
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
     ...init,
+    credentials: "include",
+    headers,
   });
 
   const text = await response.text();
@@ -288,6 +479,21 @@ function readOptionalStringField(value: unknown, field: string): string | null {
   return typeof candidate === "string" && candidate.trim().length > 0 ? candidate : null;
 }
 
+function readOptionalIntegerField(value: unknown, field: string): number | null {
+  const record = asRecord(value);
+  const candidate = record?.[field];
+  return typeof candidate === "number" && Number.isInteger(candidate) ? candidate : null;
+}
+
+function generateAttemptId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  const randomPart = Math.random().toString(36).slice(2, 12);
+  return `${Date.now().toString(36)}_${randomPart}`;
+}
+
 function errorMessage(error: unknown): string {
   if (error instanceof HttpError) {
     return error.message;
@@ -303,6 +509,35 @@ function errorCode(error: unknown): string | null {
     return null;
   }
   return readOptionalStringField(error.payload, "errorCode");
+}
+
+function authFieldError(error: unknown, field: "email" | "password" | "username"): string | null {
+  if (!(error instanceof HttpError)) {
+    return null;
+  }
+
+  const payload = asRecord(error.payload);
+  const fieldErrors = asRecord(payload?.fieldErrors);
+  const value = fieldErrors?.[field];
+  return typeof value === "string" ? value : null;
+}
+
+function authFriendlyMessage(error: unknown, locale: AuthLocale): string {
+  const code = readOptionalStringField(error instanceof HttpError ? error.payload : null, "code");
+  const zh = locale === "zh";
+  if (code === "EMAIL_ALREADY_EXISTS") {
+    return zh ? "该邮箱已注册，请直接登录。" : "This email is already registered.";
+  }
+  if (code === "INVALID_CREDENTIALS" || code === "UNAUTHORIZED") {
+    return zh ? "邮箱或密码错误。" : "Invalid email or password.";
+  }
+  if (code === "UPSTREAM_UNAVAILABLE" || code === "AUTH_STORE_UNAVAILABLE") {
+    return zh ? "认证服务暂时不可用，请稍后重试。" : "Authentication service is temporarily unavailable.";
+  }
+  if (error instanceof HttpError && error.status === 429) {
+    return zh ? "请求过于频繁，请稍后重试。" : "Too many attempts. Please try again later.";
+  }
+  return zh ? userFacingErrorMessage(error) : errorMessage(error);
 }
 
 function isRoutingFailFastError(error: unknown): boolean {
@@ -321,6 +556,12 @@ function userFacingErrorMessage(error: unknown): string {
   }
   if (code === "COMPOSIO_CONSUMER_KEY_INVALID") {
     return "服务器的 Composio Key 配置无效，请先修复服务端配置。";
+  }
+  if (code === "AUTH_STORE_UNAVAILABLE") {
+    return "认证服务暂时不可用，请稍后重试。";
+  }
+  if (code === "SESSION_CLEANUP_FAILED") {
+    return "登出清理暂时失败，请稍后重试。";
   }
   if (code === "MAIL_SOURCE_ROUTING_UNVERIFIED") {
     return "数据源尚未验证，请到设置页点击 verify。";
@@ -679,7 +920,13 @@ function resolveMailboxFromSources(
 ): string {
   const source = sources.find((item) => item.id === activeSourceId) ?? sources[0];
   const mailbox = source?.mailboxUserId?.trim() || source?.emailHint?.trim();
-  return mailbox && mailbox.length > 0 ? mailbox : previousMailbox;
+  if (mailbox && mailbox.length > 0) {
+    return mailbox;
+  }
+  if (source?.enabled && source?.ready) {
+    return "Outlook (connected, mailbox id unavailable)";
+  }
+  return previousMailbox;
 }
 
 function findSafeReadySource(sources: MailSourceProfile[]): MailSourceProfile | null {
@@ -772,12 +1019,33 @@ export default function App() {
   const [authChecking, setAuthChecking] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
-  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [authLocale, setAuthLocale] = useState<AuthLocale>(() => {
+    const fromStorage =
+      typeof window === "undefined" ? null : window.localStorage.getItem(authLocaleStorageKey);
+    if (fromStorage === "en") {
+      return "en";
+    }
+    if (fromStorage === "ja") {
+      return "ja";
+    }
+    return "zh";
+  });
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authRemember, setAuthRemember] = useState(true);
+  const [registerName, setRegisterName] = useState("");
+  const [registerConfirmPassword, setRegisterConfirmPassword] = useState("");
+  const [authFieldErrors, setAuthFieldErrors] = useState<Partial<Record<"email" | "password" | "username", string>>>(
+    {}
+  );
   const [authError, setAuthError] = useState<string | null>(null);
+  const [authSessionProbeError, setAuthSessionProbeError] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
 
   const [sources, setSources] = useState<MailSourceProfile[]>([]);
   const [activeSourceId, setActiveSourceId] = useState("default_outlook");
-  const [connectedMailbox, setConnectedMailbox] = useState("未绑定邮箱");
+  const [connectedMailbox, setConnectedMailbox] = useState("");
 
   const [triage, setTriage] = useState<MailTriageResult | null>(null);
   const [insights, setInsights] = useState<MailInsightsResult | null>(null);
@@ -808,7 +1076,165 @@ export default function App() {
 
   const dashboardRequestSeqRef = useRef(0);
   const outlookRequestSeqRef = useRef(0);
+  const authSessionEpochRef = useRef(0);
   const focusRefreshCleanupRef = useRef<(() => void) | null>(null);
+  const outlookPopupRef = useRef<Window | null>(null);
+  const outlookBusyTimerRef = useRef<number | null>(null);
+  const outlookAuthAttemptRef = useRef<string | null>(null);
+  const localePreferenceSeqRef = useRef(0);
+  const authCopy = useMemo(() => authMessages[authLocale], [authLocale]);
+  const viewLabels = useMemo(() => viewLabelsByLocale[authLocale], [authLocale]);
+  const quadrantLabels = useMemo(() => quadrantLabelsByLocale[authLocale], [authLocale]);
+  const uiCopy = useMemo(
+    () =>
+      authLocale === "zh"
+        ? {
+            unboundMailbox: "未绑定邮箱",
+            unknownAccount: "未识别",
+            checkingSession: "正在检查会话状态...",
+            loginOutlook: "登录 Outlook",
+            authorizing: "授权中...",
+            refresh: "刷新",
+            logout: "退出",
+            openAuthPage: "打开授权页",
+            nav: "导航",
+            currentSource: "当前数据源",
+            syncingMailData: "正在同步邮件数据...",
+            inboxOverview: "收件箱概览",
+            priorityNow: "优先处理",
+            noSummary: "暂无摘要",
+            viewDetail: "查看",
+            noMailToShow: "暂无可展示邮件。",
+            upcomingSchedule: "近期日程 / DDL",
+            noUpcomingItems: "未来 7 天未识别到明确时间事项。",
+          }
+        : authLocale === "ja"
+          ? {
+              unboundMailbox: "未連携",
+              unknownAccount: "未確認",
+              checkingSession: "セッションを確認中...",
+              loginOutlook: "Outlook ログイン",
+              authorizing: "認証中...",
+              refresh: "更新",
+              logout: "ログアウト",
+              openAuthPage: "認証ページを開く",
+              nav: "ナビゲーション",
+              currentSource: "現在のソース",
+              syncingMailData: "メールデータを同期中...",
+              inboxOverview: "受信箱の概要",
+              priorityNow: "優先対応",
+              noSummary: "要約なし",
+              viewDetail: "表示",
+              noMailToShow: "表示できるメールはありません。",
+              upcomingSchedule: "近日予定 / DDL",
+              noUpcomingItems: "今後7日間の日時付き項目は見つかりませんでした。",
+            }
+        : {
+            unboundMailbox: "No mailbox linked",
+            unknownAccount: "Unknown",
+            checkingSession: "Checking session...",
+            loginOutlook: "Sign in Outlook",
+            authorizing: "Authorizing...",
+            refresh: "Refresh",
+            logout: "Sign out",
+            openAuthPage: "Open auth page",
+            nav: "Navigation",
+            currentSource: "Current Source",
+            syncingMailData: "Syncing mail data...",
+            inboxOverview: "Inbox Overview",
+            priorityNow: "Priority Queue",
+            noSummary: "No summary",
+            viewDetail: "View",
+            noMailToShow: "No messages to display.",
+            upcomingSchedule: "Upcoming Schedule / DDL",
+            noUpcomingItems: "No dated events detected in the next 7 days.",
+          },
+    [authLocale]
+  );
+
+  async function persistLocalePreference(nextLocale: AuthLocale) {
+    if (!isAuthenticated || !currentUser) {
+      return;
+    }
+
+    const requestSeq = localePreferenceSeqRef.current + 1;
+    localePreferenceSeqRef.current = requestSeq;
+    const nextUserLocale = toUserLocaleFromAuthLocale(nextLocale);
+    const previousUser = currentUser;
+    setCurrentUser({
+      ...currentUser,
+      locale: nextUserLocale,
+    });
+    try {
+      const response = await fetchJson<AuthPreferencesEnvelope>("/api/auth/preferences", {
+        method: "POST",
+        body: JSON.stringify({
+          locale: nextUserLocale,
+        }),
+      });
+      if (requestSeq !== localePreferenceSeqRef.current) {
+        return;
+      }
+      setCurrentUser(response.user);
+    } catch (error) {
+      if (requestSeq !== localePreferenceSeqRef.current) {
+        return;
+      }
+      if (handleUnauthorizedError(error)) {
+        return;
+      }
+      setCurrentUser(previousUser);
+    }
+  }
+
+  function onSelectAuthLocale(nextLocale: AuthLocale) {
+    if (nextLocale === authLocale) {
+      return;
+    }
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(authLocaleStorageKey, nextLocale);
+    }
+    setAuthLocale(nextLocale);
+    void persistLocalePreference(nextLocale);
+  }
+
+  function clearOutlookBusyTimer() {
+    if (outlookBusyTimerRef.current !== null) {
+      window.clearTimeout(outlookBusyTimerRef.current);
+      outlookBusyTimerRef.current = null;
+    }
+  }
+
+  function clearOutlookAuthAttempt() {
+    outlookAuthAttemptRef.current = null;
+  }
+
+  function settleOutlookAuthAttempt(attemptId: string | null): boolean {
+    if (!attemptId || outlookAuthAttemptRef.current !== attemptId) {
+      return false;
+    }
+    clearOutlookAuthAttempt();
+    clearOutlookBusyTimer();
+    setOutlookBusy(false);
+    outlookPopupRef.current = null;
+    return true;
+  }
+
+  function armOutlookBusyTimeout(attemptId: string) {
+    clearOutlookBusyTimer();
+    outlookBusyTimerRef.current = window.setTimeout(() => {
+      if (outlookAuthAttemptRef.current !== attemptId) {
+        return;
+      }
+      settleOutlookAuthAttempt(attemptId);
+    }, 120000);
+  }
+
+  useEffect(() => {
+    window.localStorage.setItem(authLocaleStorageKey, authLocale);
+    document.documentElement.lang =
+      authLocale === "zh" ? "zh-CN" : authLocale === "ja" ? "ja-JP" : "en";
+  }, [authLocale]);
 
   const counts = useMemo(
     () =>
@@ -833,14 +1259,15 @@ export default function App() {
   const topSenders = useMemo(() => {
     const counter = new Map<string, number>();
     for (const item of allMailItems) {
-      const key = item.fromName?.trim() || item.fromAddress?.trim() || "未知发件人";
+      const key =
+        item.fromName?.trim() || item.fromAddress?.trim() || (authLocale === "zh" ? "未知发件人" : "Unknown sender");
       counter.set(key, (counter.get(key) ?? 0) + 1);
     }
     return [...counter.entries()]
       .map(([name, count]) => ({ name, count }))
       .sort((left, right) => right.count - left.count)
       .slice(0, 8);
-  }, [allMailItems]);
+  }, [allMailItems, authLocale]);
 
   const upcomingItems = insights?.upcoming ?? [];
   const urgentItems = triage?.quadrants.urgent_important ?? [];
@@ -1030,17 +1457,37 @@ export default function App() {
   async function bootstrapSession() {
     setAuthChecking(true);
     setAuthError(null);
+    setAuthSessionProbeError(null);
 
     try {
       const session = await fetchJson<SessionEnvelope>("/api/auth/session");
       setIsAuthenticated(session.authenticated);
+      setCurrentUser(session.user ?? null);
+      if (session.user?.locale) {
+        setAuthLocale(toAuthLocaleFromUserLocale(session.user.locale));
+      }
 
       if (session.authenticated) {
+        if (!session.user) {
+          try {
+            const me = await fetchJson<AuthMeEnvelope>("/api/auth/me");
+            if (me?.user?.id && me.user.email) {
+              setCurrentUser(me.user);
+              setAuthLocale(toAuthLocaleFromUserLocale(me.user.locale));
+            }
+          } catch {
+            // If /me fails, keep session-level authenticated state and continue dashboard bootstrap.
+          }
+        }
         await refreshDashboard();
       }
     } catch (error) {
-      setIsAuthenticated(false);
-      setAuthError(errorMessage(error));
+      if (error instanceof HttpError && error.status === 401) {
+        setIsAuthenticated(false);
+        setCurrentUser(null);
+      } else {
+        setAuthSessionProbeError(userFacingErrorMessage(error));
+      }
     } finally {
       setAuthChecking(false);
     }
@@ -1050,6 +1497,8 @@ export default function App() {
     void bootstrapSession();
 
     return () => {
+      clearOutlookBusyTimer();
+      clearOutlookAuthAttempt();
       if (focusRefreshCleanupRef.current) {
         focusRefreshCleanupRef.current();
       }
@@ -1057,7 +1506,69 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function registerRefreshOnFocus() {
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") {
+      return;
+    }
+
+    const channel = new BroadcastChannel("true-sight-outlook-auth");
+    const terminalStatuses = new Set(["active", "failed", "ready"]);
+    channel.onmessage = (event) => {
+      const payload = asRecord(event.data);
+      if (!payload || payload.type !== "outlook-auth-bridge") {
+        return;
+      }
+      if (!isAuthenticated) {
+        return;
+      }
+
+      const attemptId = readOptionalStringField(payload, "attemptId");
+      const expectedAttemptId = outlookAuthAttemptRef.current;
+      if (!attemptId || !expectedAttemptId || attemptId !== expectedAttemptId) {
+        return;
+      }
+
+      const sessionEpoch = readOptionalIntegerField(payload, "sessionEpoch");
+      if (sessionEpoch === null || sessionEpoch !== authSessionEpochRef.current) {
+        return;
+      }
+
+      const status = readOptionalStringField(payload, "status");
+      const message = readOptionalStringField(payload, "message");
+      const error = readOptionalStringField(payload, "error");
+      const accountId = readOptionalStringField(payload, "connectedAccountId");
+      const redirectUrl = sanitizeOutlookAuthLink(readOptionalStringField(payload, "redirectUrl"));
+
+      if (message) {
+        setOutlookInfo(message);
+      }
+      if (error) {
+        setOutlookError(error);
+      }
+      if (accountId) {
+        setConnectedAccountId(accountId);
+      }
+      if (redirectUrl) {
+        setOutlookRedirectUrl(redirectUrl);
+      }
+
+      if (status && terminalStatuses.has(status) && outlookAuthAttemptRef.current === attemptId) {
+        outlookAuthAttemptRef.current = null;
+        if (outlookBusyTimerRef.current !== null) {
+          window.clearTimeout(outlookBusyTimerRef.current);
+          outlookBusyTimerRef.current = null;
+        }
+        setOutlookBusy(false);
+        outlookPopupRef.current = null;
+      }
+    };
+
+    return () => {
+      channel.close();
+    };
+  }, [isAuthenticated]);
+
+  function registerRefreshOnFocus(expectedAttemptId: string) {
     if (focusRefreshCleanupRef.current) {
       focusRefreshCleanupRef.current();
       focusRefreshCleanupRef.current = null;
@@ -1066,6 +1577,10 @@ export default function App() {
     const onFocus = () => {
       window.removeEventListener("focus", onFocus);
       focusRefreshCleanupRef.current = null;
+      const popupClosed = !outlookPopupRef.current || outlookPopupRef.current.closed;
+      if (popupClosed) {
+        settleOutlookAuthAttempt(expectedAttemptId);
+      }
       void refreshDashboard();
       void loadSourceSnapshot().catch(() => undefined);
     };
@@ -1076,47 +1591,200 @@ export default function App() {
     };
   }
 
+  function authFieldMessage(key: string | null): string | null {
+    if (!key) {
+      return null;
+    }
+
+    const zh = authLocale === "zh";
+    if (key === "emailRequired") {
+      return zh ? "请输入邮箱。" : "Email is required.";
+    }
+    if (key === "invalidEmail") {
+      return zh ? "请输入有效邮箱地址。" : "Please enter a valid email address.";
+    }
+    if (key === "passwordRequired") {
+      return zh ? "请输入密码。" : "Password is required.";
+    }
+    if (key === "passwordLength") {
+      return zh ? "密码至少 8 位。" : "Password must be at least 8 characters.";
+    }
+    if (key === "usernameRequired") {
+      return zh ? "请输入昵称。" : "Display name is required.";
+    }
+
+    return key;
+  }
+
   async function onLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!apiKeyInput.trim()) {
-      setAuthError("请输入 BFF API Key");
+    const email = authEmail.trim();
+    const password = authPassword;
+    if (!email || !password) {
+      setAuthError(authLocale === "zh" ? "请填写邮箱和密码。" : "Please enter email and password.");
+      setAuthFieldErrors({
+        ...(email ? {} : { email: authLocale === "zh" ? "请输入邮箱。" : "Email is required." }),
+        ...(password ? {} : { password: authLocale === "zh" ? "请输入密码。" : "Password is required." }),
+      });
       return;
     }
 
     setAuthBusy(true);
     setAuthError(null);
+    setAuthFieldErrors({});
 
     try {
-      await fetchJson<{ ok: boolean }>("/api/auth/login", {
+      const response = await fetchJson<AuthLoginEnvelope>("/api/auth/login", {
         method: "POST",
         body: JSON.stringify({
-          apiKey: apiKeyInput.trim(),
+          email,
+          password,
+          remember: authRemember,
         }),
       });
       setIsAuthenticated(true);
+      authSessionEpochRef.current += 1;
+      setCurrentUser(response.user);
+      setAuthLocale(toAuthLocaleFromUserLocale(response.user.locale));
+      setAuthPassword("");
+      setRegisterConfirmPassword("");
+      setAuthSessionProbeError(null);
       setView("inbox");
       setDashboardError(null);
       setSourceError(null);
       setSourceInfo(null);
       await refreshDashboard();
     } catch (error) {
-      setAuthError(userFacingErrorMessage(error));
+      setAuthFieldErrors({
+        ...(authFieldError(error, "email")
+          ? { email: authFieldMessage(authFieldError(error, "email")) ?? undefined }
+          : {}),
+        ...(authFieldError(error, "password")
+          ? { password: authFieldMessage(authFieldError(error, "password")) ?? undefined }
+          : {}),
+      });
+      setAuthError(authFriendlyMessage(error, authLocale));
+      setAuthPassword("");
+      setRegisterConfirmPassword("");
     } finally {
       setAuthBusy(false);
     }
   }
 
+  async function onRegister(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const email = authEmail.trim();
+    const username = registerName.trim();
+    const password = authPassword;
+    const confirmPassword = registerConfirmPassword;
+    const fieldErrors: Partial<Record<"email" | "password" | "username", string>> = {};
+
+    if (!email) {
+      fieldErrors.email = authLocale === "zh" ? "请输入邮箱。" : "Email is required.";
+    }
+    if (!username) {
+      fieldErrors.username = authLocale === "zh" ? "请输入昵称。" : "Display name is required.";
+    }
+    if (!password) {
+      fieldErrors.password = authLocale === "zh" ? "请输入密码。" : "Password is required.";
+    } else if (password.trim().length < 8) {
+      fieldErrors.password = authLocale === "zh" ? "密码至少 8 位。" : "Password must be at least 8 characters.";
+    } else if (password !== confirmPassword) {
+      fieldErrors.password = authLocale === "zh" ? "两次输入的密码不一致。" : "Passwords do not match.";
+    }
+
+    if (Object.keys(fieldErrors).length > 0) {
+      setAuthFieldErrors(fieldErrors);
+      setAuthError(authLocale === "zh" ? "请修正表单后重试。" : "Please fix the form and retry.");
+      return;
+    }
+
+    setAuthBusy(true);
+    setAuthError(null);
+    setAuthFieldErrors({});
+
+    try {
+      const response = await fetchJson<AuthRegisterEnvelope>("/api/auth/register", {
+        method: "POST",
+        body: JSON.stringify({
+          email,
+          username,
+          password,
+        }),
+      });
+
+      setIsAuthenticated(true);
+      authSessionEpochRef.current += 1;
+      setCurrentUser(response.user);
+      setAuthLocale(toAuthLocaleFromUserLocale(response.user.locale));
+      setAuthPassword("");
+      setRegisterConfirmPassword("");
+      setAuthSessionProbeError(null);
+      setView("inbox");
+      setDashboardError(null);
+      setSourceError(null);
+      setSourceInfo(null);
+      await refreshDashboard();
+    } catch (error) {
+      setAuthFieldErrors({
+        ...(authFieldError(error, "email")
+          ? { email: authFieldMessage(authFieldError(error, "email")) ?? undefined }
+          : {}),
+        ...(authFieldError(error, "username")
+          ? { username: authFieldMessage(authFieldError(error, "username")) ?? undefined }
+          : {}),
+        ...(authFieldError(error, "password")
+          ? { password: authFieldMessage(authFieldError(error, "password")) ?? undefined }
+          : {}),
+      });
+      setAuthError(authFriendlyMessage(error, authLocale));
+      setAuthPassword("");
+      setRegisterConfirmPassword("");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  function clearUserScopedInputs() {
+    setAuthMode("login");
+    setAuthEmail("");
+    setAuthPassword("");
+    setAuthRemember(true);
+    setRegisterName("");
+    setRegisterConfirmPassword("");
+    setAuthFieldErrors({});
+    setNewSourceLabel("");
+    setNewMailboxUserId("");
+    setNewConnectedAccountId("");
+    setAgentInput("");
+  }
+
   function resetUiForUnauthorized() {
     dashboardRequestSeqRef.current += 1;
     outlookRequestSeqRef.current += 1;
+    authSessionEpochRef.current += 1;
+    clearOutlookAuthAttempt();
 
     if (focusRefreshCleanupRef.current) {
       focusRefreshCleanupRef.current();
       focusRefreshCleanupRef.current = null;
     }
+    clearOutlookBusyTimer();
+    if (outlookPopupRef.current && !outlookPopupRef.current.closed) {
+      try {
+        outlookPopupRef.current.close();
+      } catch {
+        // Ignore close failures.
+      }
+    }
+    outlookPopupRef.current = null;
 
     setIsAuthenticated(false);
+    setCurrentUser(null);
+    setAuthSessionProbeError(null);
     setAuthBusy(false);
+    clearUserScopedInputs();
     setSourcesBusy(false);
     setOutlookBusy(false);
     setDashboardLoading(false);
@@ -1124,7 +1792,7 @@ export default function App() {
 
     setSources([]);
     setActiveSourceId("default_outlook");
-    setConnectedMailbox("未绑定邮箱");
+    setConnectedMailbox("");
     setTriage(null);
     setInsights(null);
     setDashboardError(null);
@@ -1145,18 +1813,29 @@ export default function App() {
       return false;
     }
     resetUiForUnauthorized();
-    setAuthError("会话已过期，请重新登录。");
+    setAuthError(authLocale === "zh" ? "会话已过期，请重新登录。" : "Session expired. Please sign in again.");
     return true;
   }
 
   async function onLogout() {
     dashboardRequestSeqRef.current += 1;
     outlookRequestSeqRef.current += 1;
+    authSessionEpochRef.current += 1;
+    clearOutlookAuthAttempt();
 
     if (focusRefreshCleanupRef.current) {
       focusRefreshCleanupRef.current();
       focusRefreshCleanupRef.current = null;
     }
+    clearOutlookBusyTimer();
+    if (outlookPopupRef.current && !outlookPopupRef.current.closed) {
+      try {
+        outlookPopupRef.current.close();
+      } catch {
+        // Ignore close failures.
+      }
+    }
+    outlookPopupRef.current = null;
 
     setAuthBusy(true);
     try {
@@ -1169,19 +1848,20 @@ export default function App() {
     }
 
     setIsAuthenticated(false);
-    setApiKeyInput("");
+    setCurrentUser(null);
+    setAuthSessionProbeError(null);
     setAuthBusy(false);
+    clearUserScopedInputs();
     setView("inbox");
 
     setSources([]);
     setActiveSourceId("default_outlook");
-    setConnectedMailbox("未绑定邮箱");
+    setConnectedMailbox("");
 
     setTriage(null);
     setInsights(null);
     setDashboardError(null);
 
-    setAgentInput("");
     setAgentAnswer(null);
     setAgentError(null);
 
@@ -1203,7 +1883,19 @@ export default function App() {
     if (!isAuthenticated || outlookBusy) {
       return;
     }
-    const bridgeUrl = new URL("/outlook-auth-bridge.html", window.location.origin).toString();
+
+    if (outlookPopupRef.current && !outlookPopupRef.current.closed) {
+      outlookPopupRef.current.focus();
+      setOutlookInfo("授权窗口已打开，请在该窗口继续完成 Outlook 登录。");
+      return;
+    }
+
+    const attemptId = generateAttemptId();
+    const bridgeUrlObject = new URL("/outlook-auth-bridge.html", window.location.origin);
+    bridgeUrlObject.searchParams.set("attemptId", attemptId);
+    bridgeUrlObject.searchParams.set("sessionEpoch", String(authSessionEpochRef.current));
+    const bridgeUrl = bridgeUrlObject.toString();
+    const bridgeFallbackUrl = new URL("/outlook-auth-bridge.html", window.location.origin).toString();
     const popup = window.open(
       bridgeUrl,
       "_blank",
@@ -1211,23 +1903,25 @@ export default function App() {
     );
     const popupUnavailableMessage = "浏览器未自动打开授权弹窗，请点击下方“打开授权页”完成授权。";
 
+    outlookAuthAttemptRef.current = attemptId;
     setOutlookBusy(true);
+    armOutlookBusyTimeout(attemptId);
     setOutlookError(null);
     setOutlookInfo(null);
     setOutlookRedirectUrl(null);
     setConnectedAccountId(null);
 
     if (popup && !popup.closed) {
+      outlookPopupRef.current = popup;
       popup.focus();
       setOutlookInfo("已打开 Composio 授权窗口，请在新窗口完成 Outlook 登录。");
-      registerRefreshOnFocus();
+      registerRefreshOnFocus(attemptId);
     } else {
-      setOutlookRedirectUrl(bridgeUrl);
+      settleOutlookAuthAttempt(attemptId);
+      setOutlookRedirectUrl(bridgeFallbackUrl);
       setOutlookInfo(popupUnavailableMessage);
-      registerRefreshOnFocus();
+      registerRefreshOnFocus(attemptId);
     }
-
-    setOutlookBusy(false);
   }
 
   async function onReloadSources() {
@@ -1542,46 +2236,172 @@ export default function App() {
         value,
         ratio,
         meta: quadrantMeta[key],
+        label: quadrantLabels[key],
       };
     });
-  }, [counts]);
+  }, [counts, quadrantLabels]);
 
   if (authChecking) {
     return (
       <div className="app-bg flex min-h-screen items-center justify-center px-4 text-zinc-600">
         <div className="rounded-2xl border border-white/70 bg-white/85 px-5 py-3 text-sm backdrop-blur">
-          正在检查会话状态...
+          {uiCopy.checkingSession}
         </div>
       </div>
     );
   }
 
   if (!isAuthenticated) {
+    const isLoginMode = authMode === "login";
     return (
       <div className="app-bg min-h-screen px-4 py-12 sm:px-6">
         <div className="mx-auto w-full max-w-md rounded-3xl border border-white/70 bg-white/90 p-6 shadow-[0_24px_56px_rgba(15,23,42,0.10)] backdrop-blur">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">True Sight</p>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-900">登录 Email AI Agent</h1>
-          <p className="mt-2 text-sm text-zinc-600">输入 BFF API Key 进入工作台。</p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">{authCopy.brand}</p>
+            <div className="inline-flex rounded-lg border border-zinc-300 bg-white p-0.5">
+              <button
+                type="button"
+                onClick={() => onSelectAuthLocale("zh")}
+                className={`rounded-md px-2 py-1 text-[11px] font-medium ${
+                  authLocale === "zh" ? "bg-zinc-900 text-white" : "text-zinc-600"
+                }`}
+              >
+                中文
+              </button>
+              <button
+                type="button"
+                onClick={() => onSelectAuthLocale("en")}
+                className={`rounded-md px-2 py-1 text-[11px] font-medium ${
+                  authLocale === "en" ? "bg-zinc-900 text-white" : "text-zinc-600"
+                }`}
+              >
+                EN
+              </button>
+              <button
+                type="button"
+                onClick={() => onSelectAuthLocale("ja")}
+                className={`rounded-md px-2 py-1 text-[11px] font-medium ${
+                  authLocale === "ja" ? "bg-zinc-900 text-white" : "text-zinc-600"
+                }`}
+              >
+                JA
+              </button>
+            </div>
+          </div>
 
-          <form className="mt-6 space-y-3" onSubmit={onLogin}>
-            <input
-              type="password"
-              className="h-11 w-full rounded-xl border border-zinc-300/90 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-900"
-              placeholder="BFF API Key"
-              aria-label="BFF API Key"
-              value={apiKeyInput}
-              onChange={(event) => setApiKeyInput(event.target.value)}
-              autoComplete="current-password"
-            />
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-900">
+            {isLoginMode ? authCopy.titleLogin : authCopy.titleRegister}
+          </h1>
+          <p className="mt-2 text-sm text-zinc-600">{isLoginMode ? authCopy.subtitleLogin : authCopy.subtitleRegister}</p>
+
+          {authSessionProbeError ? (
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              <p>{authSessionProbeError}</p>
+              <button
+                type="button"
+                onClick={() => void bootstrapSession()}
+                className="mt-2 inline-flex rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-medium text-amber-800 hover:border-amber-500"
+              >
+                {authLocale === "zh" ? "重试会话检查" : "Retry session check"}
+              </button>
+            </div>
+          ) : null}
+
+          <form className="mt-6 space-y-3" onSubmit={isLoginMode ? onLogin : onRegister}>
+            <div className="space-y-1">
+              <input
+                type="email"
+                className="h-11 w-full rounded-xl border border-zinc-300/90 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-900"
+                placeholder={authCopy.emailLabel}
+                aria-label={authCopy.emailLabel}
+                value={authEmail}
+                onChange={(event) => setAuthEmail(event.target.value)}
+                autoComplete={isLoginMode ? "username" : "email"}
+              />
+              {authFieldErrors.email ? <p className="text-[11px] text-red-600">{authFieldErrors.email}</p> : null}
+            </div>
+
+            {!isLoginMode ? (
+              <div className="space-y-1">
+                <input
+                  type="text"
+                  className="h-11 w-full rounded-xl border border-zinc-300/90 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-900"
+                  placeholder={authCopy.usernameLabel}
+                  aria-label={authCopy.usernameLabel}
+                  value={registerName}
+                  onChange={(event) => setRegisterName(event.target.value)}
+                  autoComplete="nickname"
+                />
+                {authFieldErrors.username ? <p className="text-[11px] text-red-600">{authFieldErrors.username}</p> : null}
+              </div>
+            ) : null}
+
+            <div className="space-y-1">
+              <input
+                type="password"
+                className="h-11 w-full rounded-xl border border-zinc-300/90 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-900"
+                placeholder={authCopy.passwordLabel}
+                aria-label={authCopy.passwordLabel}
+                value={authPassword}
+                onChange={(event) => setAuthPassword(event.target.value)}
+                autoComplete={isLoginMode ? "current-password" : "new-password"}
+              />
+              {authFieldErrors.password ? <p className="text-[11px] text-red-600">{authFieldErrors.password}</p> : null}
+            </div>
+
+            {!isLoginMode ? (
+              <input
+                type="password"
+                className="h-11 w-full rounded-xl border border-zinc-300/90 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-900"
+                placeholder={authCopy.confirmPasswordLabel}
+                aria-label={authCopy.confirmPasswordLabel}
+                value={registerConfirmPassword}
+                onChange={(event) => setRegisterConfirmPassword(event.target.value)}
+                autoComplete="new-password"
+              />
+            ) : null}
+
+            {isLoginMode ? (
+              <label className="inline-flex items-center gap-2 text-xs text-zinc-600">
+                <input
+                  type="checkbox"
+                  checked={authRemember}
+                  onChange={(event) => setAuthRemember(event.target.checked)}
+                  className="h-4 w-4 rounded border-zinc-300"
+                />
+                {authCopy.rememberLabel}
+              </label>
+            ) : null}
+
             <button
               type="submit"
               className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-zinc-900 px-4 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60"
               disabled={authBusy}
             >
-              {authBusy ? "登录中..." : "进入工作台"}
+              {authBusy
+                ? authLocale === "zh"
+                  ? "处理中..."
+                  : "Working..."
+                : isLoginMode
+                  ? authCopy.submitLogin
+                  : authCopy.submitRegister}
             </button>
           </form>
+
+          <p className="mt-3 text-xs text-zinc-500">{isLoginMode ? authCopy.loginHint : authCopy.registerHint}</p>
+          <button
+            type="button"
+            className="mt-2 text-xs font-medium text-zinc-700 hover:text-zinc-900 hover:underline"
+            onClick={() => {
+              setAuthMode((previous) => (previous === "login" ? "register" : "login"));
+              setAuthError(null);
+              setAuthFieldErrors({});
+              setAuthPassword("");
+              setRegisterConfirmPassword("");
+            }}
+          >
+            {isLoginMode ? authCopy.switchToRegister : authCopy.switchToLogin}
+          </button>
 
           {authError ? <p className="mt-3 text-xs text-red-600">{authError}</p> : null}
         </div>
@@ -1596,17 +2416,54 @@ export default function App() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">True Sight Mail Ops</p>
-              <p className="truncate text-sm font-medium text-zinc-900">当前邮箱：{connectedMailbox}</p>
+              <p className="truncate text-sm font-medium text-zinc-900">
+                {authLocale === "zh" ? "当前邮箱：" : "Mailbox: "}
+                {connectedMailbox || uiCopy.unboundMailbox}
+              </p>
+              <p className="truncate text-xs text-zinc-500">
+                {authLocale === "zh" ? "当前账号：" : "Account: "}
+                {currentUser?.displayName || currentUser?.email || uiCopy.unknownAccount}
+              </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex rounded-lg border border-zinc-300 bg-white p-0.5">
+                <button
+                  type="button"
+                  onClick={() => onSelectAuthLocale("zh")}
+                  className={`rounded-md px-2 py-1 text-[11px] font-medium ${
+                    authLocale === "zh" ? "bg-zinc-900 text-white" : "text-zinc-600"
+                  }`}
+                >
+                  中文
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSelectAuthLocale("en")}
+                  className={`rounded-md px-2 py-1 text-[11px] font-medium ${
+                    authLocale === "en" ? "bg-zinc-900 text-white" : "text-zinc-600"
+                  }`}
+                >
+                  EN
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSelectAuthLocale("ja")}
+                  className={`rounded-md px-2 py-1 text-[11px] font-medium ${
+                    authLocale === "ja" ? "bg-zinc-900 text-white" : "text-zinc-600"
+                  }`}
+                >
+                  JA
+                </button>
+              </div>
+
               <button
                 type="button"
                 onClick={onLaunchOutlookWindow}
                 className="inline-flex h-9 items-center justify-center rounded-xl border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900"
                 disabled={outlookBusy}
               >
-                {outlookBusy ? "授权中..." : "登录 Outlook"}
+                {outlookBusy ? uiCopy.authorizing : uiCopy.loginOutlook}
               </button>
 
               <button
@@ -1616,7 +2473,7 @@ export default function App() {
                 disabled={dashboardLoading}
               >
                 <RefreshIcon />
-                刷新
+                {uiCopy.refresh}
               </button>
 
               <button
@@ -1625,7 +2482,7 @@ export default function App() {
                 className="inline-flex h-9 items-center justify-center rounded-xl border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-600 transition hover:text-zinc-900"
                 disabled={authBusy}
               >
-                退出
+                {uiCopy.logout}
               </button>
             </div>
           </div>
@@ -1642,7 +2499,7 @@ export default function App() {
               {outlookRedirectUrl ? (
                 <a href={outlookRedirectUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-600 hover:underline">
                   <LinkIcon />
-                  打开授权页
+                  {uiCopy.openAuthPage}
                 </a>
               ) : null}
             </div>
@@ -1651,7 +2508,7 @@ export default function App() {
 
         <div className="mt-4 grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)_320px]">
           <aside className="glass-panel hidden rounded-2xl p-3 lg:block">
-            <p className="px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">导航</p>
+            <p className="px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">{uiCopy.nav}</p>
             <div className="mt-3 space-y-1.5">
               {viewItems.map((item) => {
                 const active = view === item.key;
@@ -1662,14 +2519,14 @@ export default function App() {
                     onClick={() => setView(item.key)}
                     className={`w-full rounded-xl px-3 py-2 text-left text-sm font-medium ring-1 transition ${statusBadgeClass(active)}`}
                   >
-                    {item.label}
+                    {viewLabels[item.key].label}
                   </button>
                 );
               })}
             </div>
 
             <div className="mt-4 rounded-xl border border-zinc-200 bg-white/80 p-3 text-xs">
-              <p className="font-medium text-zinc-900">当前数据源</p>
+              <p className="font-medium text-zinc-900">{uiCopy.currentSource}</p>
               <p className="mt-1 font-mono text-zinc-600">{activeSourceId}</p>
               <p className="mt-2 text-zinc-600">状态：{activeSource?.ready ? "ready" : "pending"}</p>
               {activeSource?.routingStatus?.message ? (
@@ -1684,21 +2541,21 @@ export default function App() {
             ) : null}
 
             {dashboardLoading ? (
-              <div className="rounded-xl border border-zinc-200 bg-white/80 px-4 py-5 text-sm text-zinc-600">正在同步邮件数据...</div>
+              <div className="rounded-xl border border-zinc-200 bg-white/80 px-4 py-5 text-sm text-zinc-600">{uiCopy.syncingMailData}</div>
             ) : null}
 
             {view === "inbox" ? (
               <div className="space-y-6">
                 <section>
                   <div className="mb-3 flex items-center justify-between">
-                    <h2 className="text-lg font-semibold tracking-tight text-zinc-900">收件箱概览</h2>
+                    <h2 className="text-lg font-semibold tracking-tight text-zinc-900">{uiCopy.inboxOverview}</h2>
                     <p className="text-xs text-zinc-500">{formatGeneratedAt(triage?.generatedAt)}</p>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {(Object.keys(quadrantMeta) as MailQuadrant[]).map((key) => (
                       <div key={key} className="rounded-xl border border-zinc-200 bg-white px-3 py-2">
-                        <p className="text-[11px] text-zinc-500">{quadrantMeta[key].label}</p>
+                        <p className="text-[11px] text-zinc-500">{quadrantLabels[key]}</p>
                         <p className={`text-xl font-semibold ${quadrantMeta[key].tone}`}>{counts[key]}</p>
                       </div>
                     ))}
@@ -1708,7 +2565,7 @@ export default function App() {
                 <section className="grid gap-4 xl:grid-cols-2">
                   <div>
                     <div className="mb-2 flex items-center justify-between">
-                      <h3 className="text-sm font-semibold text-zinc-900">优先处理</h3>
+                      <h3 className="text-sm font-semibold text-zinc-900">{uiCopy.priorityNow}</h3>
                       <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-[11px] text-red-700 ring-1 ring-red-200">
                         <BellIcon />
                         {urgentItems.length}
@@ -1722,28 +2579,30 @@ export default function App() {
                             <div className="min-w-0">
                               <p className="truncate text-sm font-medium text-zinc-900">{item.subject}</p>
                               <p className="truncate text-xs text-zinc-500">{item.fromName || item.fromAddress}</p>
-                              <p className="mt-1 line-clamp-2 text-xs text-zinc-600">{item.aiSummary || item.bodyPreview || "暂无摘要"}</p>
+                              <p className="mt-1 line-clamp-2 text-xs text-zinc-600">{item.aiSummary || item.bodyPreview || uiCopy.noSummary}</p>
                             </div>
                             <button
                               type="button"
                               className="shrink-0 rounded-lg border border-zinc-300 px-2 py-1 text-[11px] text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900"
                               onClick={() => onViewMailDetail(item)}
                             >
-                              查看
+                              {uiCopy.viewDetail}
                             </button>
                           </div>
                         </li>
                       ))}
                       {urgentItems.length === 0 && importantItems.length === 0 ? (
-                        <li className="rounded-xl border border-dashed border-zinc-300 px-3 py-5 text-xs text-zinc-500">暂无可展示邮件。</li>
+                        <li className="rounded-xl border border-dashed border-zinc-300 px-3 py-5 text-xs text-zinc-500">{uiCopy.noMailToShow}</li>
                       ) : null}
                     </ul>
                   </div>
 
                   <div>
                     <div className="mb-2 flex items-center justify-between">
-                      <h3 className="text-sm font-semibold text-zinc-900">近期日程 / DDL</h3>
-                      <span className="text-[11px] text-zinc-500">{upcomingItems.length} 项</span>
+                      <h3 className="text-sm font-semibold text-zinc-900">{uiCopy.upcomingSchedule}</h3>
+                      <span className="text-[11px] text-zinc-500">
+                        {upcomingItems.length} {authLocale === "zh" ? "项" : "items"}
+                      </span>
                     </div>
 
                     <ul className="space-y-2">
@@ -1762,7 +2621,7 @@ export default function App() {
                         </li>
                       ))}
                       {upcomingItems.length === 0 ? (
-                        <li className="rounded-xl border border-dashed border-zinc-300 px-3 py-5 text-xs text-zinc-500">未来 7 天未识别到明确时间事项。</li>
+                        <li className="rounded-xl border border-dashed border-zinc-300 px-3 py-5 text-xs text-zinc-500">{uiCopy.noUpcomingItems}</li>
                       ) : null}
                     </ul>
                   </div>
@@ -1779,7 +2638,7 @@ export default function App() {
                     {statsRows.map((row) => (
                       <div key={row.key} className="space-y-1">
                         <div className="flex items-center justify-between text-xs">
-                          <span className={row.meta.tone}>{row.meta.label}</span>
+                          <span className={row.meta.tone}>{row.label}</span>
                           <span className="font-mono text-zinc-600">{row.value}</span>
                         </div>
                         <div className="h-2 rounded-full bg-zinc-200/70">
@@ -2090,9 +2949,10 @@ export default function App() {
 
             <div className="mt-4 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-600">
               <p>
-                当前源：<span className="font-mono text-zinc-900">{activeSourceId}</span>
+                {authLocale === "zh" ? "当前源：" : "Source: "}
+                <span className="font-mono text-zinc-900">{activeSourceId}</span>
               </p>
-              <p className="mt-1">时区：{insights?.timeZone || clientTimeZone}</p>
+              <p className="mt-1">{authLocale === "zh" ? "时区：" : "Time zone: "}{insights?.timeZone || clientTimeZone}</p>
             </div>
           </aside>
         </div>
@@ -2122,7 +2982,7 @@ export default function App() {
               }`}
             >
               {icon}
-              <span className="mt-0.5 truncate">{item.short}</span>
+              <span className="mt-0.5 truncate">{viewLabels[item.key].short}</span>
             </button>
           );
         })}
