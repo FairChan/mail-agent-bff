@@ -8,7 +8,7 @@
  * - AppContext: 应用状态
  */
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { AuthProvider, MailProvider, ThemeProvider, AppProvider, useAuth, useMail, useApp, useTheme } from "./contexts";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -24,6 +24,7 @@ import { Sidebar } from "./components/layout/Sidebar";
 import { Header } from "./components/layout/Header";
 import { LoadingSpinner } from "./components/shared/LoadingSpinner";
 import type { TriageMailItem } from "@mail-agent/shared-types";
+import { authMessages, type AuthLocale, type AuthMode } from "./types";
 
 // ========== API 客户端 ==========
 
@@ -46,6 +47,186 @@ async function apiFetch<T>(endpoint: string, options?: RequestInit): Promise<T> 
   }
 
   return data as T;
+}
+
+type AuthFieldErrors = Partial<Record<"email" | "password" | "username", string>>;
+
+function toI18nLocale(locale: AuthLocale): "zh-CN" | "en-US" | "ja-JP" {
+  switch (locale) {
+    case "en":
+      return "en-US";
+    case "ja":
+      return "ja-JP";
+    default:
+      return "zh-CN";
+  }
+}
+
+function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function AuthScreenContainer() {
+  const { t, i18n } = useTranslation();
+  const { locale, setLocale } = useApp();
+  const { login, register, checkSession, error } = useAuth();
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authRemember, setAuthRemember] = useState(false);
+  const [registerName, setRegisterName] = useState("");
+  const [registerConfirmPassword, setRegisterConfirmPassword] = useState("");
+  const [registerStep, setRegisterStep] = useState<"form" | "verify">("form");
+  const [verifyCode, setVerifyCode] = useState("");
+  const [pendingRegisterEmail] = useState("");
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authFieldErrors, setAuthFieldErrors] = useState<AuthFieldErrors>({});
+
+  useEffect(() => {
+    void i18n.changeLanguage(toI18nLocale(locale));
+  }, [i18n, locale]);
+
+  useEffect(() => {
+    setAuthError(error);
+  }, [error]);
+
+  const clearInlineAuthState = useCallback(() => {
+    setAuthError(null);
+    setAuthFieldErrors({});
+  }, []);
+
+  const handleLocaleSelect = useCallback((nextLocale: AuthLocale) => {
+    setLocale(nextLocale);
+    void i18n.changeLanguage(toI18nLocale(nextLocale));
+  }, [i18n, setLocale]);
+
+  const handleLogin = useCallback(async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const nextErrors: AuthFieldErrors = {};
+    const normalizedEmail = authEmail.trim();
+
+    if (!isValidEmail(normalizedEmail)) {
+      nextErrors.email = t("auth.invalidEmail");
+    }
+    if (!authPassword.trim()) {
+      nextErrors.password = t("auth.invalidPassword");
+    }
+
+    if (Object.keys(nextErrors).length > 0) {
+      setAuthFieldErrors(nextErrors);
+      setAuthError(null);
+      return;
+    }
+
+    clearInlineAuthState();
+    try {
+      await login(normalizedEmail, authPassword, authRemember);
+    } catch (loginError) {
+      setAuthError(loginError instanceof Error ? loginError.message : t("error.serverError"));
+    }
+  }, [authEmail, authPassword, authRemember, clearInlineAuthState, login, t]);
+
+  const handleRegister = useCallback(async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const nextErrors: AuthFieldErrors = {};
+    const normalizedEmail = authEmail.trim();
+    const normalizedName = registerName.trim();
+
+    if (!isValidEmail(normalizedEmail)) {
+      nextErrors.email = t("auth.invalidEmail");
+    }
+    if (!normalizedName) {
+      nextErrors.username = t("auth.username");
+    }
+    if (authPassword.length < 8) {
+      nextErrors.password = t("auth.invalidPassword");
+    }
+    if (authPassword !== registerConfirmPassword) {
+      nextErrors.password = t("auth.passwordMismatch");
+    }
+
+    if (Object.keys(nextErrors).length > 0) {
+      setAuthFieldErrors(nextErrors);
+      setAuthError(null);
+      return;
+    }
+
+    clearInlineAuthState();
+    try {
+      await register(normalizedEmail, normalizedName, authPassword);
+    } catch (registerError) {
+      setAuthError(registerError instanceof Error ? registerError.message : t("error.serverError"));
+    }
+  }, [authEmail, authPassword, clearInlineAuthState, register, registerConfirmPassword, registerName, t]);
+
+  const switchAuthMode = useCallback((nextMode: AuthMode) => {
+    setAuthMode(nextMode);
+    setRegisterStep("form");
+    setVerifyCode("");
+    clearInlineAuthState();
+  }, [clearInlineAuthState]);
+
+  return (
+    <AuthScreen
+      authLocale={locale}
+      authMode={authMode}
+      t={t}
+      authBusy={false}
+      authError={authError}
+      authSessionProbeError={null}
+      authFieldErrors={authFieldErrors}
+      authCopy={authMessages[locale]}
+      authEmail={authEmail}
+      authPassword={authPassword}
+      authRemember={authRemember}
+      registerName={registerName}
+      registerConfirmPassword={registerConfirmPassword}
+      registerStep={registerStep}
+      verifyCode={verifyCode}
+      pendingRegisterEmail={pendingRegisterEmail}
+      onSelectAuthLocale={handleLocaleSelect}
+      onRetrySessionCheck={() => {
+        void checkSession();
+      }}
+      onEmailChange={(value) => {
+        setAuthEmail(value);
+        clearInlineAuthState();
+      }}
+      onPasswordChange={(value) => {
+        setAuthPassword(value);
+        clearInlineAuthState();
+      }}
+      onRememberChange={setAuthRemember}
+      onRegisterNameChange={(value) => {
+        setRegisterName(value);
+        clearInlineAuthState();
+      }}
+      onRegisterConfirmPasswordChange={(value) => {
+        setRegisterConfirmPassword(value);
+        clearInlineAuthState();
+      }}
+      onVerifyCodeChange={setVerifyCode}
+      onLogin={(event) => {
+        void handleLogin(event);
+      }}
+      onRegister={(event) => {
+        void handleRegister(event);
+      }}
+      onVerifyCode={(event) => {
+        event.preventDefault();
+      }}
+      onResendCode={() => {
+        setAuthError(t("error.serverError"));
+      }}
+      onSwitchToRegister={() => switchAuthMode("register")}
+      onSwitchToLogin={() => switchAuthMode("login")}
+      onBackToRegisterForm={() => {
+        setRegisterStep("form");
+        setVerifyCode("");
+        clearInlineAuthState();
+      }}
+    />
+  );
 }
 
 // ========== 主布局 ==========
@@ -177,7 +358,7 @@ function AppContent() {
   }
 
   if (!isAuthenticated) {
-    return <AuthScreen />;
+    return <AuthScreenContainer />;
   }
 
   if (!activeSourceId) {

@@ -69,7 +69,7 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
 
 interface AuthContextValue extends AuthState {
   login: (email: string, password: string, remember?: boolean) => Promise<void>;
-  register: (email: string, displayName: string, password: string) => Promise<void>;
+  register: (email: string, username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   checkSession: () => Promise<void>;
   updatePreferences: (prefs: { locale?: string; displayName?: string }) => Promise<void>;
@@ -142,14 +142,19 @@ export function AuthProvider({ children, apiBase = "/api" }: AuthProviderProps) 
     }
   }, [apiBase]);
 
-  const register = useCallback(async (email: string, displayName: string, password: string) => {
+  const register = useCallback(async (email: string, username: string, password: string) => {
     dispatch({ type: "AUTH_START" });
     try {
-      await apiFetch(`${apiBase}/auth/register`, {
+      const data = await apiFetch<{ user?: AuthUser }>(`${apiBase}/auth/register`, {
         method: "POST",
-        body: JSON.stringify({ email, displayName, password }),
+        body: JSON.stringify({ email, username, displayName: username, password }),
       });
-      // 注册后自动登录
+
+      if (data.user) {
+        dispatch({ type: "AUTH_SUCCESS", payload: data.user });
+        return;
+      }
+
       await login(email, password);
     } catch (err) {
       dispatch({
