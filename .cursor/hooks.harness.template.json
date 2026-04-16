@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "description": "Template only. Copy into the active Cursor hooks format after confirming the local Cursor hook schema.",
+  "hooks": [
+    {
+      "event": "beforeCommand",
+      "run": "npm run harness:guard -- {{command}}"
+    },
+    {
+      "event": "afterFileEdit",
+      "run": "npm run harness:verify -- {{files}}"
+    },
+    {
+      "event": "onToolFailure",
+      "run": "npm run harness:failure -- {{tool}} {{exitCode}}"
+    },
+    {
+      "event": "beforeStop",
+      "run": "npm run check:standard"
+    }
+  ]
+}
+

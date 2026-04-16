@@ -14,6 +14,7 @@ import { AuthProvider, MailProvider, ThemeProvider, AppProvider, useAuth, useMai
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AgentChatPanel } from "./components/agent/AgentChatPanel";
 import { AuthScreen } from "./components/auth/AuthScreen";
+import { ContextAuthScreen } from "./components/auth/ContextAuthScreen";
 import { InboxView } from "./components/dashboard/InboxView";
 import { AllMailListView } from "./components/dashboard/AllMailListView";
 import { CalendarView } from "./components/dashboard/CalendarView";
@@ -309,6 +310,8 @@ function MainLayout() {
 // ========== 邮箱连接引导 ==========
 
 function MailConnectionGuide() {
+  const { setCurrentView } = useApp();
+
   return (
     <div className="flex min-h-[400px] flex-col items-center justify-center gap-6 p-8">
       <div className="rounded-2xl bg-blue-50 p-8 text-center dark:bg-blue-900/20">
@@ -324,7 +327,7 @@ function MailConnectionGuide() {
           在设置中连接 Outlook 邮箱，开始使用智能邮件管理
         </p>
         <button
-          onClick={() => window.location.hash = "#settings"}
+          onClick={() => setCurrentView("settings")}
           className="rounded-lg bg-blue-600 px-6 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
         >
           前往设置
@@ -339,7 +342,7 @@ function MailConnectionGuide() {
 function AppContent() {
   const { isAuthenticated, isLoading } = useAuth();
   const { activeSourceId } = useMail();
-  const { setIsMobile } = useApp();
+  const { currentView, setCurrentView, setIsMobile } = useApp();
 
   // 检测移动端
   useEffect(() => {
@@ -361,10 +364,13 @@ function AppContent() {
   }
 
   if (!isAuthenticated) {
-    return <AuthScreenContainer />;
+    return <ContextAuthScreen />;
   }
 
   if (!activeSourceId) {
+    if (currentView === "settings") {
+      return <MainLayout />;
+    }
     return <MailConnectionGuide />;
   }
 

@@ -1,4 +1,6 @@
 import { env } from "./config.js";
+import { callComposioMultiExecutePayload } from "./composio-service.js";
+import { createSiliconFlowClient } from "./providers/siliconflow-client.js";
 
 export class GatewayHttpError extends Error {
   readonly status: number;
@@ -16,6 +18,33 @@ function buildUrl(path: string): string {
     ? env.OPENCLAW_GATEWAY_BASE_URL.slice(0, -1)
     : env.OPENCLAW_GATEWAY_BASE_URL;
   return `${base}${path}`;
+}
+
+function gatewayConfigured(): boolean {
+  return env.openClawGatewayBearer.length > 0;
+}
+
+function wrapDirectToolPayload(payload: unknown): unknown {
+  return {
+    ok: true,
+    result: {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(payload),
+        },
+      ],
+    },
+  };
+}
+
+let siliconFlowClient: ReturnType<typeof createSiliconFlowClient> | null = null;
+
+function getSiliconFlowClient() {
+  if (!siliconFlowClient) {
+    siliconFlowClient = createSiliconFlowClient();
+  }
+  return siliconFlowClient;
 }
 
 async function requestGateway<T>(
@@ -92,6 +121,47 @@ export type InvokeToolInput = {
 };
 
 export async function invokeTool(input: InvokeToolInput): Promise<unknown> {
+  if (!gatewayConfigured()) {
+    const normalizedTool = input.tool.trim().toUpperCase();
+    if (normalizedTool === "COMPOSIO_MULTI_EXECUTE_TOOL") {
+      const rawArgs = input.args ?? {};
+      const tools = Array.isArray(rawArgs.tools)
+        ? rawArgs.tools.filter((item): item is { tool_slug: string; arguments: Record<string, unknown> } => {
+            if (!item || typeof item !== "object") {
+              return false;
+            }
+            const record = item as Record<string, unknown>;
+            return (
+              typeof record.tool_slug === "string" &&
+              !!record.arguments &&
+              typeof record.arguments === "object" &&
+              !Array.isArray(record.arguments)
+            );
+          })
+        : [];
+      const connectedAccountId =
+        typeof rawArgs.connected_account_id === "string" && rawArgs.connected_account_id.trim().length > 0
+          ? rawArgs.connected_account_id
+          : undefined;
+
+      if (tools.length === 0) {
+        throw new GatewayHttpError(400, "COMPOSIO_MULTI_EXECUTE_TOOL requires a non-empty tools array", null);
+      }
+
+      const payload = await callComposioMultiExecutePayload({
+        tools,
+        ...(connectedAccountId ? { connected_account_id: connectedAccountId } : {}),
+      });
+      return wrapDirectToolPayload(payload);
+    }
+
+    throw new GatewayHttpError(
+      503,
+      `Tool '${input.tool}' requires the legacy OpenClaw gateway, which is not configured`,
+      null
+    );
+  }
+
   return requestGateway<unknown>("/tools/invoke", {
     tool: input.tool,
     args: input.args ?? {},
@@ -108,6 +178,44 @@ export type QueryAgentInput = {
 };
 
 export async function queryAgent(input: QueryAgentInput): Promise<unknown> {
+  if (!gatewayConfigured()) {
+    const completion = await getSiliconFlowClient().createChatCompletion({
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a helpful assistant. Ground your answer in the user prompt only, keep it concise, and prefer Chinese when the user speaks Chinese.",
+        },
+        {
+          role: "user",
+          content: input.message,
+        },
+      ],
+      temperature: 0.2,
+      maxTokens: 1800,
+    });
+
+    return {
+      id: completion.id ?? `sf_${Date.now()}`,
+      object: "response",
+      model: completion.model,
+      output_text: completion.text,
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: completion.text,
+            },
+          ],
+        },
+      ],
+      usage: completion.usage ?? null,
+    };
+  }
+
   return requestGateway<unknown>(
     "/v1/responses",
     {

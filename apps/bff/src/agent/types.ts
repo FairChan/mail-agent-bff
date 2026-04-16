@@ -1,4 +1,4 @@
-import type { MailSourceContext } from "../mail.js";
+import type { MailPriorityRule, MailSourceContext } from "../mail.js";
 
 export type AgentRuntimeName = "mastra" | "openclaw";
 
@@ -40,6 +40,10 @@ export type AgentRuntimeInput = {
   tenant: TenantContext;
   message: string;
   threadId?: string;
+  timeZone?: string;
+  limit?: number;
+  horizonDays?: number;
+  priorityRules?: MailPriorityRule[];
   abortSignal?: AbortSignal;
 };
 

@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "workspace": "/Users/fairchan/Desktop/mail-agent-bff",
+  "principles": [
+    "closed_loop_over_rules",
+    "deny_over_warn_for_safety",
+    "incident_driven_patterns",
+    "local_sandbox_before_real_services",
+    "human_approval_for_external_side_effects"
+  ],
+  "layers": {
+    "hooks": {
+      "cooldownSeconds": 300,
+      "mvp": [
+        "dangerous-cmd-guard",
+        "post-edit-verify",
+        "semantic-check",
+        "failure-recovery"
+      ],
+      "future": [
+        "boundary-jit",
+        "post-bash-monitor",
+        "pre-compact",
+        "stop-verify-check"
+      ]
+    },
+    "agents": {
+      "strategy": "read_only",
+      "execution": "bounded_write_scope",
+      "audit": "independent_reviewer_after_code_changes"
+    },
+    "skills": {
+      "core": [
+        "suggesting-cursor-hooks",
+        "suggesting-cursor-rules",
+        "imap-email",
+        "github"
+      ],
+      "planned": [
+        "start",
+        "implement",
+        "verify",
+        "review",
+        "handoff"
+      ]
+    },
+    "verification": {
+      "l1": [
+        "npm run harness:semantic",
+        "npm run check --workspaces --if-present"
+      ],
+      "l2": [
+        "npm run check:standard"
+      ],
+      "l3": [
+        "npm --workspace apps/webui run test:e2e"
+      ]
+    },
+    "knowledge": {
+      "dailyMemory": "memory/YYYY-MM-DD.md",
+      "longTermMemory": "MEMORY.md",
+      "next": ".harness/_NEXT.md",
+      "errorJournal": ".harness/error-journal.md",
+      "patterns": ".harness/patterns-cache.json"
+    }
+  },
+  "taskRouting": {
+    "vibe": "single file, comments, copy, CSS, or config-only",
+    "lite": "one to five files and one application layer",
+    "full": "cross-layer, security-sensitive, auth/session, external side effects, DB/RLS, or six or more files",
+    "upgradeRules": [
+      "auth/session changes are at least lite",
+      "real mail/calendar side effects require explicit human approval",
+      "DB schema or RLS changes are full"
+    ]
+  },
+  "sensitivePaths": [
+    ".env",
+    ".env.*",
+    "docs/rules/",
+    "supabase/config.toml",
+    ".cursor/mcp.json",
+    ".cursor/mcp-servers.json"
+  ]
+}
+

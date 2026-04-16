@@ -211,6 +211,16 @@ The goal: Be helpful without being annoying. Check in a few times a day, do usef
 
 This is a starting point. Add your own conventions, style, and rules as you figure out what works.
 
+## Harness Development Environment
+
+- Harness docs live in `HARNESS.md`.
+- Harness machine state lives in `.harness/`.
+- Local Cursor rules live in `.cursor/rules/`.
+- Cursor hook drafts live in `.cursor/hooks.harness.template.json` until the active Cursor hook schema is confirmed.
+- Default MCP config should stay local/no-secret. Credentialed MCP servers belong in `.cursor/mcp.optional.json` until intentionally activated.
+- Prefer `npm run harness:semantic` after edits and `npm run check:standard` before commits.
+- Use `npm run harness:mock` and `.harness/fixtures/` for mailbox/calendar development before touching real services.
+
 ## Standing Delivery Requirements (Effective 2026-03-25T17:25:17+08:00)
 
 1. Classify each task as `Code` or `Non-code` at the start of execution.

@@ -3,26 +3,39 @@
  */
 
 import React, { useState, useEffect, useCallback } from "react";
+import DOMPurify from "dompurify";
 import { sanitizeExternalLink } from "../../utils/sanitize";
 import type { TriageMailItem } from "@mail-agent/shared-types";
 import { useMail } from "../../contexts/MailContext";
 
+function escapeHtml(content: string): string {
+  return content
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function formatBodyContent(content: string): string {
   if (!content) return "";
-  let formatted = content;
-  formatted = formatted.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
-  if (formatted.includes("<")) {
-    const stripped = formatted
-      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-      .replace(/<[^>]+>/g, "\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
-    if (stripped.length > 50) {
-      formatted = stripped;
-    }
+
+  const decoded = content
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+
+  if (/<[a-z!/][^>]*>/i.test(decoded)) {
+    return DOMPurify.sanitize(decoded, {
+      USE_PROFILES: { html: true },
+      FORBID_TAGS: ["style", "script"],
+    });
   }
-  return formatted;
+
+  return escapeHtml(decoded).replace(/\n/g, "<br />");
 }
 
 interface MailDetailPageProps {
@@ -72,7 +85,7 @@ export function MailDetailPage({ item, onBack, uiCopy }: MailDetailPageProps) {
         })
         .finally(() => setLoading(false));
     }
-  }, [item?.id, mailBodyCache]);
+  }, [fetchMailDetail, item, mailBodyCache]);
 
   const handleOpenInOutlook = useCallback(() => {
     if (item?.webLink) {

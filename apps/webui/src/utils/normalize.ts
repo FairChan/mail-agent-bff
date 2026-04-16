@@ -1,6 +1,5 @@
-import type { MailInsightItem } from "../types";
+import type { MailInsightItem } from "@mail-agent/shared-types";
 
-export function buildCalendarKey(item: MailInsightItem): string {
-  return [item.messageId, item.type, item.dueAt].filter(Boolean).join("::");
+export function buildCalendarKey(item: Pick<MailInsightItem, "messageId" | "type" | "dueAt">): string {
+  return `${item.messageId}:${item.type}:${item.dueAt}`;
 }
-

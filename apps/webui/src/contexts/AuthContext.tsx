@@ -7,7 +7,7 @@ import React, { createContext, useContext, useReducer, useCallback, useEffect } 
 import type {
   AuthUser,
   SessionEnvelope,
-} from "../../../../packages/shared-types/src/index.js";
+} from "@mail-agent/shared-types";
 
 // ========== 类型定义 ==========
 

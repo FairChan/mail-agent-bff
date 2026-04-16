@@ -1,0 +1,22 @@
+{
+  "name": "suggesting-cursor-rules",
+  "version": "0.1.0",
+  "description": "Convert repeated corrections into Cursor rules and Harness detector patterns.",
+  "author": "local-harness",
+  "license": "MIT",
+  "keywords": [
+    "cursor",
+    "rules",
+    "harness",
+    "memory"
+  ],
+  "security": {
+    "permissions": [
+      "filesystem.write.rules",
+      "filesystem.write.harness-patterns"
+    ],
+    "notes": [
+      "Rules must be incident-driven and must not include secrets."
+    ]
+  }
+}

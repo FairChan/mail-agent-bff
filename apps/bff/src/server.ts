@@ -7,6 +7,15 @@ import { z } from "zod";
 import { createAgentRuntime, type TenantContext } from "./agent/index.js";
 import { env } from "./config.js";
 import { GatewayHttpError, invokeTool, queryAgent } from "./gateway.js";
+import { initComposioClient } from "./composio-service.js";
+import {
+  beginMicrosoftDirectAuth,
+  completeMicrosoftDirectAuth,
+  consumeMicrosoftDirectAuthState,
+  getMicrosoftAccountView,
+  isMicrosoftDirectAuthConfigured,
+  verifyMicrosoftMailboxAccess,
+} from "./microsoft-graph.js";
 import { getPrismaClient, isPrismaUniqueConstraintError } from "./persistence.js";
 import { createRedisAuthSessionStore } from "./redis-session-store.js";
 import {
@@ -25,6 +34,12 @@ import {
 } from "./mail.js";
 
 const server = Fastify({ logger: true, trustProxy: env.trustProxy });
+if (env.composioApiKey && env.composioMcpUrl) {
+  initComposioClient({
+    apiKey: env.composioApiKey,
+    mcpUrl: env.composioMcpUrl,
+  });
+}
 const agentRuntime = createAgentRuntime(server.log);
 const sessions = new Map<string, number>();
 const loginAttempts = new Map<string, { count: number; windowStart: number }>();
@@ -82,6 +97,8 @@ type MailSourceProfile = {
   id: string;
   name: string;
   provider: MailSourceProvider;
+  connectionType?: "composio" | "microsoft";
+  microsoftAccountId?: string;
   emailHint: string;
   mailboxUserId?: string;
   connectedAccountId?: string;
@@ -469,6 +486,17 @@ function getAuthUserBySessionToken(sessionToken: string | null): AuthUserRecord 
   }
 
   return authUsersById.get(userId) ?? null;
+}
+
+function runtimeUserIdForSession(sessionToken: string | null): string {
+  const authUser = getAuthUserBySessionToken(sessionToken);
+  if (authUser) {
+    return authUser.id;
+  }
+  if (!sessionToken) {
+    return "anonymous";
+  }
+  return `session:${sessionToken.slice(0, 16)}`;
 }
 
 function hydrateAuthUserCache(user: AuthUserRecord) {
@@ -1545,6 +1573,162 @@ function sanitizeOutlookRedirectUrl(rawUrl: string | null | undefined): string |
   } catch {
     return null;
   }
+}
+
+function sanitizeAppOrigin(rawOrigin: string | null | undefined): string | null {
+  const normalized = rawOrigin?.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(normalized);
+    const candidateOrigin = parsed.origin;
+    return env.corsOrigins.includes(candidateOrigin) ? candidateOrigin : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveAppOriginForRequest(
+  request: {
+    headers: {
+      origin?: string;
+      referer?: string;
+    };
+  },
+  requestedOrigin?: string
+): string {
+  const explicit = sanitizeAppOrigin(requestedOrigin);
+  if (explicit) {
+    return explicit;
+  }
+
+  const headerOrigin = sanitizeAppOrigin(request.headers.origin);
+  if (headerOrigin) {
+    return headerOrigin;
+  }
+
+  const refererOrigin = (() => {
+    const referer = request.headers.referer?.trim();
+    if (!referer) {
+      return null;
+    }
+
+    try {
+      return sanitizeAppOrigin(new URL(referer).origin);
+    } catch {
+      return null;
+    }
+  })();
+  if (refererOrigin) {
+    return refererOrigin;
+  }
+
+  return env.corsOrigins[0] ?? "http://127.0.0.1:5173";
+}
+
+function escapeHtml(input: string): string {
+  return input
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function inlineScriptJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replaceAll("<", "\\u003c")
+    .replaceAll(">", "\\u003e")
+    .replaceAll("&", "\\u0026");
+}
+
+function renderMicrosoftAuthPopupPage(input: {
+  title: string;
+  heading: string;
+  message: string;
+  ok: boolean;
+  appOrigin: string;
+  payload: Record<string, unknown>;
+}): string {
+  const payloadJson = inlineScriptJson({
+    type: "outlook-direct-auth",
+    ok: input.ok,
+    ...input.payload,
+  });
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${escapeHtml(input.title)}</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: "Manrope", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+      }
+      main {
+        width: min(92vw, 420px);
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        background: rgba(255, 255, 255, 0.96);
+        border-radius: 16px;
+        box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
+        padding: 20px 18px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 18px;
+        color: #0f172a;
+      }
+      p {
+        margin: 10px 0 0;
+        font-size: 13px;
+        line-height: 1.5;
+        color: #334155;
+      }
+      button {
+        margin-top: 14px;
+        height: 36px;
+        border: 0;
+        border-radius: 8px;
+        background: #111827;
+        color: white;
+        font-size: 13px;
+        font-weight: 600;
+        padding: 0 14px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>${escapeHtml(input.heading)}</h1>
+      <p>${escapeHtml(input.message)}</p>
+      <button type="button" onclick="window.close()">关闭窗口</button>
+    </main>
+    <script>
+      const payload = ${payloadJson};
+      try {
+        if (window.opener && ${inlineScriptJson(input.appOrigin)}) {
+          window.opener.postMessage(payload, ${inlineScriptJson(input.appOrigin)});
+        }
+      } catch {}
+      setTimeout(() => {
+        try {
+          window.close();
+        } catch {}
+      }, 120);
+    </script>
+  </body>
+</html>`;
 }
 
 function normalizedErrorText(input: string): string {
@@ -2684,6 +2868,91 @@ function buildMailSourceId(store: Map<string, MailSourceProfile>, label: string)
   return id;
 }
 
+async function upsertMicrosoftSourceForSession(
+  sessionToken: string,
+  accountId: string,
+  preferredLabel?: string
+): Promise<{
+  source: MailSourceProfileView;
+  activeSourceId: string;
+  ready: boolean;
+  routingStatus: MailSourceRoutingStatus;
+}> {
+  const account = getMicrosoftAccountView(sessionToken, accountId);
+  if (!account) {
+    throw new Error("Microsoft account session not found");
+  }
+
+  const mailboxUserId = cleanOptionalText(account.mailboxUserIdHint) ?? "me";
+  const explicitLabel = preferredLabel?.trim() || "";
+  const sourceLabel =
+    explicitLabel ||
+    (account.email ? `Outlook ${account.email}` : `Outlook ${account.displayName}`);
+  const store = getMailSourceStoreBySession(sessionToken, true);
+  const existingSource =
+    [...store.values()].find(
+      (source) =>
+        source.provider === "outlook" &&
+        source.connectionType === "microsoft" &&
+        cleanOptionalText(source.microsoftAccountId) === accountId
+    ) ?? null;
+  const nowIso = new Date().toISOString();
+
+  let source: MailSourceProfile;
+  if (existingSource) {
+    const baseExistingSource: MailSourceProfile = {
+      ...existingSource,
+    };
+    delete baseExistingSource.connectedAccountId;
+    source = {
+      ...baseExistingSource,
+      name: sourceLabel,
+      connectionType: "microsoft",
+      microsoftAccountId: accountId,
+      emailHint: account.email || existingSource.emailHint || mailboxUserId,
+      mailboxUserId,
+      enabled: true,
+      updatedAt: nowIso,
+    };
+    setLruEntry(store, source.id, source);
+  } else {
+    if (store.size >= maxMailSourcesPerSession) {
+      throw new Error("Mail source limit reached");
+    }
+
+    const sourceId = buildMailSourceId(store, sourceLabel);
+    source = {
+      id: sourceId,
+      name: sourceLabel,
+      provider: "outlook",
+      connectionType: "microsoft",
+      microsoftAccountId: accountId,
+      emailHint: account.email || mailboxUserId,
+      mailboxUserId,
+      enabled: true,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    setLruEntry(store, source.id, source);
+    enforceMapLimit(store, maxMailSourcesPerSession);
+    enforceMapLimit(mailSourcesBySession, maxMailSourceSessionEntries);
+  }
+
+  sourceRoutingStatusBySession.delete(sourceScopedSessionKey(sessionToken, source.id));
+  const routingStatus = await verifySourceRoutingForSession(sessionToken, source.id);
+  const ready = routingStatus.routingVerified && !routingStatus.failFast;
+  if (ready && source.enabled) {
+    activeMailSourceBySession.set(sessionToken, source.id);
+  }
+
+  return {
+    source: withRoutingStatus(sessionToken, source),
+    activeSourceId: activeMailSourceBySession.get(sessionToken) ?? defaultMailSourceId,
+    ready,
+    routingStatus,
+  };
+}
+
 function buildMailSourceContext(sessionToken: string | null, sourceId: string): MailSourceContext {
   if (!sessionToken) {
     return { sourceId };
@@ -2700,6 +2969,11 @@ function buildMailSourceContext(sessionToken: string | null, sourceId: string): 
 
   return {
     sourceId,
+    sessionToken,
+    ...(profile?.connectionType ? { connectionType: profile.connectionType } : {}),
+    ...(cleanOptionalText(profile?.microsoftAccountId)
+      ? { microsoftAccountId: cleanOptionalText(profile?.microsoftAccountId) }
+      : {}),
     ...(mailboxUserId ? { mailboxUserId } : {}),
     ...(connectedAccountId ? { connectedAccountId } : {}),
   };
@@ -2774,6 +3048,66 @@ async function verifySourceRoutingForSession(
 ): Promise<MailSourceRoutingStatus> {
   if (!touchSessionIfActive(sessionToken, Date.now())) {
     throw new UnauthorizedSessionError();
+  }
+
+  const snapshot = getMailSourcesSnapshotBySession(sessionToken);
+  const source = snapshot.sources.find((item) => item.id === sourceId);
+  if (!source) {
+    throw new Error("Mail source not found");
+  }
+
+  if (source.connectionType === "microsoft") {
+    const accountId = cleanOptionalText(source.microsoftAccountId);
+    if (!accountId) {
+      const missingStatus: MailSourceRoutingStatus = {
+        verifiedAt: new Date().toISOString(),
+        routingVerified: false,
+        failFast: true,
+        message: "Microsoft account binding is missing for this source.",
+        mailbox: {
+          required: true,
+          status: "failed",
+          verified: false,
+          message: "Microsoft account binding is missing for this source.",
+        },
+        connectedAccount: {
+          required: false,
+          status: "skipped",
+          verified: true,
+          message: "Direct Microsoft auth does not use Composio connectedAccountId.",
+        },
+      };
+      sourceRoutingStatusBySession.set(sourceScopedSessionKey(sessionToken, sourceId), missingStatus);
+      enforceMapLimit(sourceRoutingStatusBySession, maxMailSourceRoutingSessionEntries);
+      return missingStatus;
+    }
+
+    const verification = await verifyMicrosoftMailboxAccess(sessionToken, accountId);
+    const routingStatus: MailSourceRoutingStatus = {
+      verifiedAt: new Date().toISOString(),
+      routingVerified: verification.ok,
+      failFast: !verification.ok,
+      message: verification.ok
+        ? "Direct Microsoft mailbox access verified."
+        : verification.error ?? "Microsoft mailbox verification failed.",
+      mailbox: {
+        required: true,
+        status: verification.ok ? "verified" : "failed",
+        verified: verification.ok,
+        message: verification.ok
+          ? "Microsoft Graph /me and /me/messages probes succeeded."
+          : verification.error ?? "Microsoft mailbox verification failed.",
+      },
+      connectedAccount: {
+        required: false,
+        status: "skipped",
+        verified: true,
+        message: "Direct Microsoft auth does not use Composio connectedAccountId.",
+      },
+    };
+    sourceRoutingStatusBySession.set(sourceScopedSessionKey(sessionToken, sourceId), routingStatus);
+    enforceMapLimit(sourceRoutingStatusBySession, maxMailSourceRoutingSessionEntries);
+    return routingStatus;
   }
 
   const sourceContext = buildMailSourceContext(sessionToken, sourceId);
@@ -3617,6 +3951,18 @@ const mailQuestionSchema = z.object({
     }),
 });
 
+const agentMemoryQuerySchema = z.object({
+  sourceId: sourceIdOptionalSchema,
+  limit: z.coerce.number().int().min(1).max(20).optional(),
+});
+
+const agentRememberSchema = z.object({
+  note: z.string().trim().min(1).max(1200),
+  kind: z.enum(["fact", "preference"]).optional(),
+  sourceId: sourceIdOptionalSchema,
+  tags: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
+});
+
 const priorityRuleFieldSchema = z.enum(["from", "subject", "body", "any"]);
 const priorityRuleQuadrantSchema = z.enum([
   "urgent_important",
@@ -3793,6 +4139,18 @@ const mailSourceAutoConnectOutlookSchema = z.object({
   sessionId: z.string().trim().min(1).max(120).optional(),
   reinitiate: z.boolean().optional(),
   autoSelect: z.boolean().optional(),
+});
+
+const outlookDirectStartQuerySchema = z.object({
+  appOrigin: z.string().trim().min(1).max(200).optional(),
+  attemptId: z.string().trim().min(8).max(120).optional(),
+});
+
+const outlookDirectCallbackQuerySchema = z.object({
+  code: z.string().trim().min(1).optional(),
+  state: z.string().trim().min(1).optional(),
+  error: z.string().trim().min(1).optional(),
+  error_description: z.string().trim().min(1).optional(),
 });
 
 const composioManageConnectionsResponseSchema = z.object({
@@ -4078,6 +4436,28 @@ server.get("/live", async () => {
 
 async function readinessProbe() {
   const startedAt = Date.now();
+
+  if (!env.openClawGatewayBearer) {
+    const siliconFlowConfigured = env.siliconFlowApiKey.length > 0;
+    const composioConfigured = env.composioApiKey.length > 0 && env.composioMcpUrl.length > 0;
+    const microsoftConfigured = isMicrosoftDirectAuthConfigured();
+    const ready = siliconFlowConfigured && (composioConfigured || microsoftConfigured);
+
+    return {
+      statusCode: ready ? 200 : 503,
+      payload: {
+        ok: ready,
+        service: "mail-agent-bff",
+        latencyMs: Date.now() - startedAt,
+        runtime: {
+          mode: "direct",
+          siliconFlow: { ok: siliconFlowConfigured },
+          composio: { ok: composioConfigured },
+          microsoft: { ok: microsoftConfigured },
+        },
+      },
+    };
+  }
 
   try {
     await invokeTool({
@@ -5070,6 +5450,214 @@ server.post("/api/mail/sources/verify", async (request, reply) => {
       ok: false,
       error: message,
     };
+  }
+});
+
+server.get("/api/mail/connections/outlook/direct/start", async (request, reply) => {
+  const parsed = outlookDirectStartQuerySchema.safeParse(request.query ?? {});
+  const appOrigin = resolveAppOriginForRequest(
+    request,
+    parsed.success ? parsed.data.appOrigin : undefined
+  );
+  const attemptId = parsed.success && parsed.data.attemptId ? parsed.data.attemptId : randomUUID();
+  const htmlReply = (input: {
+    ok: boolean;
+    title: string;
+    heading: string;
+    message: string;
+    payload: Record<string, unknown>;
+  }) =>
+    reply
+      .type("text/html; charset=utf-8")
+      .send(
+        renderMicrosoftAuthPopupPage({
+          ...input,
+          appOrigin,
+        })
+      );
+
+  const sessionToken = getSessionTokenFromRequest(request);
+  if (!sessionToken) {
+    return htmlReply({
+      ok: false,
+      title: "会话已过期",
+      heading: "无法继续微软登录",
+      message: "当前登录会话已失效，请先回到主页面重新登录。",
+      payload: {
+        attemptId,
+        error: "UNAUTHORIZED",
+      },
+    });
+  }
+
+  if (!isMicrosoftDirectAuthConfigured()) {
+    return htmlReply({
+      ok: false,
+      title: "缺少微软配置",
+      heading: "Microsoft OAuth 尚未配置",
+      message: "后端缺少 MICROSOFT_CLIENT_ID 或重定向配置，当前无法直接连接 Outlook。",
+      payload: {
+        attemptId,
+        error: "MICROSOFT_OAUTH_NOT_CONFIGURED",
+      },
+    });
+  }
+
+  if (!touchSessionIfActive(sessionToken, Date.now())) {
+    return htmlReply({
+      ok: false,
+      title: "会话已过期",
+      heading: "无法继续微软登录",
+      message: "当前登录会话已失效，请先回到主页面重新登录。",
+      payload: {
+        attemptId,
+        error: "UNAUTHORIZED",
+      },
+    });
+  }
+
+  try {
+    const start = beginMicrosoftDirectAuth({
+      sessionToken,
+      appOrigin,
+      attemptId,
+    });
+    return reply.redirect(start.authorizeUrl);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    server.log.warn({ message }, "Microsoft direct auth start failed");
+    return htmlReply({
+      ok: false,
+      title: "微软登录初始化失败",
+      heading: "无法启动 Microsoft 登录",
+      message,
+      payload: {
+        attemptId,
+        error: "MICROSOFT_OAUTH_START_FAILED",
+        detail: message,
+      },
+    });
+  }
+});
+
+server.get("/api/mail/connections/outlook/direct/callback", async (request, reply) => {
+  const parsed = outlookDirectCallbackQuerySchema.safeParse(request.query ?? {});
+  const fallbackOrigin = env.corsOrigins[0] ?? "http://127.0.0.1:5173";
+  const htmlReply = (input: {
+    ok: boolean;
+    appOrigin?: string;
+    title: string;
+    heading: string;
+    message: string;
+    payload: Record<string, unknown>;
+  }) =>
+    reply
+      .type("text/html; charset=utf-8")
+      .send(
+        renderMicrosoftAuthPopupPage({
+          ...input,
+          appOrigin: input.appOrigin ?? fallbackOrigin,
+        })
+      );
+
+  if (!parsed.success) {
+    return htmlReply({
+      ok: false,
+      title: "微软登录失败",
+      heading: "回调参数无效",
+      message: "Microsoft 返回的回调参数不完整，请重新尝试登录。",
+      payload: {
+        error: "MICROSOFT_OAUTH_INVALID_CALLBACK",
+      },
+    });
+  }
+
+  if (parsed.data.error) {
+    const failedState = parsed.data.state ? consumeMicrosoftDirectAuthState(parsed.data.state) : null;
+    return htmlReply({
+      ok: false,
+      ...(failedState ? { appOrigin: failedState.appOrigin } : {}),
+      title: "微软登录未完成",
+      heading: "Microsoft 登录未完成",
+      message: parsed.data.error_description ?? parsed.data.error,
+      payload: {
+        ...(failedState ? { attemptId: failedState.attemptId } : {}),
+        error: parsed.data.error,
+        detail: parsed.data.error_description ?? null,
+      },
+    });
+  }
+
+  if (!parsed.data.code || !parsed.data.state) {
+    return htmlReply({
+      ok: false,
+      title: "微软登录失败",
+      heading: "回调参数缺失",
+      message: "没有收到可用的授权码，请重新尝试登录。",
+      payload: {
+        error: "MICROSOFT_OAUTH_CODE_MISSING",
+      },
+    });
+  }
+
+  try {
+    const completed = await completeMicrosoftDirectAuth({
+      state: parsed.data.state,
+      code: parsed.data.code,
+    });
+    if (!touchSessionIfActive(completed.sessionToken, Date.now())) {
+      return htmlReply({
+        ok: false,
+        appOrigin: completed.appOrigin,
+        title: "会话已过期",
+        heading: "登录成功，但会话已失效",
+        message: "Microsoft 已完成授权，但当前站点登录会话已过期，请回到主页面重新登录。",
+        payload: {
+          attemptId: completed.attemptId,
+          error: "UNAUTHORIZED",
+        },
+      });
+    }
+
+    const sourceResult = await upsertMicrosoftSourceForSession(
+      completed.sessionToken,
+      completed.account.accountId
+    );
+    return htmlReply({
+      ok: true,
+      appOrigin: completed.appOrigin,
+      title: "Outlook 已连接",
+      heading: "Microsoft Outlook 已连接",
+      message: sourceResult.ready
+        ? "授权已完成，邮箱数据源已创建并激活。"
+        : "授权已完成，但邮箱源仍需进一步验证。",
+      payload: {
+        status: "connected",
+        attemptId: completed.attemptId,
+        sourceId: sourceResult.source.id,
+        activeSourceId: sourceResult.activeSourceId,
+        ready: sourceResult.ready,
+        source: sourceResult.source,
+        account: completed.account,
+        mailboxUserIdHint: completed.account.mailboxUserIdHint,
+        message: sourceResult.ready
+          ? "Microsoft Outlook 已连接并可以直接读取邮件。"
+          : sourceResult.routingStatus.message,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    server.log.warn({ message }, "Microsoft direct auth callback failed");
+    return htmlReply({
+      ok: false,
+      title: "微软登录失败",
+      heading: "无法完成 Microsoft 授权",
+      message,
+      payload: {
+        error: "MICROSOFT_OAUTH_CALLBACK_FAILED",
+        detail: message,
+      },
+    });
   }
 });
 
@@ -6830,19 +7418,30 @@ server.post("/api/mail/query", async (request, reply) => {
     return routingGuard.payload;
   }
   try {
-    const sourceContext = buildMailSourceContext(sessionToken, sourceId);
-    const result = await answerMailQuestion({
-      question,
+    const tenant = buildTenantContextForRequest(reply, sessionToken, sourceId);
+    if (!tenant) {
+      return {
+        ok: false,
+        error: "Unauthorized or source not found",
+      };
+    }
+
+    const result = await agentRuntime.query({
+      tenant,
+      message: question,
+      timeZone: parsed.data.tz,
       limit,
       horizonDays,
-      timeZone: parsed.data.tz,
       priorityRules: getPriorityRulesSnapshotBySession(sessionToken, sourceId),
-      sourceContext,
     });
     return {
       ok: true,
       sourceId,
-      result,
+      result: {
+        answer: result.answer,
+        references: result.references,
+        generatedAt: new Date().toISOString(),
+      },
     };
   } catch (error) {
     if (error instanceof GatewayHttpError) {
@@ -7398,6 +7997,15 @@ server.post("/api/mail/calendar/delete/batch", async (request, reply) => {
 });
 
 server.post("/api/gateway/tools/invoke", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  if (!sessionToken) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+    };
+  }
+
   const parsed = invokeSchema.safeParse(request.body);
 
   if (!parsed.success) {
@@ -7670,6 +8278,7 @@ server.post("/api/agent/query-openclaw-legacy", async (request, reply) => {
       message: parsed.data.message,
       user: `${tenant.userId}:${tenant.sourceId}`,
       sessionKey: `${tenant.sessionToken}${sourceScopeSeparator}${tenant.sourceId}`,
+      timeoutMs: env.AGENT_TIMEOUT_MS,
     });
     return { ok: true, result };
   } catch (error) {

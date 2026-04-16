@@ -6,9 +6,10 @@ const envSchema = z.object({
   TRUST_PROXY: z.string().default("false"),
   AGENT_RUNTIME: z.enum(["mastra", "openclaw"]).default("mastra"),
   OPENCLAW_GATEWAY_BASE_URL: z.url().default("http://127.0.0.1:18789"),
-  OPENCLAW_GATEWAY_BEARER: z.string().optional(),
+  OPENCLAW_GATEWAY_BEARER: z.string().default(""),
   COMPOSIO_PLATFORM_URL: z.url().default("https://platform.composio.dev/"),
-  COMPOSIO_API_KEY: z.string().optional(),
+  COMPOSIO_API_KEY: z.string().default(""),
+  COMPOSIO_MCP_URL: z.string().default(""),
   BFF_API_KEY: z.string().min(16),
   OPENCLAW_AGENT_ID: z.string().min(1).default("main"),
   GATEWAY_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(10000),
@@ -18,25 +19,35 @@ const envSchema = z.object({
   LLM_PROVIDER_BASE_URL: z.string().optional(),
   LLM_PROVIDER_API_KEY: z.string().optional(),
   LLM_PROVIDER_MODEL: z.string().optional(),
-  SILICONFLOW_BASE_URL: z.string().optional(),
-  SILICONFLOW_API_KEY: z.string().optional(),
-  SILICONFLOW_MODEL: z.string().optional(),
+  SILICONFLOW_API_KEY: z.string().default(""),
+  SILICONFLOW_BASE_URL: z.string().default("https://api.siliconflow.cn/v1"),
+  SILICONFLOW_MODEL: z.string().default("Pro/zai-org/GLM-5.1"),
+  MICROSOFT_CLIENT_ID: z.string().default(""),
+  MICROSOFT_CLIENT_SECRET: z.string().default(""),
+  MICROSOFT_TENANT_ID: z.string().default("common"),
+  MICROSOFT_REDIRECT_URI: z.string().default("http://127.0.0.1:8787/api/mail/connections/outlook/direct/callback"),
+  MICROSOFT_SCOPES: z
+    .string()
+    .default("openid profile email offline_access User.Read Mail.Read Calendars.ReadWrite"),
+  AGENT_SKILLS_DIR: z.string().default(""),
+  AGENT_DATA_DIR: z.string().default(""),
+  AGENT_MEMORY_MAX_ENTRIES: z.coerce.number().int().min(20).max(2000).default(200),
   DATABASE_URL: z.string().optional(),
   PRISMA_AUTH_ENABLED: z.string().default("false"),
   ENABLE_EMAIL_PERSISTENCE: z.string().default("false"),
   NODE_ENV: z.string().default("development"),
   SMTP_ENABLED: z.string().default("false"),
-  SMTP_HOST: z.string().optional(),
+  SMTP_HOST: z.string().default(""),
   SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
-  SMTP_USER: z.string().optional(),
-  SMTP_PASS: z.string().optional(),
-  SMTP_FROM: z.string().optional(),
+  SMTP_USER: z.string().default(""),
+  SMTP_PASS: z.string().default(""),
+  SMTP_FROM: z.string().default(""),
   SMTP_SECURE: z.string().default("false"),
   OAUTH_ENABLED: z.string().default("false"),
-  OAUTH_CLIENT_ID: z.string().optional(),
-  OAUTH_CLIENT_SECRET: z.string().optional(),
-  OAUTH_REFRESH_TOKEN: z.string().optional(),
-  OAUTH_USER: z.string().optional(),
+  OAUTH_CLIENT_ID: z.string().default(""),
+  OAUTH_CLIENT_SECRET: z.string().default(""),
+  OAUTH_REFRESH_TOKEN: z.string().default(""),
+  OAUTH_USER: z.string().default(""),
   SESSION_TTL_MS: z.coerce.number().int().min(60000).max(604800000).default(28800000),
   LOGIN_RATE_LIMIT_PER_MIN: z.coerce.number().int().min(1).max(1000).default(30),
   ALLOWED_TOOLS: z
@@ -110,16 +121,16 @@ function parseBooleanFlag(raw: string): boolean {
   return value === "true" || value === "yes" || value === "1";
 }
 
+function normalizeUrl(raw: string): string {
+  return raw.trim().replace(/\/+$/, "");
+}
+
 export const env = {
   ...parsed.data,
   agentRuntime: parsed.data.AGENT_RUNTIME,
   llmProviderBaseUrl,
   llmProviderApiKey,
   llmProviderModel,
-  composioApiKey: parsed.data.COMPOSIO_API_KEY?.trim() || "",
-  siliconFlowApiKey: parsed.data.SILICONFLOW_API_KEY?.trim() || "",
-  siliconFlowBaseUrl: parsed.data.SILICONFLOW_BASE_URL?.trim() || "",
-  siliconFlowModel: parsed.data.SILICONFLOW_MODEL?.trim() || "",
   smtpEnabled: parseBooleanFlag(parsed.data.SMTP_ENABLED),
   smtpSecure: parseBooleanFlag(parsed.data.SMTP_SECURE),
   oauthEnabled: parseBooleanFlag(parsed.data.OAUTH_ENABLED),
@@ -128,6 +139,7 @@ export const env = {
   oauthRefreshToken: parsed.data.OAUTH_REFRESH_TOKEN?.trim() || "",
   oauthUser: parsed.data.OAUTH_USER?.trim() || "",
   trustProxy: parseTrustProxy(parsed.data.TRUST_PROXY),
+  openClawGatewayBearer: parsed.data.OPENCLAW_GATEWAY_BEARER.trim(),
   allowedTools: new Set(
     parsed.data.ALLOWED_TOOLS.split(",")
       .map((item) => item.trim())
@@ -137,6 +149,19 @@ export const env = {
     .map((item) => item.trim())
     .filter((item) => item.length > 0),
   redisAuthSessionsEnabled: parseBooleanFlag(parsed.data.REDIS_AUTH_SESSIONS_ENABLED),
+  composioApiKey: parsed.data.COMPOSIO_API_KEY.trim(),
+  composioMcpUrl: normalizeUrl(parsed.data.COMPOSIO_MCP_URL),
+  siliconFlowApiKey: parsed.data.SILICONFLOW_API_KEY.trim(),
+  siliconFlowBaseUrl: normalizeUrl(parsed.data.SILICONFLOW_BASE_URL),
+  siliconFlowModel: parsed.data.SILICONFLOW_MODEL.trim() || "Pro/zai-org/GLM-5.1",
+  microsoftClientId: parsed.data.MICROSOFT_CLIENT_ID.trim(),
+  microsoftClientSecret: parsed.data.MICROSOFT_CLIENT_SECRET.trim(),
+  microsoftTenantId: parsed.data.MICROSOFT_TENANT_ID.trim() || "common",
+  microsoftRedirectUri: parsed.data.MICROSOFT_REDIRECT_URI.trim(),
+  microsoftScopes: parsed.data.MICROSOFT_SCOPES.trim(),
+  agentSkillsDir: parsed.data.AGENT_SKILLS_DIR.trim(),
+  agentDataDir: parsed.data.AGENT_DATA_DIR.trim(),
+  agentMemoryMaxEntries: parsed.data.AGENT_MEMORY_MAX_ENTRIES,
 };
 
 export type Env = typeof env;

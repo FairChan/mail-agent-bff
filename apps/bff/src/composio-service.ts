@@ -402,12 +402,19 @@ export function composioMultiExecuteArgs(
 
 // ========== Composio API 调用 ==========
 
-export async function callComposioTool(
-  tools: Array<{ tool_slug: string; arguments: Record<string, unknown> }>,
-  sourceContext?: MailSourceContext
-): Promise<ComposioMultiExecutePayload> {
+export async function callComposioMultiExecutePayload(args: {
+  tools: Array<{ tool_slug: string; arguments: Record<string, unknown> }>;
+  connected_account_id?: string;
+}): Promise<ComposioMultiExecutePayload> {
   const config = getConfig();
-  const args = composioMultiExecuteArgs(tools, sourceContext);
+
+  if (!config.apiKey.trim()) {
+    throw new Error("COMPOSIO_API_KEY is not configured");
+  }
+
+  if (!config.mcpUrl.trim()) {
+    throw new Error("COMPOSIO_MCP_URL is not configured");
+  }
 
   const body = {
     jsonrpc: "2.0",
@@ -455,6 +462,13 @@ export async function callComposioTool(
     }
     throw new Error(`Composio call failed: ${String(error)}`);
   }
+}
+
+export async function callComposioTool(
+  tools: Array<{ tool_slug: string; arguments: Record<string, unknown> }>,
+  sourceContext?: MailSourceContext
+): Promise<ComposioMultiExecutePayload> {
+  return callComposioMultiExecutePayload(composioMultiExecuteArgs(tools, sourceContext));
 }
 
 // ========== 导出辅助函数 ==========

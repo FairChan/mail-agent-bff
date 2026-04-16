@@ -15,7 +15,7 @@ import type {
   KnowledgeBaseStats,
   EventCluster,
   PersonProfile,
-} from "../../../../packages/shared-types/src/index.js";
+} from "@mail-agent/shared-types";
 
 // ========== 类型定义 ==========
 

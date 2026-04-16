@@ -5,7 +5,10 @@
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { HealthCheckResult } from "../types/health.js";
-import type { MetricsStore } from "./redis-session-store.js";
+
+type MetricsStore = {
+  getMetrics: () => Promise<Record<string, { count: number; totalDurationMs: number; errors: number }>>;
+};
 
 export type HealthCheckServices = {
   redis: { status: "up" | "down" | "disabled"; latencyMs?: number; error?: string };

@@ -1,0 +1,14 @@
+---
+description: Harness development guardrails for the mail-agent-bff workspace
+alwaysApply: true
+---
+
+# Harness Guardrails
+
+- Prefer local mocks and fixtures over real mailbox/calendar services during development.
+- Run `npm run harness:semantic` after code edits and `npm run check:standard` before commits.
+- Do not write `.env` files, force-push, or run destructive database commands without explicit user approval.
+- Treat GET routes as read-only. Side effects belong in POST/PUT/PATCH/DELETE routes.
+- Promote repeated failures from `.harness/error-journal.md` into `.harness/patterns-cache.json`.
+- For code tasks, implement first, then run independent audit and fix all Critical/High findings before delivery.
+

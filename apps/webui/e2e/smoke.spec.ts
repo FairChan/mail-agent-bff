@@ -107,7 +107,7 @@ test.describe("国际化支持", () => {
     await expect(page.locator("form")).toBeVisible({ timeout: 15000 });
 
     // 检查语言切换按钮存在
-    const langButton = page.getByRole("button", { name: /中文/i });
+    const langButton = page.getByRole("tab", { name: /中文/i });
     await expect(langButton).toBeVisible();
   });
 
@@ -119,7 +119,7 @@ test.describe("国际化支持", () => {
     await expect(form).toBeVisible({ timeout: 15000 });
 
     // 切换到英文
-    const enButton = page.getByRole("button", { name: /EN/i });
+    const enButton = page.getByRole("tab", { name: /EN/i });
     await enButton.click();
 
     // 页面应该正常渲染
@@ -134,7 +134,7 @@ test.describe("国际化支持", () => {
     await expect(form).toBeVisible({ timeout: 15000 });
 
     // 切换到日文
-    const jaButton = page.getByRole("button", { name: /JA/i });
+    const jaButton = page.getByRole("tab", { name: /JA/i });
     await jaButton.click();
 
     // 页面应该正常渲染

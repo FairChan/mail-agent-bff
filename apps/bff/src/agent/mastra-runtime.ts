@@ -130,6 +130,8 @@ export class MastraRuntime implements AgentRuntime {
       const memory = await this.createMemory();
       const tools = await createMailAssistantTools(tenant, {
         logger: this.logger,
+        timeZone: input.timeZone,
+        priorityRules: input.priorityRules,
       });
       const agent = new Agent({
         id: "mail-assistant",

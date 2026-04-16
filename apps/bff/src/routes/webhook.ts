@@ -5,7 +5,6 @@
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
-import type { MetricsStore } from "./redis-session-store.js";
 
 export type WebhookDeps = {
   setWebhookSecrets: (secrets: { secretKey?: string; inboundApiKey?: string }) => void;

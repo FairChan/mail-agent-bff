@@ -1,0 +1,21 @@
+{
+  "messages": [
+    {
+      "id": "fixture-exam-001",
+      "from": {
+        "name": "Academic Office",
+        "email": "academic-office@example.edu"
+      },
+      "subject": "Final Exam Schedule Notice",
+      "receivedDateTime": "2026-04-20T02:30:00.000Z",
+      "bodyPreview": "Your final exam for CS501 is scheduled for May 8 at 09:00 in Room A201.",
+      "body": {
+        "contentType": "text",
+        "content": "Dear student,\n\nYour final exam for CS501 is scheduled for May 8 at 09:00 in Room A201. Please bring your student ID and arrive 15 minutes early.\n\nAcademic Office"
+      },
+      "importance": "high",
+      "isRead": false
+    }
+  ]
+}
+
