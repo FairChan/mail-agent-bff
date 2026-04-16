@@ -1,9 +1,10 @@
 import "dotenv/config";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import argon2 from "argon2";
-import Fastify from "fastify";
+import Fastify, { type FastifyReply } from "fastify";
 import cors from "@fastify/cors";
 import { z } from "zod";
+import { createAgentRuntime, type TenantContext } from "./agent/index.js";
 import { env } from "./config.js";
 import { GatewayHttpError, invokeTool, queryAgent } from "./gateway.js";
 import { getPrismaClient, isPrismaUniqueConstraintError } from "./persistence.js";
@@ -24,6 +25,7 @@ import {
 } from "./mail.js";
 
 const server = Fastify({ logger: true, trustProxy: env.trustProxy });
+const agentRuntime = createAgentRuntime(server.log);
 const sessions = new Map<string, number>();
 const loginAttempts = new Map<string, { count: number; windowStart: number }>();
 const batchRouteAttempts = new Map<string, { count: number; windowStart: number }>();
@@ -2703,6 +2705,45 @@ function buildMailSourceContext(sessionToken: string | null, sourceId: string): 
   };
 }
 
+function getUserIdForSessionToken(sessionToken: string): string | null {
+  const userId = authSessionUserByToken.get(sessionToken) ?? authSessionUserViewByToken.get(sessionToken)?.id;
+  if (userId) {
+    return userId;
+  }
+
+  if (legacyApiKeySessions.has(sessionToken)) {
+    return `legacy:${createHash("sha256").update(sessionToken).digest("hex").slice(0, 16)}`;
+  }
+
+  return null;
+}
+
+function buildTenantContextForRequest(
+  reply: FastifyReply,
+  sessionToken: string | null,
+  requestedSourceId?: string
+): TenantContext | null {
+  const sourceId = requireResolvedSourceId(reply, sessionToken, requestedSourceId);
+  if (!sourceId || !sessionToken) {
+    return null;
+  }
+
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId) {
+    reply.status(401);
+    return null;
+  }
+
+  const sourceContext = buildMailSourceContext(sessionToken, sourceId);
+  return {
+    ...sourceContext,
+    userId,
+    sessionToken,
+    sourceId,
+    ...(legacyApiKeySessions.has(sessionToken) ? { isLegacySession: true } : {}),
+  };
+}
+
 function sourceRoutingStatusMessage(
   mailbox: MailSourceRoutingCheckResult,
   connectedAccount: MailSourceRoutingCheckResult,
@@ -3543,12 +3584,6 @@ const invokeSchema = z.object({
   sessionKey: z.string().min(1).optional(),
 });
 
-const querySchema = z.object({
-  message: z.string().min(1),
-  user: z.string().min(1).optional(),
-  sessionKey: z.string().min(1).optional(),
-});
-
 const sourceIdSchema = z
   .string()
   .trim()
@@ -3560,6 +3595,12 @@ const sourceIdOptionalSchema = sourceIdSchema.optional();
 const sourceOnlyQuerySchema = z.object({
   sourceId: sourceIdOptionalSchema,
 });
+const querySchema = z.object({
+  message: z.string().trim().min(1).max(8000),
+  sourceId: sourceIdOptionalSchema,
+  threadId: z.string().trim().min(1).max(256).optional(),
+});
+const agentChatSchema = querySchema;
 
 const mailQuestionSchema = z.object({
   question: z.string().min(1).max(300),
@@ -7407,6 +7448,123 @@ server.post("/api/gateway/tools/invoke", async (request, reply) => {
   }
 });
 
+server.get("/api/agent/skills", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  const parsed = sourceOnlyQuerySchema.safeParse(request.query);
+
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid query",
+      details: parsed.error.issues,
+    };
+  }
+
+  const tenant = buildTenantContextForRequest(reply, sessionToken, parsed.data.sourceId);
+  if (!tenant) {
+    return {
+      ok: false,
+      error: "Unauthorized or source not found",
+    };
+  }
+
+  return {
+    ok: true,
+    skills: await agentRuntime.listSkills(tenant),
+  };
+});
+
+server.post("/api/agent/chat", async (request, reply) => {
+  const parsed = agentChatSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid payload",
+      details: parsed.error.issues,
+    };
+  }
+
+  const sessionToken = getSessionTokenFromRequest(request);
+  const tenant = buildTenantContextForRequest(reply, sessionToken, parsed.data.sourceId);
+  if (!tenant) {
+    return {
+      ok: false,
+      error: "Unauthorized or source not found",
+    };
+  }
+
+  reply.hijack();
+  const raw = reply.raw;
+  let completed = false;
+  let timedOut = false;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, env.AGENT_TIMEOUT_MS);
+
+  const writeEvent = (event: { type: string; [key: string]: unknown }) => {
+    if (raw.destroyed) {
+      return;
+    }
+    raw.write(`event: ${event.type}\n`);
+    raw.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+
+  request.raw.on("close", () => {
+    if (!completed) {
+      controller.abort();
+    }
+  });
+
+  try {
+    raw.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+
+    for await (const event of agentRuntime.stream({
+      tenant,
+      message: parsed.data.message,
+      threadId: parsed.data.threadId,
+      abortSignal: controller.signal,
+    })) {
+      writeEvent(event);
+    }
+  } catch (error) {
+    const message = timedOut
+      ? `Agent request timed out after ${env.AGENT_TIMEOUT_MS}ms`
+      : error instanceof Error
+        ? error.message
+        : String(error);
+    server.log.warn(
+      {
+        userId: tenant.userId,
+        sourceId: tenant.sourceId,
+        timedOut,
+        message,
+      },
+      "Agent chat stream failed"
+    );
+    writeEvent({
+      type: "error",
+      error: message,
+      code: timedOut ? "AGENT_TIMEOUT" : "AGENT_ERROR",
+    });
+  } finally {
+    completed = true;
+    clearTimeout(timeout);
+    if (!raw.destroyed) {
+      raw.end();
+    }
+  }
+});
+
 server.post("/api/agent/query", async (request, reply) => {
   const parsed = querySchema.safeParse(request.body);
 
@@ -7419,8 +7577,109 @@ server.post("/api/agent/query", async (request, reply) => {
     };
   }
 
+  const sessionToken = getSessionTokenFromRequest(request);
+  const tenant = buildTenantContextForRequest(reply, sessionToken, parsed.data.sourceId);
+  if (!tenant) {
+    return {
+      ok: false,
+      error: "Unauthorized or source not found",
+    };
+  }
+
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, env.AGENT_TIMEOUT_MS);
+
   try {
-    const result = await queryAgent(parsed.data);
+    const result = await agentRuntime.query({
+      tenant,
+      message: parsed.data.message,
+      threadId: parsed.data.threadId,
+      abortSignal: controller.signal,
+    });
+    return { ok: true, result };
+  } catch (error) {
+    if (error instanceof GatewayHttpError) {
+      server.log.warn(gatewayErrorLogContext(error), "Gateway agent query failed");
+
+      const hint =
+        error.status === 404
+          ? "Gateway /v1/responses may not be enabled. Enable gateway.http.endpoints.responses.enabled=true in openclaw.json when AGENT_RUNTIME=openclaw."
+          : undefined;
+
+      reply.status(error.status);
+      return {
+        ok: false,
+        error: error.message,
+        hint,
+      };
+    }
+
+    if (timedOut) {
+      reply.status(504);
+      return {
+        ok: false,
+        error: `Agent request timed out after ${env.AGENT_TIMEOUT_MS}ms`,
+      };
+    }
+
+    server.log.warn(
+      {
+        userId: tenant.userId,
+        sourceId: tenant.sourceId,
+        message: error instanceof Error ? error.message : String(error),
+      },
+      "Agent query failed"
+    );
+    reply.status(502);
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Agent query failed",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+});
+
+server.post("/api/agent/query-openclaw-legacy", async (request, reply) => {
+  const parsed = agentChatSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid payload",
+      details: parsed.error.issues,
+    };
+  }
+
+  const sessionToken = getSessionTokenFromRequest(request);
+  const tenant = buildTenantContextForRequest(reply, sessionToken, parsed.data.sourceId);
+  if (!tenant) {
+    return {
+      ok: false,
+      error: "Unauthorized or source not found",
+    };
+  }
+
+  if (tenant.sourceId !== defaultMailSourceId) {
+    reply.status(409);
+    return {
+      ok: false,
+      error: "OpenClaw legacy fallback only supports the default Outlook source. Switch to Mastra for source-scoped agent access.",
+      sourceId: tenant.sourceId,
+    };
+  }
+
+  try {
+    const result = await queryAgent({
+      message: parsed.data.message,
+      user: `${tenant.userId}:${tenant.sourceId}`,
+      sessionKey: `${tenant.sessionToken}${sourceScopeSeparator}${tenant.sourceId}`,
+    });
     return { ok: true, result };
   } catch (error) {
     if (error instanceof GatewayHttpError) {

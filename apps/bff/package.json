@@ -10,16 +10,26 @@
     "check": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "^2.0.41",
+    "@composio/core": "^0.6.10",
+    "@composio/mastra": "^0.6.10",
     "@fastify/cors": "^11.1.0",
+    "@mastra/core": "^1.25.0",
+    "@mastra/memory": "^1.15.1",
+    "@mastra/pg": "^1.9.1",
     "@prisma/client": "^6.7.0",
+    "ai": "^6.0.164",
     "argon2": "^0.31.2",
     "dotenv": "^16.6.1",
     "fastify": "^5.6.1",
+    "google-auth-library": "^10.5.0",
+    "nodemailer": "^6.10.1",
     "redis": "^4.7.1",
     "zod": "^4.1.12"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",
+    "@types/nodemailer": "^7.0.11",
     "prisma": "^6.7.0",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"

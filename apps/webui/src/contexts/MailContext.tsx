@@ -140,6 +140,7 @@ interface MailContextValue extends MailState {
   selectSource: (sourceId: string) => Promise<void>;
   deleteSource: (sourceId: string) => Promise<void>;
   verifySource: (sourceId: string) => Promise<boolean>;
+  launchOutlookAuth: (forceReinitiate?: boolean) => Promise<OutlookLaunchResult>;
 
   // 邮件操作
   fetchInbox: (limit?: number) => Promise<void>;
@@ -174,6 +175,17 @@ interface MailContextValue extends MailState {
   setSelectedMail: (mail: TriageMailItem | null) => void;
   prefetchMailBodies: (messageIds: string[]) => void;
 }
+
+type OutlookLaunchResult = {
+  status: string;
+  hasActiveConnection: boolean;
+  needsUserAction: boolean;
+  redirectUrl: string | null;
+  connectedAccountId: string | null;
+  mailboxUserIdHint: string | null;
+  sessionInstructions: string | null;
+  message: string | null;
+};
 
 const MailContext = createContext<MailContextValue | null>(null);
 
@@ -278,6 +290,17 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     } catch {
       return false;
     }
+  }, [apiBase]);
+
+  const launchOutlookAuth = useCallback(async (forceReinitiate = false): Promise<OutlookLaunchResult> => {
+    const data = await apiFetch<{ ok: boolean; result: OutlookLaunchResult }>(
+      `${apiBase}/mail/connections/outlook/launch-auth`,
+      {
+        method: "POST",
+        body: JSON.stringify({ forceReinitiate }),
+      }
+    );
+    return data.result;
   }, [apiBase]);
 
   // ========== 邮件操作 ==========
@@ -587,6 +610,7 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     selectSource,
     deleteSource,
     verifySource,
+    launchOutlookAuth,
     fetchInbox,
     fetchTriage,
     fetchInsights,

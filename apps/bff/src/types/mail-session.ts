@@ -10,7 +10,7 @@ export type MailSourceRoutingCheckStatus = "skipped" | "verified" | "failed" | "
 
 export type MailSourceRoutingCheckResult = {
   required: boolean;
-  status: MailRoutingCheckStatus;
+  status: MailSourceRoutingCheckStatus;
   verified: boolean;
   message: string;
 };

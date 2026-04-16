@@ -29,8 +29,8 @@ function errorCode(error: unknown): string | undefined {
     return (
       readOptionalStringField(rec, "errorCode") ??
       readOptionalStringField(rec, "code") ??
-      readOptionalStringField(asRecord(rec?.data as Record<string, unknown>), "errorCode") ??
-      readOptionalStringField(asRecord(rec?.data as Record<string, unknown>), "code")
+      readOptionalStringField(asRecord(rec?.data), "errorCode") ??
+      readOptionalStringField(asRecord(rec?.data), "code")
     );
   }
   if (error instanceof Error) {
@@ -57,7 +57,7 @@ function readOptionalStringField(
 
 export function authFriendlyMessage(error: unknown, locale: AuthLocale): string {
   const code = readOptionalStringField(
-    error instanceof HttpError ? error.payload : null,
+    error instanceof HttpError ? asRecord(error.payload) : null,
     "code"
   );
   const zh = locale === "zh";

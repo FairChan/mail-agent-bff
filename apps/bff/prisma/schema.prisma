@@ -19,6 +19,14 @@ model User {
   sessions     AppSession[]
   mailSources  MailSource[]
   priorityRules PriorityRule[]
+  agentThreads AgentThread[]
+  agentMessages AgentMessage[]
+  agentMemories AgentMemory[]
+  llmRoutes LlmRoute[]
+  llmUsages LlmUsage[]
+  mailSummaries MailSummary[]
+  mailEvents MailEvent[]
+  senderProfiles SenderProfile[]
 
   @@index([createdAt])
 }
@@ -48,6 +56,14 @@ model MailSource {
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt
   priorityRules      PriorityRule[]
+  agentThreads       AgentThread[]
+  agentMessages      AgentMessage[]
+  agentMemories      AgentMemory[]
+  llmRoutes          LlmRoute[]
+  llmUsages          LlmUsage[]
+  mailSummaries      MailSummary[]
+  mailEvents         MailEvent[]
+  senderProfiles     SenderProfile[]
 
   @@unique([userId, externalId])
   @@index([userId, createdAt])
@@ -69,4 +85,187 @@ model PriorityRule {
   updatedAt DateTime @updatedAt
 
   @@index([userId, sourceId, enabled, priority])
+}
+
+model AgentThread {
+  id        String         @id
+  userId    String
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId  String
+  source    MailSource     @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  title     String?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  messages  AgentMessage[]
+
+  @@index([userId, sourceId, updatedAt])
+}
+
+model AgentMessage {
+  id        String      @id @default(cuid())
+  threadId  String
+  thread    AgentThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId  String
+  source    MailSource  @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  role      String
+  content   String      @db.Text
+  createdAt DateTime    @default(now())
+
+  @@index([threadId, createdAt])
+  @@index([userId, sourceId, createdAt])
+}
+
+model AgentMemory {
+  id        String     @id @default(cuid())
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId  String
+  source    MailSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  key       String
+  value     String     @db.Text
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@unique([userId, sourceId, key])
+  @@index([userId, sourceId, updatedAt])
+}
+
+model LlmRoute {
+  id        String      @id @default(cuid())
+  userId    String?
+  user      User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId  String?
+  source    MailSource? @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  name      String
+  provider  String
+  baseUrl   String
+  model     String
+  enabled   Boolean     @default(true)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([userId, sourceId, enabled])
+}
+
+model LlmUsage {
+  id           String     @id @default(cuid())
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId     String
+  source       MailSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  routeId      String?
+  model        String
+  inputTokens  Int?
+  outputTokens Int?
+  status       String
+  durationMs   Int
+  createdAt    DateTime   @default(now())
+
+  @@index([userId, sourceId, createdAt])
+  @@index([routeId, createdAt])
+}
+
+model MailSummary {
+  id              String          @id
+  userId          String
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId        String
+  source          MailSource      @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  externalMsgId   String
+  subject         String
+  summaryText     String          @db.Text
+  importanceScore Float
+  urgencyScore    Float
+  horizon         String?
+  webLink         String?
+  eventId         String?
+  event           MailEvent?      @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  senderId        String?
+  sender          SenderProfile?  @relation(fields: [senderId], references: [id], onDelete: SetNull)
+  processedAt     DateTime
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  scoreRecord     MailScoreIndex?
+  subjectIndex    SubjectIndex?
+
+  @@unique([userId, externalMsgId])
+  @@index([userId, sourceId, processedAt])
+  @@index([eventId])
+  @@index([senderId])
+}
+
+model MailEvent {
+  id          String        @id
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId    String
+  source      MailSource    @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  type        String?
+  title       String
+  summaryText String        @db.Text
+  keyInfo     String        @default("{}") @db.Text
+  relatedMailCount Int      @default(0)
+  firstMailAt DateTime?
+  lastMailAt  DateTime?
+  startAt     DateTime?
+  endAt       DateTime?
+  confidence  Float?
+  evidence    String?       @db.Text
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  summaries   MailSummary[]
+
+  @@unique([userId, id])
+  @@index([userId, sourceId, lastMailAt])
+  @@index([userId, sourceId, startAt])
+  @@index([type])
+}
+
+model SenderProfile {
+  id             String        @id
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId       String
+  source         MailSource    @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  email          String
+  displayName    String?
+  importance     Float?
+  summaryText    String?       @db.Text
+  keyInfo        String        @default("{}") @db.Text
+  totalMailCount Int           @default(0)
+  lastMailAt     DateTime?
+  lastSeenAt     DateTime?
+  summary        String?       @db.Text
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  mailSummaries  MailSummary[]
+
+  @@unique([userId, email])
+  @@index([userId, sourceId, lastSeenAt])
+}
+
+model MailScoreIndex {
+  mailId          String      @id
+  mail            MailSummary @relation(fields: [mailId], references: [id], onDelete: Cascade)
+  importanceScore Float
+  urgencyScore    Float
+  quadrant        String
+  reasoning       String?     @db.Text
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([quadrant])
+}
+
+model SubjectIndex {
+  mailId    String      @id
+  mail      MailSummary @relation(fields: [mailId], references: [id], onDelete: Cascade)
+  subject   String
+  keywords  String[]    @default([])
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([subject])
 }

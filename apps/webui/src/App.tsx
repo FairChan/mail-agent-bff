@@ -12,6 +12,7 @@ import React, { useEffect, useState, useCallback, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { AuthProvider, MailProvider, ThemeProvider, AppProvider, useAuth, useMail, useApp, useTheme } from "./contexts";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { AgentChatPanel } from "./components/agent/AgentChatPanel";
 import { AuthScreen } from "./components/auth/AuthScreen";
 import { InboxView } from "./components/dashboard/InboxView";
 import { AllMailListView } from "./components/dashboard/AllMailListView";
@@ -233,6 +234,7 @@ function AuthScreenContainer() {
 
 function MainLayout() {
   const { isLoading } = useAuth();
+  const { activeSourceId } = useMail();
   const { currentView, sidebarOpen, setSidebarOpen, isMobile } = useApp();
   const { resolvedTheme } = useTheme();
 
@@ -299,6 +301,7 @@ function MainLayout() {
 
       {/* 邮件详情弹窗 */}
       <MailDetailModal />
+      <AgentChatPanel apiBase={API_BASE} activeSourceId={activeSourceId} />
     </div>
   );
 }

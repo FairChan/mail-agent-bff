@@ -3,7 +3,7 @@
  * 使用 shared-types
  */
 
-import type { KnowledgeBaseStats, MailQuadrant, MailQuadrantKB } from "@mail-agent/shared-types";
+import type { KnowledgeBaseStats, MailQuadrant } from "@mail-agent/shared-types";
 
 const quadrantMeta: Record<MailQuadrant, { label: string; color: string; bg: string }> = {
   urgent_important: { label: "紧急且重要", color: "text-red-600", bg: "bg-red-50 border-red-200" },

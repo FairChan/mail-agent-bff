@@ -267,3 +267,22 @@ triggerMailSummary()
 - Edge 无头浏览器访问首页不再出现 `Cannot read properties of undefined (reading 'brand')`。
 - 实测注册流程可进入主工作台；后续 `502` 为当前本地占位 Gateway 环境导致的后端联调问题，不属于本次首屏崩溃修复范围。
 - Audit：按用户规则，本次为小型修改，未调起子代理审计。
+
+---
+
+### 2026-04-16T20:10:00+08:00
+
+- Added embedded Mastra mail agent runtime. The main path is now WebUI -> BFF -> Mastra Agent -> platform LLM / mail tools / Composio, with OpenClaw kept as AGENT_RUNTIME=openclaw fallback.
+- Added server-side LLM gateway routing. Browser requests never send provider keys; BFF resolves the OpenAI-compatible route from server env and records LlmUsage by userId/sourceId.
+- Added TenantContext boundaries for agent, mail tools, memory, usage, and Composio sessions: userId, sourceId, sessionToken, mailboxUserId, connectedAccountId.
+- Added POST /api/agent/chat SSE streaming with message_delta, tool_start, tool_result, final, and error events, plus abort, timeout, maxSteps, and maxToolCalls controls.
+- Reworked POST /api/agent/query as a compatibility wrapper over the selected runtime; the old OpenClaw direct route is retained as /api/agent/query-openclaw-legacy.
+- Added WebUI floating agent chat panel with streaming output, cancel, client timeout, error reset, and duplicate-submit protection to avoid stuck busy states.
+- Added Prisma models and migration for AgentThread, AgentMessage, AgentMemory, LlmRoute, LlmUsage, MailSummary, MailEvent, SenderProfile, MailScoreIndex, and SubjectIndex.
+- Fixed WebUI type gaps around launchOutlookAuth, markdown rendering, calendar key normalization, AuthLocale local typing, and KB stats card imports.
+- Verification: BFF TypeScript check passed; WebUI tsc -b passed; Prisma schema validate passed.
+- Follow-up: AgentChatPanel now aborts in-flight chat and resets threadId when activeSourceId changes, preventing accidental cross-source conversation carryover.
+- Audit follow-up: OpenClaw legacy/fallback now derives auth from the session cookie only, fails closed for non-default mailbox sources, and stops persisting agent usage/memory/thread rows for legacy API-key sessions.
+- Audit follow-up: Prisma migration is no longer ignored by apps/bff/.gitignore, and the migration now includes MailSummary foreign keys for eventId and senderId so schema and SQL stay aligned.
+
+- 2026-04-16: Fixed AgentChatPanel stale-request race. Source switches and manual cancel now invalidate prior chat runs so aborted SSE requests cannot overwrite the next run's busy/error/thread state.
