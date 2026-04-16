@@ -8844,6 +8844,26 @@ server.post("/api/mail/knowledge-base/trigger", async (request, reply) => {
     orderBy: { createdAt: "desc" },
   });
   if (existing) {
+    const staleCutoff = Date.now() - 15 * 60 * 1000;
+    const lastHeartbeatAt =
+      existing.updatedAt instanceof Date
+        ? existing.updatedAt.getTime()
+        : existing.startedAt instanceof Date
+          ? existing.startedAt.getTime()
+          : existing.createdAt instanceof Date
+            ? existing.createdAt.getTime()
+            : Date.now();
+    if (lastHeartbeatAt < staleCutoff) {
+      await prisma.mailKbJob.update({
+        where: { id: existing.id },
+        data: {
+          status: "failed",
+          error: "Previous in-process KB worker stopped before completion. Job was marked stale and can be retried.",
+          finishedAt: new Date(),
+        },
+      });
+      addMailKbJobLog(existing.id, "warn", "Stale KB job was marked failed before retry");
+    } else {
     return {
       ok: true,
       jobId: existing.id,
@@ -8852,6 +8872,7 @@ server.post("/api/mail/knowledge-base/trigger", async (request, reply) => {
         status: existing.status,
       },
     };
+    }
   }
 
   const job = await prisma.mailKbJob.create({

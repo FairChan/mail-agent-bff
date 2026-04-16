@@ -5,6 +5,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY packages/shared-types/package.json packages/shared-types/package.json
 COPY apps/bff/package.json apps/bff/package.json
+COPY apps/webui/package.json apps/webui/package.json
 
 RUN npm ci --include=dev
 

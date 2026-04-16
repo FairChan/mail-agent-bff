@@ -3801,7 +3801,13 @@ cp .env.example .env
 - Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
 - Audit round 1: sub-agent execution was attempted, but the spawned audit thread did not return a readable result to this session before fallback review.
 - Local code/security audit fallback found one P1 deployment exposure risk: the BFF Compose port was initially published on all host interfaces instead of loopback-only.
+- Audit round 2: a reviewer flagged one real P1 deployment blocker and one P2 resiliency issue:
+  - Docker deps stages were missing sibling workspace manifests before `npm ci`.
+  - KB jobs could stay stuck in `queued/running` after a BFF crash because the worker lock is in-memory.
+- Audit round 3: `Confucius` (`019d9748-055a-7c61-bec1-20908b2b0f0b`) confirmed no remaining P0/P1 blockers after the fixes.
 - Final fixes after audit:
 - `deploy/docker/docker-compose.yml` now binds BFF to `127.0.0.1:${BFF_PORT:-8787}:8787`.
 - Deployment docs now state that BFF is only for local readiness checks and must not be exposed directly.
+- `deploy/docker/Dockerfile.bff` and `deploy/docker/Dockerfile.webui` now copy all declared workspace manifests needed by root `npm ci`.
+- `/api/mail/knowledge-base/trigger` now marks stale `queued/running` jobs failed after a 15-minute heartbeat timeout before recreating work.
 - Re-ran BFF/WebUI checks, builds, Prisma validate, npm audit, Docker Compose config, and WebUI Playwright smoke after the fix.
