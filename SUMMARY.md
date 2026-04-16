@@ -3714,3 +3714,48 @@ cp .env.example .env
 - Audit not run for this merge/check task per current constraint to avoid unnecessary sub-agent use for small/local actions.
 - Final fixes after audit:
 - Not applicable.
+
+### 2026-04-17T00:10:22+08:00
+
+- Scope: Implement Mastra mail-agent privacy closure across tenant source ownership, LLM routing, KB endpoints, memory, and Microsoft direct persistence.
+- Task type: `Code`
+- Main updates:
+- Added Prisma-backed source ownership hardening:
+  - `MailSource` now carries `connectionType`, Microsoft binding, and routing verification state.
+  - `User.activeMailSourceId` and encrypted `MicrosoftAccount` persistence support direct Microsoft sources.
+  - no-source state now returns `activeSourceId: null`; `default_outlook` is not executable.
+- Added `MailSourceService` and `secret-box`:
+  - source list/create/update/delete/select is DB-backed and scoped by `userId`.
+  - Microsoft account updates require owned `MicrosoftAccount { userId, accountId }`.
+  - Composio `connectedAccountId` can only be introduced by trusted server-side auto-connect, not manual public source APIs.
+- Completed server-side LLM route closure:
+  - `LlmGatewayService` resolves DB routes by source/user/default precedence without accepting global source-only routes.
+  - provider keys are read only from server env or encrypted DB ciphertext.
+  - summary enrichment was renamed from OpenClaw wording and moved to the server LLM gateway.
+- Hardened Mastra and agent endpoints:
+  - `/api/agent/chat` and `/api/agent/query` require tenant/source routing readiness.
+  - chat source/routing failures now emit SSE `error` events and close the stream.
+  - `syncCalendar` supports both Composio and direct Microsoft source branches.
+- Added scoped memory and DB-backed KB endpoints:
+  - `/api/agent/memory/recent` and `POST /api/agent/memory` store/read by `userId + sourceId`.
+  - `/api/mail-kb/stats`, `/mails`, `/events`, `/persons`, `/export`, and `/api/mail/knowledge-base/trigger` are active in `server.ts`.
+  - KB reads/exports require routing-ready source and export public DTOs instead of raw Prisma rows.
+- Updated WebUI/shared source contracts for nullable active source and new source fields.
+- Verification completed:
+- `rtk npm --workspace apps/bff run check` passed.
+- `rtk npm --workspace apps/webui run check` passed.
+- `rtk npm --workspace apps/bff run build` passed.
+- `rtk npm --workspace apps/webui run build` passed.
+- `node ../../node_modules/prisma/build/index.js validate --schema prisma/schema.prisma` passed from `apps/bff`.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit round 1: `Parfit` (`019d9700-30e7-7d12-a69d-a82458ef357d`) reported P1/P2 risks around Microsoft ownership update, KB export DTOs, KB routing guard, LLM route source-only precedence, Microsoft source external-id collision, and chat SSE error contract.
+- Audit round 2: `Peirce` (`019d970a-7c32-7f32-882c-6dc4bb5c2f06`) reported one remaining P1: Composio `connectedAccountId` lacked ownership/provenance validation.
+- Audit round 3: `Planck` (`019d970d-41fb-7ed3-9559-d7ad08bf6015`) confirmed no P0/P1 blockers after the Composio trusted-write fix.
+- Remaining deferred items (`Medium/Low`) with rationale:
+- Non-blocking: pre-existing DB Composio sources do not yet have a separate persisted provenance table. New manual foreign bindings are blocked; a future hardening pass should add `ComposioAccount` provenance or a one-time audit/migration for existing rows.
+- Final fixes after audit:
+- Added Microsoft account ownership checks in source updates and retried unique external IDs for Microsoft source upsert.
+- Sanitized KB export through public DTOs and required routing-ready source for all KB endpoints.
+- Removed global source-only LLM route precedence and kept provider keys server-side.
+- Converted chat source/routing failures to SSE error events.
+- Blocked public/manual Composio connected-account binding unless the ID came from trusted server-side auto-connect.

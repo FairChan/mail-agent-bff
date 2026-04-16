@@ -43,8 +43,8 @@ interface MailState {
 }
 
 type MailAction =
-  | { type: "SET_SOURCES"; payload: { sources: MailSourceProfile[]; activeSourceId: string } }
-  | { type: "SET_ACTIVE_SOURCE"; payload: string }
+  | { type: "SET_SOURCES"; payload: { sources: MailSourceProfile[]; activeSourceId: string | null } }
+  | { type: "SET_ACTIVE_SOURCE"; payload: string | null }
   | { type: "SET_LOADING_SOURCES"; payload: boolean }
   | { type: "SET_INBOX"; payload: MailInboxViewerResponse }
   | { type: "SET_TRIAGE"; payload: MailTriageResult }
@@ -236,7 +236,7 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
   const fetchSources = useCallback(async () => {
     dispatch({ type: "SET_LOADING_SOURCES", payload: true });
     try {
-      const data = await apiFetch<{ ok: boolean; result: { sources: MailSourceProfile[]; activeSourceId: string } }>(
+      const data = await apiFetch<{ ok: boolean; result: { sources: MailSourceProfile[]; activeSourceId: string | null } }>(
         `${apiBase}/mail/sources`
       );
       if (data.ok) {
@@ -257,6 +257,7 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
         method: "POST",
         body: JSON.stringify({
           label,
+          connectionType: "composio",
           mailboxUserId,
           connectedAccountId,
           provider: "outlook",

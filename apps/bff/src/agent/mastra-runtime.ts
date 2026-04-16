@@ -116,7 +116,7 @@ export class MastraRuntime implements AgentRuntime {
 
   async *stream(input: AgentRuntimeInput): AsyncGenerator<AgentChatEvent> {
     const tenant = input.tenant;
-    const route = this.llmGateway.resolveRoute(tenant);
+    const route = await this.llmGateway.resolveRoute(tenant);
     const threadId = scopedThreadId(tenant, input.threadId);
     const resourceId = scopedResourceId(tenant);
     const startedAt = Date.now();
@@ -242,9 +242,13 @@ export class MastraRuntime implements AgentRuntime {
   }
 
   async listSkills(tenant: TenantContext): Promise<AgentSkillMetadata[]> {
+    const hasCalendarConnection =
+      tenant.connectionType === "microsoft"
+        ? Boolean(tenant.microsoftAccountId)
+        : Boolean(tenant.connectedAccountId);
     return MAIL_ASSISTANT_SKILLS.map((skill) => ({
       ...skill,
-      enabled: skill.id === "syncCalendar" ? Boolean(tenant.connectedAccountId) : skill.enabled,
+      enabled: skill.id === "syncCalendar" ? hasCalendarConnection : skill.enabled,
     }));
   }
 

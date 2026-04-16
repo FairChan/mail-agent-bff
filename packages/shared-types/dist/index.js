@@ -62,7 +62,6 @@ export const viewItems = [
     { key: "calendar" },
     { key: "knowledgebase" },
     { key: "settings" },
-    { key: "aichat" },
 ];
 export const viewLabelsByLocale = {
     zh: {
@@ -72,7 +71,6 @@ export const viewLabelsByLocale = {
         calendar: { label: "日历", short: "日历" },
         knowledgebase: { label: "知识库", short: "知识库" },
         settings: { label: "设置", short: "设置" },
-        aichat: { label: "AI 助手", short: "AI" },
     },
     en: {
         inbox: { label: "Inbox", short: "Home" },
@@ -81,7 +79,6 @@ export const viewLabelsByLocale = {
         calendar: { label: "Calendar", short: "Cal" },
         knowledgebase: { label: "Knowledge Base", short: "KB" },
         settings: { label: "Settings", short: "Settings" },
-        aichat: { label: "AI Assistant", short: "AI" },
     },
     ja: {
         inbox: { label: "受信箱", short: "ホーム" },
@@ -90,7 +87,6 @@ export const viewLabelsByLocale = {
         calendar: { label: "カレンダー", short: "予定" },
         knowledgebase: { label: "ナレッジベース", short: "知識" },
         settings: { label: "設定", short: "設定" },
-        aichat: { label: "AIアシスタント", short: "AI" },
     },
 };
 // ========== 工具函数 ==========

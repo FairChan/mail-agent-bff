@@ -14,10 +14,12 @@ model User {
   passwordSalt String
   passwordHash String
   locale       String       @default("zh-CN")
+  activeMailSourceId String?
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
   sessions     AppSession[]
   mailSources  MailSource[]
+  microsoftAccounts MicrosoftAccount[]
   priorityRules PriorityRule[]
   agentThreads AgentThread[]
   agentMessages AgentMessage[]
@@ -49,9 +51,13 @@ model MailSource {
   user               User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   label              String
   provider           String
+  connectionType     String         @default("composio")
   emailHint          String
   mailboxUserId      String?
   connectedAccountId String?
+  microsoftAccountId String?
+  routingVerifiedAt  DateTime?
+  routingStatusJson  String?        @db.Text
   enabled            Boolean        @default(true)
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt
@@ -62,6 +68,28 @@ model MailSource {
 
   @@unique([userId, externalId])
   @@index([userId, createdAt])
+  @@index([userId, enabled])
+  @@index([userId, microsoftAccountId])
+}
+
+model MicrosoftAccount {
+  id                     String   @id @default(cuid())
+  userId                 String
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accountId              String
+  email                  String
+  displayName            String
+  mailboxUserIdHint      String?
+  tenantId               String?
+  scope                  String[] @default([])
+  accessTokenCiphertext  String   @db.Text
+  refreshTokenCiphertext String?  @db.Text
+  expiresAt              DateTime
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@unique([userId, accountId])
+  @@index([userId, email])
 }
 
 model PriorityRule {
@@ -117,6 +145,8 @@ model AgentMemory {
   sourceId  String
   key       String
   value     String     @db.Text
+  kind      String     @default("fact")
+  tags      String[]   @default([])
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
 
@@ -133,6 +163,7 @@ model LlmRoute {
   provider  String
   baseUrl   String
   model     String
+  apiKeyCiphertext String? @db.Text
   enabled   Boolean     @default(true)
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
@@ -180,7 +211,7 @@ model MailSummary {
   scoreRecord     MailScoreIndex?
   subjectIndex    SubjectIndex?
 
-  @@unique([userId, externalMsgId])
+  @@unique([userId, sourceId, externalMsgId])
   @@index([userId, sourceId, processedAt])
   @@index([eventId])
   @@index([senderId])
@@ -232,7 +263,7 @@ model SenderProfile {
   updatedAt      DateTime      @updatedAt
   mailSummaries  MailSummary[]
 
-  @@unique([userId, email])
+  @@unique([userId, sourceId, email])
   @@index([userId, sourceId, lastSeenAt])
 }
 

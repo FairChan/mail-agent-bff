@@ -188,7 +188,11 @@ export async function createMailAssistantTools(
         timeZone: z.string().trim().max(80).optional(),
       }),
       execute: async (input: any) => {
-        if (!tenant.connectedAccountId) {
+        const hasCalendarConnection =
+          tenant.connectionType === "microsoft"
+            ? Boolean(tenant.microsoftAccountId)
+            : Boolean(tenant.connectedAccountId);
+        if (!hasCalendarConnection) {
           return {
             ok: false,
             error: "OUTLOOK_NOT_CONNECTED",
@@ -248,11 +252,14 @@ export async function createMailAssistantTools(
             sourceId: tenant.sourceId,
             key,
             value: sanitizePreferenceValue(value),
+            kind: "preference",
+            tags: [],
             createdAt: now,
             updatedAt: now,
           },
           update: {
             value: sanitizePreferenceValue(value),
+            kind: "preference",
             updatedAt: now,
           },
         });

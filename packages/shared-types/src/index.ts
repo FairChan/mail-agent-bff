@@ -150,6 +150,8 @@ export type MailSourceProfile = {
   id: string;
   name: string;
   provider: MailSourceProvider;
+  connectionType?: "composio" | "microsoft";
+  microsoftAccountId?: string;
   emailHint: string;
   mailboxUserId?: string;
   connectedAccountId?: string;
@@ -355,17 +357,17 @@ export type ApiResponse<T> = {
 
 export type MailSourceMutationEnvelope = ApiResponse<{
   source: MailSourceProfile;
-  activeSourceId: string;
+  activeSourceId: string | null;
 }>;
 
 export type MailSourceSelectEnvelope = ApiResponse<{
-  activeSourceId: string;
+  activeSourceId: string | null;
 }>;
 
 export type MailSourceDeleteEnvelope = ApiResponse<{
   id: string;
   deleted: boolean;
-  activeSourceId: string;
+  activeSourceId: string | null;
 }>;
 
 export type MailSourceVerifyEnvelope = ApiResponse<{
@@ -376,7 +378,7 @@ export type MailSourceVerifyEnvelope = ApiResponse<{
 
 export type MailSourcesEnvelope = ApiResponse<{
   sources: MailSourceProfile[];
-  activeSourceId: string;
+  activeSourceId: string | null;
 }>;
 
 export type MailTriageEnvelope = ApiResponse<{
@@ -418,7 +420,7 @@ export type OutlookLaunchEnvelope = ApiResponse<{
 export type AutoConnectEnvelope = ApiResponse<{
   phase: string;
   message: string;
-  activeSourceId: string;
+  activeSourceId: string | null;
 }>;
 
 export type NotificationPreferences = {
