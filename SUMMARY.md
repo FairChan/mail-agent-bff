@@ -286,3 +286,9 @@ triggerMailSummary()
 - Audit follow-up: Prisma migration is no longer ignored by apps/bff/.gitignore, and the migration now includes MailSummary foreign keys for eventId and senderId so schema and SQL stay aligned.
 
 - 2026-04-16: Fixed AgentChatPanel stale-request race. Source switches and manual cancel now invalidate prior chat runs so aborted SSE requests cannot overwrite the next run's busy/error/thread state.
+
+### 2026-04-16T21:20:00+08:00
+
+- Added scripts/ensure-local-postgres.ps1 and root npm db:* commands so local development can bootstrap a portable PostgreSQL instance from apps/bff/.env without depending on Docker Desktop or a system PostgreSQL service.
+- Verified the portable PostgreSQL instance on 127.0.0.1:5432, created the true_sight database, applied Prisma migrations with prisma migrate deploy, and confirmed prisma migrate status now reports the schema is up to date.
+- Removed the OpenClaw fallback restriction that only allowed default_outlook. Legacy fallback calls remain tenant-scoped by userId/sourceId and sessionToken/sourceId so non-default mailbox sources can use the same privacy boundary.

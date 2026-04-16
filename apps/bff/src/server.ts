@@ -7665,15 +7665,6 @@ server.post("/api/agent/query-openclaw-legacy", async (request, reply) => {
     };
   }
 
-  if (tenant.sourceId !== defaultMailSourceId) {
-    reply.status(409);
-    return {
-      ok: false,
-      error: "OpenClaw legacy fallback only supports the default Outlook source. Switch to Mastra for source-scoped agent access.",
-      sourceId: tenant.sourceId,
-    };
-  }
-
   try {
     const result = await queryAgent({
       message: parsed.data.message,

@@ -27,17 +27,10 @@ function extractAnswer(raw: unknown): string {
   return JSON.stringify(raw);
 }
 
-const OPENCLAW_FALLBACK_SOURCE_ID = "default_outlook";
 const OPENCLAW_SCOPE_SEPARATOR = "|";
 
 export class OpenClawRuntime implements AgentRuntime {
   async query(input: AgentRuntimeInput): Promise<AgentQueryResult> {
-    if (input.tenant.sourceId !== OPENCLAW_FALLBACK_SOURCE_ID) {
-      throw new Error(
-        "OpenClaw fallback only supports the default Outlook source. Switch to Mastra for source-scoped agent access."
-      );
-    }
-
     const raw = await queryAgent({
       message: input.message,
       user: `${input.tenant.userId}:${input.tenant.sourceId}`,
