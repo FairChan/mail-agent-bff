@@ -1,7 +1,7 @@
 /**
  * 设置视图
  * 使用 MailContext 和 AuthContext 管理设置
- * 包含 Composio Outlook 授权功能
+ * 包含 Microsoft Outlook 直连授权功能
  */
 
 import React, { useState, useCallback, useEffect } from "react";
@@ -40,9 +40,9 @@ export function SettingsView() {
     fetchSources();
   }, [fetchSources]);
 
-  // ========== Composio Outlook 授权 ==========
+  // ========== Microsoft Outlook 直连授权 ==========
 
-  const handleComposioAuth = useCallback(async () => {
+  const handleMicrosoftAuth = useCallback(async () => {
     setIsAuthenticating(true);
     setAuthError(null);
     setAuthInfo(null);
@@ -53,30 +53,17 @@ export function SettingsView() {
       if (result.mailboxUserIdHint) {
         setNewMailboxUserId(result.mailboxUserIdHint);
       }
-      if (result.connectedAccountId) {
-        setNewConnectedAccountId(result.connectedAccountId);
+      if (result.account?.email) {
+        setNewSourceLabel(`Outlook ${result.account.email}`);
       }
-
-      if (result.hasActiveConnection) {
-        setAuthInfo("Outlook 已通过 Composio 连接，已帮你预填授权信息。");
-        await fetchSources();
-        return;
-      }
-
-      if (result.redirectUrl) {
-        // 打开 Outlook 授权桥接页面，该页面会引导用户完成 Composio 授权
-        const bridgeUrl = `/outlook-auth-bridge.html?redirectUrl=${encodeURIComponent(result.redirectUrl)}&t=${Date.now()}`;
-        window.open(bridgeUrl, "_blank", "noopener,noreferrer");
-        setAuthInfo("授权页面已打开，请在 Composio 授权完成后返回。");
-      } else {
-        setAuthError("未能获取授权跳转地址，请稍后重试。");
-      }
+      setAuthInfo(result.message || "Microsoft Outlook 已连接，邮箱数据源已返回。");
+      await fetchSources();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "授权失败";
       if (msg.includes("401") || msg.includes("Unauthorized")) {
         setAuthError("会话已过期，请重新登录后重试。");
-      } else if (msg.includes("503") || msg.includes("Composio")) {
-        setAuthError("Composio 服务未正确配置，请在 OpenClaw 中检查 Composio consumer key 设置。");
+      } else if (msg.includes("MICROSOFT_OAUTH_NOT_CONFIGURED") || msg.includes("MICROSOFT_CLIENT_ID")) {
+        setAuthError("Microsoft OAuth 尚未配置，请先在 BFF 环境变量中填写客户端信息。");
       } else {
         setAuthError(`授权失败: ${msg}`);
       }
@@ -189,7 +176,7 @@ export function SettingsView() {
         </button>
       </section>
 
-      {/* Composio Outlook 授权（核心新功能） */}
+      {/* Microsoft Outlook 直连授权 */}
       <section className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 dark:border-indigo-800 dark:bg-indigo-900/10">
         <div className="flex items-start gap-3">
           <div className="mt-0.5 shrink-0">
@@ -199,14 +186,14 @@ export function SettingsView() {
           </div>
           <div className="min-w-0 flex-1">
             <h3 className="text-sm font-semibold text-indigo-900 dark:text-indigo-200">
-              通过 Composio 连接 Outlook
+              直接登录 Microsoft Outlook
             </h3>
             <p className="mt-1 text-xs text-indigo-700 dark:text-indigo-400">
-              使用 Composio 进行 OAuth 授权，安全连接你的 Outlook 邮箱。授权后即可使用邮件分类、洞察等功能。
+              点击后会跳转到微软官方登录页，完成授权后自动返回并创建邮箱数据源，不再依赖 Composio 中转。
             </p>
 
             <button
-              onClick={handleComposioAuth}
+              onClick={handleMicrosoftAuth}
               disabled={isAuthenticating}
               className="mt-3 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
@@ -220,7 +207,7 @@ export function SettingsView() {
                   <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                   </svg>
-                  授权 Outlook 邮箱
+                  登录 Microsoft Outlook
                 </>
               )}
             </button>
@@ -321,7 +308,10 @@ export function SettingsView() {
 
       {/* 添加数据源 */}
       <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-800">
-        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">手动添加数据源</h3>
+        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">高级：手动添加数据源</h3>
+        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+          这个入口保留给需要手动维护 Composio 路由参数的场景。常规使用优先上方的 Microsoft 直连按钮。
+        </p>
 
         <div className="mt-3 grid gap-2">
           <input

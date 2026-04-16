@@ -1,5 +1,13 @@
 import { z } from "zod";
 import { GatewayHttpError, invokeTool } from "./gateway.js";
+import {
+  createMicrosoftEvent,
+  deleteMicrosoftEventById,
+  getMicrosoftEventById,
+  getMicrosoftMessageById as getMicrosoftGraphMessageById,
+  listMicrosoftInboxMessages,
+  MicrosoftGraphHttpError,
+} from "./microsoft-graph.js";
 
 const rawToolContentItemSchema = z.object({
   type: z.string(),
@@ -90,6 +98,9 @@ type OutlookCreatedEvent = z.infer<typeof outlookCreatedEventSchema>;
 
 export type MailSourceContext = {
   sourceId: string;
+  sessionToken?: string;
+  connectionType?: "composio" | "microsoft";
+  microsoftAccountId?: string;
   mailboxUserId?: string;
   connectedAccountId?: string;
 };
@@ -968,14 +979,37 @@ export function normalizeSourceContext(sourceContext?: MailSourceContext): MailS
     return null;
   }
 
+  const sessionToken = sourceContext.sessionToken?.trim();
+  const connectionType = sourceContext.connectionType;
+  const microsoftAccountId = sourceContext.microsoftAccountId?.trim();
   const mailboxUserId = sourceContext.mailboxUserId?.trim();
   const connectedAccountId = sourceContext.connectedAccountId?.trim();
 
   return {
     sourceId,
+    ...(sessionToken ? { sessionToken } : {}),
+    ...(connectionType ? { connectionType } : {}),
+    ...(microsoftAccountId ? { microsoftAccountId } : {}),
     ...(mailboxUserId ? { mailboxUserId } : {}),
     ...(connectedAccountId ? { connectedAccountId } : {}),
   };
+}
+
+function isDirectMicrosoftSourceContext(
+  sourceContext: MailSourceContext | null
+): sourceContext is MailSourceContext & {
+  sessionToken: string;
+  connectionType: "microsoft";
+  microsoftAccountId: string;
+} {
+  return Boolean(
+    sourceContext &&
+      sourceContext.connectionType === "microsoft" &&
+      typeof sourceContext.sessionToken === "string" &&
+      sourceContext.sessionToken.trim().length > 0 &&
+      typeof sourceContext.microsoftAccountId === "string" &&
+      sourceContext.microsoftAccountId.trim().length > 0
+  );
 }
 
 function withSourceAwareToolArguments(
@@ -1854,6 +1888,16 @@ export async function queryInboxMessagesForSource(
   sourceContext?: MailSourceContext
 ): Promise<OutlookMessage[]> {
   const requestedTop = Math.max(5, Math.min(limit, 100));
+  const normalizedContext = normalizeSourceContext(sourceContext);
+
+  if (isDirectMicrosoftSourceContext(normalizedContext)) {
+    const messages = await listMicrosoftInboxMessages(
+      normalizedContext.sessionToken,
+      normalizedContext.microsoftAccountId,
+      requestedTop
+    );
+    return messages.map((message) => outlookMessageSchema.parse(message));
+  }
 
   const executeQuery = async (top: number, skip: number): Promise<OutlookMessage[]> => {
     const raw = await invokeTool({
@@ -1881,7 +1925,7 @@ export async function queryInboxMessagesForSource(
             },
           },
         ],
-        sourceContext
+        normalizedContext ?? sourceContext
       ),
     });
 
@@ -2472,6 +2516,49 @@ export async function createCalendarEventFromInsight(
 
   const startDateTime = formatIsoLocalDateTimeInTimeZone(eventStart, resolvedTimeZone);
   const endDateTime = formatIsoLocalDateTimeInTimeZone(eventEnd, resolvedTimeZone);
+  const normalizedContext = normalizeSourceContext(sourceContext);
+
+  if (isDirectMicrosoftSourceContext(normalizedContext)) {
+    const createdEvent = await createMicrosoftEvent(
+      normalizedContext.sessionToken,
+      normalizedContext.microsoftAccountId,
+      {
+        subject: eventSubject,
+        start: {
+          dateTime: startDateTime,
+          timeZone: resolvedTimeZone,
+        },
+        end: {
+          dateTime: endDateTime,
+          timeZone: resolvedTimeZone,
+        },
+        body: {
+          contentType: "Text",
+          content: eventBody,
+        },
+        allowNewTimeProposals: false,
+      }
+    );
+
+    const eventId = createdEvent.id?.trim();
+    if (!eventId) {
+      throw new Error("Created calendar event missing id");
+    }
+
+    return {
+      eventId,
+      eventSubject: createdEvent.subject?.trim() || eventSubject,
+      eventWebLink: createdEvent.webLink?.trim() ?? "",
+      start: {
+        dateTime: createdEvent.start?.dateTime?.trim() || startDateTime,
+        timeZone: createdEvent.start?.timeZone?.trim() || resolvedTimeZone,
+      },
+      end: {
+        dateTime: createdEvent.end?.dateTime?.trim() || endDateTime,
+        timeZone: createdEvent.end?.timeZone?.trim() || resolvedTimeZone,
+      },
+    };
+  }
 
   const raw = await invokeTool({
     tool: "COMPOSIO_MULTI_EXECUTE_TOOL",
@@ -2530,6 +2617,31 @@ export async function deleteCalendarEventById(
   const normalizedEventId = eventId.trim();
   if (normalizedEventId.length < 8) {
     throw new Error("Invalid eventId");
+  }
+  const normalizedContext = normalizeSourceContext(sourceContext);
+
+  if (isDirectMicrosoftSourceContext(normalizedContext)) {
+    try {
+      await deleteMicrosoftEventById(
+        normalizedContext.sessionToken,
+        normalizedContext.microsoftAccountId,
+        normalizedEventId
+      );
+      return {
+        eventId: normalizedEventId,
+        deleted: true,
+        alreadyDeleted: false,
+      };
+    } catch (error) {
+      if (error instanceof MicrosoftGraphHttpError && error.status === 404) {
+        return {
+          eventId: normalizedEventId,
+          deleted: false,
+          alreadyDeleted: true,
+        };
+      }
+      throw error;
+    }
   }
 
   const raw = await invokeTool({
@@ -2607,6 +2719,23 @@ export async function isCalendarEventExisting(
   if (normalizedEventId.length < 8) {
     return false;
   }
+  const normalizedContext = normalizeSourceContext(sourceContext);
+
+  if (isDirectMicrosoftSourceContext(normalizedContext)) {
+    try {
+      await getMicrosoftEventById(
+        normalizedContext.sessionToken,
+        normalizedContext.microsoftAccountId,
+        normalizedEventId
+      );
+      return true;
+    } catch (error) {
+      if (error instanceof MicrosoftGraphHttpError && error.status === 404) {
+        return false;
+      }
+      throw error;
+    }
+  }
 
   const raw = await invokeTool({
     tool: "COMPOSIO_MULTI_EXECUTE_TOOL",
@@ -2659,6 +2788,32 @@ export async function getMailMessageById(
   messageId: string,
   sourceContext?: MailSourceContext
 ): Promise<MailDetailResponse> {
+  const normalizedContext = normalizeSourceContext(sourceContext);
+
+  if (isDirectMicrosoftSourceContext(normalizedContext)) {
+    const detail = await getMicrosoftGraphMessageById(
+      normalizedContext.sessionToken,
+      normalizedContext.microsoftAccountId,
+      messageId
+    );
+    const bodyContent = detail.body?.content ?? "";
+
+    return {
+      id: detail.id ?? messageId,
+      subject: detail.subject ?? "(No Subject)",
+      fromName: detail.from?.emailAddress?.name ?? detail.from?.emailAddress?.address ?? "Unknown Sender",
+      fromAddress: detail.from?.emailAddress?.address ?? "",
+      receivedDateTime: detail.receivedDateTime ?? "",
+      importance: (detail.importance ?? "normal").toLowerCase(),
+      isRead: Boolean(detail.isRead),
+      hasAttachments: Boolean(detail.hasAttachments),
+      webLink: detail.webLink ?? "",
+      bodyContentType: detail.body?.contentType ?? "text",
+      bodyContent,
+      bodyPreview: detail.bodyPreview ?? stripHtmlTags(bodyContent).slice(0, 320),
+    };
+  }
+
   const raw = await invokeTool({
     tool: "COMPOSIO_MULTI_EXECUTE_TOOL",
     args: composioMultiExecuteArgs(
@@ -2682,7 +2837,7 @@ export async function getMailMessageById(
           },
         },
       ],
-      sourceContext
+      normalizedContext ?? sourceContext
     ),
   });
 

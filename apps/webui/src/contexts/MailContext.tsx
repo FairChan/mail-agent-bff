@@ -142,13 +142,18 @@ interface MailContextValue extends MailState {
   verifySource: (sourceId: string) => Promise<boolean>;
   launchOutlookAuth: (forceReinitiate?: boolean) => Promise<{
     status: string;
-    hasActiveConnection: boolean;
-    needsUserAction: boolean;
-    redirectUrl: string | null;
-    connectedAccountId: string | null;
+    ready: boolean;
+    sourceId: string | null;
+    activeSourceId: string | null;
     mailboxUserIdHint: string | null;
-    sessionInstructions: string | null;
     message: string | null;
+    account: {
+      accountId: string;
+      displayName: string;
+      email: string;
+      mailboxUserIdHint: string;
+    } | null;
+    source: MailSourceProfile | null;
   }>;
 
   // 邮件操作
@@ -295,30 +300,134 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     }
   }, [apiBase]);
 
-  const launchOutlookAuth = useCallback(async (forceReinitiate = false) => {
-    const data = await apiFetch<{
-      ok: boolean;
-      error?: string;
-      result?: {
-        status: string;
-        hasActiveConnection: boolean;
-        needsUserAction: boolean;
-        redirectUrl: string | null;
-        connectedAccountId: string | null;
-        mailboxUserIdHint: string | null;
-        sessionInstructions: string | null;
-        message: string | null;
-      };
-    }>(`${apiBase}/mail/connections/outlook/launch-auth`, {
-      method: "POST",
-      body: JSON.stringify({ forceReinitiate }),
-    });
-
-    if (!data.ok || !data.result) {
-      throw new Error(data.error || "Failed to launch Outlook auth");
+  const launchOutlookAuth = useCallback(async (_forceReinitiate = false) => {
+    if (typeof window === "undefined") {
+      throw new Error("Microsoft Outlook 登录只能在浏览器环境中发起");
     }
 
-    return data.result;
+    return await new Promise<{
+      status: string;
+      ready: boolean;
+      sourceId: string | null;
+      activeSourceId: string | null;
+      mailboxUserIdHint: string | null;
+      message: string | null;
+      account: {
+        accountId: string;
+        displayName: string;
+        email: string;
+        mailboxUserIdHint: string;
+      } | null;
+      source: MailSourceProfile | null;
+    }>((resolve, reject) => {
+      const attemptId =
+        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `attempt-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const popup = window.open(
+        `${apiBase}/mail/connections/outlook/direct/start?appOrigin=${encodeURIComponent(window.location.origin)}&attemptId=${encodeURIComponent(attemptId)}`,
+        "true-sight-outlook-direct-auth",
+        "popup=yes,width=540,height=720,resizable=yes,scrollbars=yes"
+      );
+
+      if (!popup) {
+        reject(new Error("浏览器拦截了 Microsoft 登录窗口，请允许弹窗后重试。"));
+        return;
+      }
+
+      let settled = false;
+      const timeout = window.setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        try {
+          popup.close();
+        } catch {
+          // Ignore close failures.
+        }
+        reject(new Error("Microsoft 登录超时，请重试。"));
+      }, 180000);
+
+      const poll = window.setInterval(() => {
+        if (!settled && popup.closed) {
+          settled = true;
+          cleanup();
+          reject(new Error("Microsoft 登录窗口已关闭，授权未完成。"));
+        }
+      }, 500);
+
+      const cleanup = () => {
+        window.clearTimeout(timeout);
+        window.clearInterval(poll);
+        window.removeEventListener("message", onMessage);
+      };
+
+      const onMessage = (event: MessageEvent) => {
+        if (event.source !== popup) {
+          return;
+        }
+
+        const payload = event.data as
+          | {
+              type?: string;
+              attemptId?: string;
+              ok?: boolean;
+              status?: string;
+              ready?: boolean;
+              sourceId?: string | null;
+              activeSourceId?: string | null;
+              mailboxUserIdHint?: string | null;
+              message?: string | null;
+              account?: {
+                accountId: string;
+                displayName: string;
+                email: string;
+                mailboxUserIdHint: string;
+              } | null;
+              source?: MailSourceProfile | null;
+              error?: string;
+              detail?: string;
+            }
+          | null;
+
+        if (!payload || payload.type !== "outlook-direct-auth") {
+          return;
+        }
+
+        if (payload.attemptId !== attemptId) {
+          return;
+        }
+
+        settled = true;
+        cleanup();
+        try {
+          popup.close();
+        } catch {
+          // Ignore close failures.
+        }
+
+        if (!payload.ok) {
+          reject(new Error(payload.detail || payload.message || payload.error || "Microsoft 登录失败"));
+          return;
+        }
+
+        resolve({
+          status: payload.status || "connected",
+          ready: Boolean(payload.ready),
+          sourceId: payload.sourceId ?? null,
+          activeSourceId: payload.activeSourceId ?? null,
+          mailboxUserIdHint: payload.mailboxUserIdHint ?? payload.account?.mailboxUserIdHint ?? null,
+          message: payload.message ?? null,
+          account: payload.account ?? null,
+          source: payload.source ?? null,
+        });
+      };
+
+      window.addEventListener("message", onMessage);
+      popup.focus();
+    });
   }, [apiBase]);
 
   // ========== 邮件操作 ==========

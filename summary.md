@@ -3577,3 +3577,115 @@ cp .env.example .env
 - corrected the WebUI register contract to match BFF
 - hardened mail-detail rendering against stored HTML/script injection
 - reran typecheck/build/smoke validation and reconfirmed the local site is reachable
+
+### 2026-04-16T20:55:06+08:00
+
+- Scope: Evaluate and implement direct Microsoft Outlook API access without Composio in the active Harness-style runtime, then expose a one-click Microsoft login button in the WebUI.
+- Task type: `Code`
+- Main updates:
+- Added first-party Microsoft Graph support in `apps/bff/src/microsoft-graph.ts`:
+  - authorization-code flow with PKCE/state tracking
+  - token exchange/refresh
+  - Graph mailbox/profile/event helpers
+  - controlled non-JSON upstream error handling
+- Extended BFF config in `apps/bff/src/config.ts` for `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT_ID`, `MICROSOFT_REDIRECT_URI`, and `MICROSOFT_SCOPES`.
+- Updated `apps/bff/src/server.ts` to support direct Microsoft mode:
+  - new `GET /api/mail/connections/outlook/direct/start`
+  - new `GET /api/mail/connections/outlook/direct/callback`
+  - per-session direct Microsoft source auto-creation and activation
+  - direct-provider readiness reporting in `/health` and `/ready`
+  - Microsoft mailbox verification path in `verifySourceRoutingForSession()`
+- Updated `apps/bff/src/mail.ts` so Outlook source handling now branches by connection type:
+  - direct Microsoft sources use Graph for inbox list/detail
+  - calendar create/get/delete also work through Graph for direct Microsoft sources
+  - legacy Composio sources remain intact
+- Updated WebUI settings/auth flow:
+  - `apps/webui/src/contexts/MailContext.tsx` now launches a popup-based Microsoft login flow against the new BFF direct-auth route
+  - added a per-popup `attemptId` nonce and require it before resolving the popup handshake
+  - `apps/webui/src/components/dashboard/SettingsView.tsx` now presents direct Microsoft login as the primary Outlook connection path and keeps manual Composio source entry as an advanced fallback
+- Added local `.env` placeholders for Microsoft direct auth in `apps/bff/.env`.
+- Validation completed:
+- `npm --workspace apps/bff run check` passed.
+- `npm --workspace apps/bff run build` passed.
+- `npm --workspace apps/webui run check` passed.
+- `npm --workspace apps/webui run build` passed.
+- `npm run harness:semantic -- apps/bff/src/config.ts apps/bff/src/microsoft-graph.ts apps/bff/src/mail.ts apps/bff/src/server.ts apps/webui/src/contexts/MailContext.tsx apps/webui/src/components/dashboard/SettingsView.tsx` passed.
+- `npm run harness:smoke` passed twice after the direct-auth changes (`10/10`).
+- Local runtime verification passed:
+  - WebUI remains available at `http://127.0.0.1:5173`
+  - BFF remains available at `http://127.0.0.1:8787`
+  - signed-in access to `/api/mail/connections/outlook/direct/start?...&attemptId=...` returns the new popup page
+  - current `/health` shows `runtime.mode=direct`, `siliconFlow.ok=true`, `composio.ok=false`, `microsoft.ok=false`
+- Current live limitation:
+- Direct Microsoft login is implemented but not yet live because the local environment still lacks Azure app-registration credentials (`MICROSOFT_CLIENT_ID` and, if needed, `MICROSOFT_CLIENT_SECRET`). The button now routes into the new BFF direct-auth flow and returns a clear configuration message instead of falling back to Composio.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit evidence location: `.harness/audit/2026-04-16-outlook-direct-auth-audit.md`.
+- Independent reviewer:
+  - `Parfit` (`019d95dc-b9de-7ca1-a096-ade5d3914aed`) completed two audit rounds.
+- Final audit status after fixes and rerun validation:
+  - `Critical=0`
+  - `High=0`
+  - `Medium=1`
+  - `Low=1`
+- Remaining deferred items (`Medium/Low`) with rationale:
+- `Medium`: knowledge-base routes still are not registered in the active monolithic `apps/bff/src/server.ts`, so KB WebUI calls may still 404. Owner: `Codex`. Target: `2026-04-17`. Rationale: unrelated to the Outlook direct-auth request and intentionally kept out of this blast radius.
+- `Low`: local `apps/bff/.env` still contains a plain-text SiliconFlow key and should be rotated. Owner: `fairchan`. Target: `2026-04-16`. Rationale: local-only secret hygiene issue, not a blocker for this path.
+- Final fixes after audit:
+- wrapped Microsoft upstream JSON parsing in controlled error handling
+- added a per-popup `attemptId` nonce to the direct Outlook popup flow
+- reran typecheck/build/semantic/smoke validation and reconfirmed the local site is reachable
+
+### 2026-04-16T21:01:09+08:00
+
+- Scope: Explain why `/health` reports `microsoft.ok=false` and what Azure/Microsoft Entra app-registration setup is required to enable direct Outlook login.
+- Task type: `Non-code`
+- Main updates:
+- Clarified that this is a missing Microsoft OAuth application credential/configuration issue, not a code/runtime failure.
+- Prepared a user-facing setup checklist for Microsoft Entra app registration, redirect URI, delegated Graph permissions, client secret, local `.env` values, and BFF restart/health verification.
+- Referenced Microsoft official documentation for app registration, redirect URI configuration, OAuth authorization-code flow, and Graph delegated permissions.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
+
+### 2026-04-16T21:16:49+08:00
+
+- Scope: Clarify whether every Outlook user must configure Azure credentials or whether the developer configures Microsoft Entra once for the app.
+- Task type: `Non-code`
+- Main updates:
+- Explained that Azure/Microsoft Entra app registration is a developer-side one-time application setup, while end users only complete Microsoft login/consent.
+- Clarified the production distinction between single-tenant school apps, multi-tenant apps, personal Microsoft account support, and possible admin-consent requirements in school tenants.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
+
+### 2026-04-16T21:19:19+08:00
+
+- Scope: Respond to request to complete Microsoft/Azure configuration using a provided Outlook account password.
+- Task type: `Non-code`
+- Main updates:
+- Declined to handle or enter the user's Microsoft account password directly for security reasons.
+- Checked local prerequisites and confirmed Azure CLI (`az`) is not installed, so device-code based CLI automation is not available from this machine without additional setup.
+- Confirmed local BFF `.env` already has Microsoft direct-auth placeholders and still needs only Microsoft app-registration values before `/health` can report `microsoft.ok=true`.
+- Prepared a safe handoff flow where the user creates the Microsoft app/secret in the official portal and Codex can then write the resulting non-password app credentials into local `.env`, restart BFF, and verify health.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
+
+### 2026-04-16T21:28:55+08:00
+
+- Scope: Explain how to proceed after Microsoft Entra reports that app creation outside a directory is deprecated and the user has joined the Microsoft 365 Developer Program.
+- Task type: `Non-code`
+- Main updates:
+- Interpreted the portal warning as a directory/tenant-context issue: the user is still operating from a personal account without an application-registration directory.
+- Provided next-step guidance to create or enter the Microsoft 365 developer sandbox tenant, sign in as the sandbox admin, switch Entra to that tenant, then register the app there.
+- Clarified that the app can still support personal Outlook accounts by choosing the multi-tenant plus personal Microsoft account audience and keeping the local authority as `common`.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
+
+### 2026-04-16T21:35:21+08:00
+
+- Scope: Explain what to do after creating an Azure account when the M365 Developer Program does not offer a developer tenant option.
+- Task type: `Non-code`
+- Main updates:
+- Clarified that the next step is to use the Azure account's Microsoft Entra directory, or create one from Azure/Entra tenant management, then register the mail-agent app inside that directory.
+- Provided the intended portal flow: switch to the Azure-created directory, create an App Registration, choose multi-tenant plus personal Microsoft accounts, add the local redirect URI, create a client secret, add Graph delegated permissions, then copy values into local BFF environment.
+- Emphasized that no Azure compute/resource-group spending is needed for this setup; only identity/app registration is required.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
