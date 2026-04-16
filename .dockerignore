@@ -1,0 +1,15 @@
+.git
+.github
+node_modules
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+data
+memory
+davmail.log
+coverage
+playwright-report
+test-results
+.harness
+.openclaw

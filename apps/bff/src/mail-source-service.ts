@@ -30,6 +30,8 @@ export type DbMailSourceProfile = {
   mailboxUserId?: string;
   connectedAccountId?: string;
   enabled: boolean;
+  connectionTrustedAt?: string;
+  connectionTrustSource?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -113,8 +115,12 @@ function sourceNeedsConnection(row: any): boolean {
   return !cleanOptionalText(row.mailboxUserId) || !cleanOptionalText(row.connectedAccountId);
 }
 
+function sourceConnectionTrusted(row: any): boolean {
+  return Boolean(row.connectionTrustedAt);
+}
+
 function sourceReady(row: any, status: DbMailSourceRoutingStatus | undefined): boolean {
-  if (!row.enabled || sourceNeedsConnection(row)) {
+  if (!row.enabled || sourceNeedsConnection(row) || !sourceConnectionTrusted(row)) {
     return false;
   }
 
@@ -134,6 +140,10 @@ function profileFromRow(row: any): DbMailSourceProfileView {
     ...(cleanOptionalText(row.mailboxUserId) ? { mailboxUserId: cleanOptionalText(row.mailboxUserId) } : {}),
     ...(cleanOptionalText(row.connectedAccountId) ? { connectedAccountId: cleanOptionalText(row.connectedAccountId) } : {}),
     enabled: Boolean(row.enabled),
+    ...(row.connectionTrustedAt instanceof Date ? { connectionTrustedAt: row.connectionTrustedAt.toISOString() } : {}),
+    ...(cleanOptionalText(row.connectionTrustSource)
+      ? { connectionTrustSource: cleanOptionalText(row.connectionTrustSource) }
+      : {}),
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt),
     ready: sourceReady(row, routingStatus),
@@ -294,6 +304,14 @@ export class MailSourceService {
         mailboxUserId: mailboxUserId ?? null,
         connectedAccountId: connectionType === "composio" ? connectedAccountId ?? null : null,
         microsoftAccountId: connectionType === "microsoft" ? microsoftAccountId ?? null : null,
+        connectionTrustedAt: new Date(),
+        connectionTrustSource: connectionType === "microsoft" ? "microsoft_direct" : "composio_server_verified",
+        connectionTrustDetailsJson: JSON.stringify({
+          reason:
+            connectionType === "microsoft"
+              ? "Owned Microsoft account verified before source creation"
+              : "Composio connected account ownership verified by server flow",
+        }),
         enabled: true,
       },
     });
@@ -331,6 +349,7 @@ export class MailSourceService {
         : cleanOptionalText(current.microsoftAccountId);
     const connectionType = isConnectionType(current.connectionType) ? current.connectionType : "composio";
     const connectedAccountChanged = nextConnectedAccountId !== cleanOptionalText(current.connectedAccountId);
+    const microsoftAccountChanged = nextMicrosoftAccountId !== cleanOptionalText(current.microsoftAccountId);
 
     if (connectionType === "composio") {
       if (!nextMailboxUserId || !nextConnectedAccountId) {
@@ -352,6 +371,24 @@ export class MailSourceService {
       nextMailboxUserId !== cleanOptionalText(current.mailboxUserId) ||
       nextConnectedAccountId !== cleanOptionalText(current.connectedAccountId) ||
       nextMicrosoftAccountId !== cleanOptionalText(current.microsoftAccountId);
+    const shouldTrustConnection =
+      connectionType === "microsoft"
+        ? microsoftAccountChanged || !sourceConnectionTrusted(current)
+        : Boolean(input.trustedConnectedAccountId && (connectedAccountChanged || !sourceConnectionTrusted(current)));
+    const trustPatch =
+      shouldTrustConnection
+        ? {
+            connectionTrustedAt: new Date(),
+            connectionTrustSource:
+              connectionType === "microsoft" ? "microsoft_direct" : "composio_server_verified",
+            connectionTrustDetailsJson: JSON.stringify({
+              reason:
+                connectionType === "microsoft"
+                  ? "Owned Microsoft account verified before source update"
+                  : "Composio connected account ownership verified by server flow",
+            }),
+          }
+        : {};
 
     const row = await prisma.mailSource.update({
       where: { id: current.id },
@@ -362,6 +399,7 @@ export class MailSourceService {
         connectedAccountId: connectionType === "composio" ? nextConnectedAccountId ?? null : null,
         microsoftAccountId: connectionType === "microsoft" ? nextMicrosoftAccountId ?? null : null,
         enabled: input.enabled ?? current.enabled,
+        ...trustPatch,
         ...(routingContextChanged ? { routingVerifiedAt: null, routingStatusJson: null } : {}),
       },
     });
@@ -466,6 +504,11 @@ export class MailSourceService {
             mailboxUserId,
             connectedAccountId: null,
             microsoftAccountId: input.accountId,
+            connectionTrustedAt: new Date(),
+            connectionTrustSource: "microsoft_direct",
+            connectionTrustDetailsJson: JSON.stringify({
+              reason: "Microsoft direct OAuth account persisted and reconnected",
+            }),
             enabled: true,
             routingVerifiedAt: null,
             routingStatusJson: null,
@@ -482,6 +525,11 @@ export class MailSourceService {
             mailboxUserId,
             connectedAccountId: null,
             microsoftAccountId: input.accountId,
+            connectionTrustedAt: new Date(),
+            connectionTrustSource: "microsoft_direct",
+            connectionTrustDetailsJson: JSON.stringify({
+              reason: "Microsoft direct OAuth account persisted and connected",
+            }),
             enabled: true,
           },
         });

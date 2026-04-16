@@ -29,6 +29,7 @@ model User {
   mailSummaries MailSummary[]
   mailEvents MailEvent[]
   senderProfiles SenderProfile[]
+  mailKbJobs MailKbJob[]
 
   @@index([createdAt])
 }
@@ -58,6 +59,9 @@ model MailSource {
   microsoftAccountId String?
   routingVerifiedAt  DateTime?
   routingStatusJson  String?        @db.Text
+  connectionTrustedAt DateTime?
+  connectionTrustSource String?
+  connectionTrustDetailsJson String? @db.Text
   enabled            Boolean        @default(true)
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt
@@ -65,11 +69,13 @@ model MailSource {
   mailSummaries      MailSummary[]
   mailEvents         MailEvent[]
   senderProfiles     SenderProfile[]
+  mailKbJobs         MailKbJob[]
 
   @@unique([userId, externalId])
   @@index([userId, createdAt])
   @@index([userId, enabled])
   @@index([userId, microsoftAccountId])
+  @@index([userId, connectionType, connectionTrustedAt])
 }
 
 model MicrosoftAccount {
@@ -186,6 +192,28 @@ model LlmUsage {
 
   @@index([userId, sourceId, createdAt])
   @@index([routeId, createdAt])
+}
+
+model MailKbJob {
+  id             String     @id @default(cuid())
+  userId         String
+  user           User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId       String
+  source         MailSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  status         String     @default("queued")
+  progress       Int        @default(0)
+  totalMails     Int        @default(0)
+  processedMails Int        @default(0)
+  totalEvents    Int        @default(0)
+  totalPersons   Int        @default(0)
+  error          String?    @db.Text
+  createdAt      DateTime   @default(now())
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  updatedAt      DateTime   @updatedAt
+
+  @@index([userId, sourceId, createdAt])
+  @@index([status, createdAt])
 }
 
 model MailSummary {

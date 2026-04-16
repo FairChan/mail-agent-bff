@@ -35,6 +35,7 @@ export function SettingsView() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [sourceInfo, setSourceInfo] = useState<string | null>(null);
+  const allowLegacyComposioSource = import.meta.env.VITE_ENABLE_LEGACY_COMPOSIO === "true";
 
   useEffect(() => {
     fetchSources();
@@ -307,6 +308,7 @@ export function SettingsView() {
       </section>
 
       {/* 添加数据源 */}
+      {allowLegacyComposioSource && (
       <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-800">
         <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">高级：手动添加数据源</h3>
         <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
@@ -344,6 +346,7 @@ export function SettingsView() {
           </button>
         </div>
       </section>
+      )}
 
       {/* 通知设置 */}
       <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-800">

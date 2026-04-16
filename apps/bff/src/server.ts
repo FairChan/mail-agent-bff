@@ -4496,21 +4496,43 @@ async function runCalendarSyncWithDedupe(
   }
 }
 
-server.get("/live", async () => {
+async function livePayload() {
   return {
     ok: true,
     service: "mail-agent-bff",
+    runtime: env.agentRuntime,
   };
-});
+}
+
+server.get("/live", async () => livePayload());
+server.get("/api/live", async () => livePayload());
+
+async function checkPrismaReady() {
+  try {
+    const prisma = (await getPrismaClient(server.log)) as any;
+    if (!prisma?.$queryRawUnsafe) {
+      return { ok: false, error: "Prisma client unavailable" };
+    }
+    await prisma.$queryRawUnsafe("SELECT 1");
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: env.NODE_ENV === "production" ? "Prisma readiness check failed" : error instanceof Error ? error.message : String(error),
+    };
+  }
+}
 
 async function readinessProbe() {
   const startedAt = Date.now();
 
-  if (!env.openClawGatewayBearer) {
-    const siliconFlowConfigured = env.siliconFlowApiKey.length > 0;
-    const composioConfigured = env.composioApiKey.length > 0 && env.composioMcpUrl.length > 0;
-    const microsoftConfigured = isMicrosoftDirectAuthConfigured();
-    const ready = siliconFlowConfigured && (composioConfigured || microsoftConfigured);
+  if (env.agentRuntime !== "openclaw") {
+    const prisma = await checkPrismaReady();
+    const llmConfigured =
+      env.llmProviderBaseUrl.length > 0 && env.llmProviderApiKey.length > 0 && env.llmProviderModel.length > 0;
+    const microsoftConfigured = isMicrosoftDirectAuthConfigured() && env.appEncryptionKey.length > 0;
+    const redisConfigured = !env.redisAuthSessionsEnabled || redisAuthSessionStore.enabled;
+    const ready = prisma.ok && llmConfigured && microsoftConfigured && redisConfigured;
 
     return {
       statusCode: ready ? 200 : 503,
@@ -4519,10 +4541,11 @@ async function readinessProbe() {
         service: "mail-agent-bff",
         latencyMs: Date.now() - startedAt,
         runtime: {
-          mode: "direct",
-          siliconFlow: { ok: siliconFlowConfigured },
-          composio: { ok: composioConfigured },
+          mode: env.agentRuntime,
+          prisma,
+          llm: { ok: llmConfigured, model: env.llmProviderModel },
           microsoft: { ok: microsoftConfigured },
+          redis: { ok: redisConfigured, enabled: redisAuthSessionStore.enabled },
         },
       },
     };
@@ -4573,7 +4596,17 @@ server.get("/ready", async (_request, reply) => {
   return reply.status(result.statusCode).send(result.payload);
 });
 
+server.get("/api/ready", async (_request, reply) => {
+  const result = await readinessProbe();
+  return reply.status(result.statusCode).send(result.payload);
+});
+
 server.get("/health", async (_request, reply) => {
+  const result = await readinessProbe();
+  return reply.status(result.statusCode).send(result.payload);
+});
+
+server.get("/api/health", async (_request, reply) => {
   const result = await readinessProbe();
   return reply.status(result.statusCode).send(result.payload);
 });
@@ -8113,6 +8146,381 @@ function kbIsoDate(value: unknown): string {
   return value ? String(value) : "";
 }
 
+type MailKbJobLog = {
+  timestamp: string;
+  level: "info" | "warn" | "error";
+  message: string;
+};
+
+const mailKbJobLocks = new Set<string>();
+const mailKbJobLogs = new Map<string, MailKbJobLog[]>();
+const maxMailKbJobLogs = 200;
+
+function addMailKbJobLog(jobId: string, level: MailKbJobLog["level"], message: string) {
+  const logs = mailKbJobLogs.get(jobId) ?? [];
+  logs.push({ timestamp: new Date().toISOString(), level, message });
+  if (logs.length > maxMailKbJobLogs) {
+    logs.splice(0, logs.length - maxMailKbJobLogs);
+  }
+  mailKbJobLogs.set(jobId, logs);
+}
+
+function mailKbJobPhase(status: string): string {
+  if (status === "queued") return "idle";
+  if (status === "running") return "persist";
+  if (status === "completed") return "done";
+  if (status === "failed") return "error";
+  return "idle";
+}
+
+function mailKbJobMessage(row: any): string {
+  if (row.status === "queued") return "Waiting for the single-node worker";
+  if (row.status === "running") return "Reading, scoring, and persisting the current mailbox snapshot";
+  if (row.status === "completed") return "Knowledge base job completed";
+  if (row.status === "failed") return row.error ?? "Knowledge base job failed";
+  return row.status;
+}
+
+function toMailKbJobDto(row: any) {
+  const total = Number(row.totalMails ?? 0);
+  const processed = Number(row.processedMails ?? 0);
+  return {
+    id: row.id,
+    jobId: row.id,
+    sourceId: row.sourceId,
+    status: row.status,
+    error: row.error ?? null,
+    createdAt: kbIsoDate(row.createdAt),
+    startedAt: kbIsoDate(row.startedAt),
+    finishedAt: kbIsoDate(row.finishedAt),
+    progress: {
+      phase: mailKbJobPhase(row.status),
+      message: mailKbJobMessage(row),
+      total,
+      processed,
+      percent: Number(row.progress ?? 0),
+    },
+    counts: {
+      mails: total,
+      processedMails: processed,
+      events: Number(row.totalEvents ?? 0),
+      persons: Number(row.totalPersons ?? 0),
+    },
+    logs: mailKbJobLogs.get(row.id) ?? [],
+  };
+}
+
+function stableKbId(prefix: string, userId: string, sourceId: string, raw: string): string {
+  const hash = createHash("sha256").update(`${userId}:${sourceId}:${raw}`).digest("hex").slice(0, 32);
+  return `${prefix}_${hash}`;
+}
+
+function safeKbDate(raw: string | undefined, fallback = new Date()): Date {
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? fallback : parsed;
+}
+
+function truncateKbText(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength - 1)}…`;
+}
+
+function subjectKeywords(subject: string): string[] {
+  return subject
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff\s_-]+/g, " ")
+    .split(/\s+/)
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 2)
+    .slice(0, 12);
+}
+
+async function persistMailKbJobSnapshot(prisma: any, jobId: string, tenant: TenantContext) {
+  const sourceContext: MailSourceContext = {
+    userId: tenant.userId,
+    sourceId: tenant.sourceId,
+    sessionToken: tenant.sessionToken,
+    ...(tenant.connectionType ? { connectionType: tenant.connectionType } : {}),
+    ...(tenant.microsoftAccountId ? { microsoftAccountId: tenant.microsoftAccountId } : {}),
+    ...(tenant.mailboxUserId ? { mailboxUserId: tenant.mailboxUserId } : {}),
+    ...(tenant.connectedAccountId ? { connectedAccountId: tenant.connectedAccountId } : {}),
+  };
+  const priorityRules = getPriorityRulesSnapshotBySession(tenant.sessionToken, tenant.sourceId);
+  const now = new Date();
+
+  addMailKbJobLog(jobId, "info", "Fetching current inbox for KB ingestion");
+  await prisma.mailKbJob.update({
+    where: { id: jobId },
+    data: { status: "running", progress: 10, startedAt: now, error: null },
+  });
+
+  const triage = await triageInbox(60, priorityRules, sourceContext);
+  const items = triage.allItems.slice(0, 60);
+  const senderGroups = new Map<
+    string,
+    { email: string; name: string; count: number; importanceTotal: number; lastSeenAt: Date }
+  >();
+
+  for (const item of items) {
+    const email = (item.fromAddress || "unknown@local.invalid").trim().toLowerCase();
+    const receivedAt = safeKbDate(item.receivedDateTime, now);
+    const current = senderGroups.get(email) ?? {
+      email,
+      name: item.fromName || email,
+      count: 0,
+      importanceTotal: 0,
+      lastSeenAt: receivedAt,
+    };
+    current.count += 1;
+    current.importanceTotal += normalizeKbScore(item.score.importance);
+    if (receivedAt > current.lastSeenAt) {
+      current.lastSeenAt = receivedAt;
+    }
+    senderGroups.set(email, current);
+  }
+
+  const senderIdsByEmail = new Map<string, string>();
+  for (const sender of senderGroups.values()) {
+    const senderId = stableKbId("sender", tenant.userId, tenant.sourceId, sender.email);
+    senderIdsByEmail.set(sender.email, senderId);
+    await prisma.senderProfile.upsert({
+      where: {
+        userId_sourceId_email: {
+          userId: tenant.userId,
+          sourceId: tenant.sourceId,
+          email: sender.email,
+        },
+      },
+      create: {
+        id: senderId,
+        userId: tenant.userId,
+        sourceId: tenant.sourceId,
+        email: sender.email,
+        displayName: sender.name,
+        importance: sender.importanceTotal / Math.max(1, sender.count),
+        summaryText: `Recent mailbox contact with ${sender.count} messages in the latest KB job.`,
+        summary: `Recent mailbox contact with ${sender.count} messages in the latest KB job.`,
+        keyInfo: JSON.stringify(["mailbox_contact"]),
+        totalMailCount: sender.count,
+        lastMailAt: sender.lastSeenAt,
+        lastSeenAt: sender.lastSeenAt,
+      },
+      update: {
+        displayName: sender.name,
+        importance: sender.importanceTotal / Math.max(1, sender.count),
+        summaryText: `Recent mailbox contact with ${sender.count} messages in the latest KB job.`,
+        summary: `Recent mailbox contact with ${sender.count} messages in the latest KB job.`,
+        keyInfo: JSON.stringify(["mailbox_contact"]),
+        totalMailCount: sender.count,
+        lastMailAt: sender.lastSeenAt,
+        lastSeenAt: sender.lastSeenAt,
+      },
+    });
+  }
+
+  await prisma.mailKbJob.update({
+    where: { id: jobId },
+    data: { totalMails: items.length, totalPersons: senderGroups.size, progress: 25 },
+  });
+  addMailKbJobLog(jobId, "info", `Persisting ${items.length} mail summaries and ${senderGroups.size} sender profiles`);
+
+  let processed = 0;
+  for (const item of items) {
+    const senderEmail = (item.fromAddress || "unknown@local.invalid").trim().toLowerCase();
+    const senderId = senderIdsByEmail.get(senderEmail) ?? null;
+    const mailId = stableKbId("mail", tenant.userId, tenant.sourceId, item.id);
+    const processedAt = safeKbDate(item.receivedDateTime, now);
+    const summaryText = truncateKbText(item.bodyPreview || item.subject || "(no preview)", 1200);
+    const importanceScore = normalizeKbScore(item.score.importance);
+    const urgencyScore = normalizeKbScore(item.score.urgency);
+
+    await prisma.mailSummary.upsert({
+      where: {
+        userId_sourceId_externalMsgId: {
+          userId: tenant.userId,
+          sourceId: tenant.sourceId,
+          externalMsgId: item.id,
+        },
+      },
+      create: {
+        id: mailId,
+        userId: tenant.userId,
+        sourceId: tenant.sourceId,
+        externalMsgId: item.id,
+        subject: item.subject || "(no subject)",
+        summaryText,
+        importanceScore,
+        urgencyScore,
+        horizon: item.quadrant,
+        webLink: item.webLink || null,
+        senderId,
+        processedAt,
+      },
+      update: {
+        subject: item.subject || "(no subject)",
+        summaryText,
+        importanceScore,
+        urgencyScore,
+        horizon: item.quadrant,
+        webLink: item.webLink || null,
+        senderId,
+        processedAt,
+      },
+    });
+
+    await prisma.mailScoreIndex.upsert({
+      where: { mailId },
+      create: {
+        mailId,
+        importanceScore,
+        urgencyScore,
+        quadrant: item.quadrant,
+        reasoning: item.reasons.join("; "),
+      },
+      update: {
+        importanceScore,
+        urgencyScore,
+        quadrant: item.quadrant,
+        reasoning: item.reasons.join("; "),
+      },
+    });
+
+    await prisma.subjectIndex.upsert({
+      where: { mailId },
+      create: { mailId, subject: item.subject || "(no subject)", keywords: subjectKeywords(item.subject) },
+      update: { subject: item.subject || "(no subject)", keywords: subjectKeywords(item.subject) },
+    });
+
+    processed += 1;
+    if (processed === items.length || processed % 5 === 0) {
+      await prisma.mailKbJob.update({
+        where: { id: jobId },
+        data: {
+          processedMails: processed,
+          progress: 25 + Math.round((processed / Math.max(1, items.length)) * 45),
+        },
+      });
+    }
+  }
+
+  addMailKbJobLog(jobId, "info", "Extracting date-bound mail events");
+  let eventCount = 0;
+  try {
+    const insights = await buildMailInsights(60, 14, "Asia/Shanghai", priorityRules, sourceContext);
+    const uniqueEvents = new Map<string, any>();
+    for (const insight of [...insights.tomorrowDdl, ...insights.upcoming]) {
+      uniqueEvents.set(`${insight.messageId}:${insight.type}:${insight.dueAt}`, insight);
+    }
+
+    for (const insight of uniqueEvents.values()) {
+      const eventId = stableKbId("event", tenant.userId, tenant.sourceId, `${insight.messageId}:${insight.type}:${insight.dueAt}`);
+      const startAt = safeKbDate(insight.dueAt, now);
+      await prisma.mailEvent.upsert({
+        where: { id: eventId },
+        create: {
+          id: eventId,
+          userId: tenant.userId,
+          sourceId: tenant.sourceId,
+          type: insight.type,
+          title: insight.subject || insight.type,
+          summaryText: truncateKbText(insight.evidence || insight.subject || insight.type, 1200),
+          keyInfo: JSON.stringify([insight.dueDateLabel, ...insight.reasons].filter(Boolean)),
+          relatedMailCount: 1,
+          firstMailAt: safeKbDate(insight.receivedDateTime, now),
+          lastMailAt: safeKbDate(insight.receivedDateTime, now),
+          startAt,
+          confidence: insight.confidence,
+          evidence: insight.evidence,
+        },
+        update: {
+          type: insight.type,
+          title: insight.subject || insight.type,
+          summaryText: truncateKbText(insight.evidence || insight.subject || insight.type, 1200),
+          keyInfo: JSON.stringify([insight.dueDateLabel, ...insight.reasons].filter(Boolean)),
+          relatedMailCount: 1,
+          firstMailAt: safeKbDate(insight.receivedDateTime, now),
+          lastMailAt: safeKbDate(insight.receivedDateTime, now),
+          startAt,
+          confidence: insight.confidence,
+          evidence: insight.evidence,
+        },
+      });
+      await prisma.mailSummary.updateMany({
+        where: {
+          userId: tenant.userId,
+          sourceId: tenant.sourceId,
+          externalMsgId: insight.messageId,
+        },
+        data: { eventId },
+      });
+      eventCount += 1;
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    addMailKbJobLog(jobId, "warn", `Event extraction skipped: ${message}`);
+  }
+
+  await prisma.mailKbJob.update({
+    where: { id: jobId },
+    data: {
+      status: "completed",
+      progress: 100,
+      processedMails: processed,
+      totalEvents: eventCount,
+      totalPersons: senderGroups.size,
+      finishedAt: new Date(),
+    },
+  });
+  addMailKbJobLog(jobId, "info", "Knowledge base job completed");
+}
+
+async function runMailKbJob(jobId: string, tenant: TenantContext) {
+  const lockKey = `${tenant.userId}:${tenant.sourceId}`;
+  const prisma = (await getPrismaClient(server.log)) as any;
+  if (!prisma?.mailKbJob?.update) {
+    addMailKbJobLog(jobId, "error", "Knowledge base job store unavailable");
+    return;
+  }
+
+  if (mailKbJobLocks.has(lockKey)) {
+    await prisma.mailKbJob.update({
+      where: { id: jobId },
+      data: {
+        status: "failed",
+        error: "Another knowledge base job is already running for this source.",
+        finishedAt: new Date(),
+      },
+    });
+    addMailKbJobLog(jobId, "error", "Duplicate job rejected by source lock");
+    return;
+  }
+
+  mailKbJobLocks.add(lockKey);
+  try {
+    await persistMailKbJobSnapshot(prisma, jobId, tenant);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    server.log.warn({ jobId, sourceId: tenant.sourceId, message }, "Mail KB job failed");
+    addMailKbJobLog(jobId, "error", message);
+    await prisma.mailKbJob.update({
+      where: { id: jobId },
+      data: {
+        status: "failed",
+        error: message,
+        finishedAt: new Date(),
+      },
+    });
+  } finally {
+    mailKbJobLocks.delete(lockKey);
+  }
+}
+
 function toKbMailDto(row: any) {
   return {
     mailId: row.id,
@@ -8161,6 +8569,9 @@ const kbListQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(200).optional(),
   offset: z.coerce.number().int().min(0).optional(),
 });
+const kbJobParamSchema = z.object({
+  jobId: z.string().min(1).max(200),
+});
 
 async function resolveKbTenant(request: FastifyRequest, reply: FastifyReply) {
   const query = kbListQuerySchema.safeParse(request.query ?? {});
@@ -8191,6 +8602,43 @@ async function resolveKbTenant(request: FastifyRequest, reply: FastifyReply) {
   }
 
   return { ok: true as const, tenant, query: query.data };
+}
+
+async function resolveMailKbJobForRequest(request: FastifyRequest, reply: FastifyReply) {
+  const parsed = kbJobParamSchema.safeParse(request.params);
+  if (!parsed.success) {
+    reply.status(400);
+    return { ok: false as const, payload: { ok: false, error: "Invalid job id", details: parsed.error.issues } };
+  }
+
+  const sessionToken = getSessionTokenFromRequest(request);
+  if (sessionToken) {
+    await hydrateAuthSessionFromRedisIfNeeded(sessionToken, Date.now());
+  }
+  const userId = sessionToken ? getUserIdForSessionToken(sessionToken) : null;
+  if (!sessionToken || !userId || userId.startsWith("legacy:")) {
+    reply.status(401);
+    return { ok: false as const, payload: { ok: false, error: "Unauthorized", errorCode: "UNAUTHORIZED" } };
+  }
+
+  const prisma = (await getPrismaClient(server.log)) as any;
+  if (!prisma?.mailKbJob?.findFirst) {
+    reply.status(503);
+    return {
+      ok: false as const,
+      payload: { ok: false, error: "Knowledge base job store unavailable", errorCode: "KB_JOB_STORE_UNAVAILABLE" },
+    };
+  }
+
+  const job = await prisma.mailKbJob.findFirst({
+    where: { id: parsed.data.jobId, userId },
+  });
+  if (!job) {
+    reply.status(404);
+    return { ok: false as const, payload: { ok: false, error: "Job not found", errorCode: "KB_JOB_NOT_FOUND" } };
+  }
+
+  return { ok: true as const, prisma, job };
 }
 
 server.get("/api/mail-kb/stats", async (request, reply) => {
@@ -8371,15 +8819,159 @@ server.post("/api/mail/knowledge-base/trigger", async (request, reply) => {
     return resolved.payload;
   }
 
+  const prisma = (await getPrismaClient(server.log)) as any;
+  if (!prisma?.mailKbJob?.create) {
+    reply.status(503);
+    return { ok: false, error: "Knowledge base job store unavailable", errorCode: "KB_JOB_STORE_UNAVAILABLE" };
+  }
+
+  const lockKey = `${resolved.tenant.userId}:${resolved.tenant.sourceId}`;
+  if (mailKbJobLocks.has(lockKey)) {
+    reply.status(409);
+    return {
+      ok: false,
+      error: "A knowledge base job is already running for this source.",
+      errorCode: "KB_JOB_ALREADY_RUNNING",
+    };
+  }
+
+  const existing = await prisma.mailKbJob.findFirst({
+    where: {
+      userId: resolved.tenant.userId,
+      sourceId: resolved.tenant.sourceId,
+      status: { in: ["queued", "running"] },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  if (existing) {
+    return {
+      ok: true,
+      jobId: existing.id,
+      result: {
+        sourceId: existing.sourceId,
+        status: existing.status,
+      },
+    };
+  }
+
+  const job = await prisma.mailKbJob.create({
+    data: {
+      userId: resolved.tenant.userId,
+      sourceId: resolved.tenant.sourceId,
+      status: "queued",
+      progress: 0,
+    },
+  });
+  addMailKbJobLog(job.id, "info", "Knowledge base job queued");
+  void runMailKbJob(job.id, resolved.tenant);
+
   return {
     ok: true,
-    jobId: `db-kb-${Date.now()}`,
+    jobId: job.id,
     result: {
       sourceId: resolved.tenant.sourceId,
-      status: "ready",
-      message: "DB-backed knowledge base is active; background summarization is not started by this endpoint yet.",
+      status: "queued",
     },
   };
+});
+
+server.get("/api/mail/knowledge-base/jobs/:jobId", async (request, reply) => {
+  const resolved = await resolveMailKbJobForRequest(request, reply);
+  if (!resolved.ok) {
+    return resolved.payload;
+  }
+
+  const job = toMailKbJobDto(resolved.job);
+  return { ok: true, job, result: { job } };
+});
+
+server.get("/api/mail/knowledge-base/jobs/:jobId/stream", async (request, reply) => {
+  const resolved = await resolveMailKbJobForRequest(request, reply);
+  if (!resolved.ok) {
+    return resolved.payload;
+  }
+
+  reply.hijack();
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+
+  let closed = false;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  const raw = reply.raw;
+  const jobId = resolved.job.id;
+  let sentLogCount = 0;
+
+  const closeStream = () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+    raw.end();
+  };
+
+  const writeEvent = (eventName: string, payload: unknown) => {
+    if (closed) {
+      return;
+    }
+    try {
+      raw.write(`event: ${eventName}\n`);
+      raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+    } catch {
+      closeStream();
+    }
+  };
+
+  request.raw.on("close", closeStream);
+  request.raw.on("aborted", closeStream);
+  writeEvent("connected", { jobId });
+
+  const tick = async () => {
+    if (closed) {
+      return;
+    }
+    const latest = await resolved.prisma.mailKbJob.findFirst({
+      where: { id: jobId, userId: resolved.job.userId },
+    });
+    if (!latest) {
+      writeEvent("error", { error: "Job not found", code: "KB_JOB_NOT_FOUND" });
+      closeStream();
+      return;
+    }
+    const dto = toMailKbJobDto(latest);
+    const logs = dto.logs.slice(sentLogCount);
+    sentLogCount = dto.logs.length;
+    writeEvent("progress", dto.progress);
+    if (logs.length > 0) {
+      writeEvent("logs", { logs });
+    }
+    writeEvent("status", { status: dto.status, error: dto.error, progress: dto.progress });
+    if (dto.status === "completed") {
+      writeEvent("final", { job: dto });
+      closeStream();
+    } else if (dto.status === "failed") {
+      writeEvent("error", { error: dto.error ?? "Knowledge base job failed", code: "KB_JOB_FAILED" });
+      closeStream();
+    }
+  };
+
+  await tick();
+  if (!closed) {
+    pollTimer = setInterval(() => {
+      void tick().catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        writeEvent("error", { error: message, code: "KB_JOB_STREAM_FAILED" });
+        closeStream();
+      });
+    }, 1000);
+  }
 });
 
 server.get("/api/agent/skills", async (request, reply) => {

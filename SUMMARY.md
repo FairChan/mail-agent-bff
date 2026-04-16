@@ -3759,3 +3759,49 @@ cp .env.example .env
 - Removed global source-only LLM route precedence and kept provider keys server-side.
 - Converted chat source/routing failures to SSE error events.
 - Blocked public/manual Composio connected-account binding unless the ID came from trusted server-side auto-connect.
+
+### 2026-04-17T02:10:00+08:00
+
+- Scope: Implement the next-stage production-ready closure for single-node Docker deployment, Microsoft Direct v1 path, source trust, KB jobs, CI, and deployment documentation.
+- Task type: `Code + Deployment`
+- Main updates:
+- Added production configuration guardrails:
+  - `PUBLIC_BASE_URL` can derive the Microsoft Direct callback URL.
+  - production startup now requires `DATABASE_URL`, `APP_ENCRYPTION_KEY`, LLM provider config, and Microsoft client config.
+  - readiness aliases `/api/live`, `/api/ready`, and `/api/health` now exist beside legacy `/live`, `/ready`, and `/health`.
+- Added source trust persistence:
+  - `MailSource.connectionTrustedAt`, `connectionTrustSource`, and `connectionTrustDetailsJson`.
+  - Microsoft Direct sources are marked trusted during owned-account source creation/upsert.
+  - historical untrusted Composio sources are disabled/unverified by migration and source readiness now requires trust.
+- Added `MailKbJob` and a DB-backed in-process KB worker:
+  - `POST /api/mail/knowledge-base/trigger` creates or reuses a tenant-scoped job.
+  - `GET /api/mail/knowledge-base/jobs/:jobId` and `/stream` expose owned job status and SSE progress.
+  - worker locks by `userId + sourceId`, writes `MailSummary`, `SenderProfile`, `MailScoreIndex`, `SubjectIndex`, and extracted `MailEvent` rows.
+- Updated production Docker:
+  - monorepo-aware BFF/WebUI Dockerfiles.
+  - BFF runs `prisma migrate deploy` before listening on `apps/bff/dist/server.js`.
+  - Nginx serves WebUI and proxies `/api/*` to BFF on port `8787` with SSE buffering disabled.
+  - BFF host port is bound to `127.0.0.1` only so Nginx/WebUI remains the public entrypoint.
+  - compose no longer starts OpenClaw gateway by default.
+- Updated WebUI/CI/docs:
+  - legacy manual Composio source UI is hidden unless `VITE_ENABLE_LEGACY_COMPOSIO=true`.
+  - repaired Playwright smoke test and CI workflows to use `npm ci`, Prisma validate, check, build, audit, and WebUI preview E2E.
+  - rewrote README, Docker deployment runbook, checklist, env examples, and deploy script.
+  - upgraded locked dependency graph for `fastify`, Prisma, `argon2`, and `nodemailer` paths so `npm audit --audit-level=moderate` reports no vulnerabilities.
+- Verification completed:
+- `npm.cmd --workspace apps/bff run check` passed.
+- `npm.cmd --workspace apps/webui run check` passed.
+- `DATABASE_URL=... node node_modules/prisma/build/index.js validate --schema apps/bff/prisma/schema.prisma` passed.
+- `npm.cmd --workspace apps/bff run build` passed.
+- `npm.cmd --workspace apps/webui run build` passed.
+- `npm.cmd audit --audit-level=moderate` passed with `0 vulnerabilities`.
+- `npm.cmd --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts` passed (`3/3`) against local WebUI preview.
+- `docker compose -f deploy/docker/docker-compose.yml config` passed with dummy non-secret env values.
+- Docker image build could not be executed because Docker Desktop failed to start in the local environment.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit round 1: sub-agent execution was attempted, but the spawned audit thread did not return a readable result to this session before fallback review.
+- Local code/security audit fallback found one P1 deployment exposure risk: the BFF Compose port was initially published on all host interfaces instead of loopback-only.
+- Final fixes after audit:
+- `deploy/docker/docker-compose.yml` now binds BFF to `127.0.0.1:${BFF_PORT:-8787}:8787`.
+- Deployment docs now state that BFF is only for local readiness checks and must not be exposed directly.
+- Re-ran BFF/WebUI checks, builds, Prisma validate, npm audit, Docker Compose config, and WebUI Playwright smoke after the fix.

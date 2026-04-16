@@ -11,6 +11,7 @@ const envSchema = z.object({
   COMPOSIO_API_KEY: z.string().default(""),
   COMPOSIO_MCP_URL: z.string().default(""),
   BFF_API_KEY: z.string().min(16),
+  PUBLIC_BASE_URL: z.string().default(""),
   OPENCLAW_AGENT_ID: z.string().min(1).default("main"),
   GATEWAY_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(10000),
   AGENT_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
@@ -26,7 +27,7 @@ const envSchema = z.object({
   MICROSOFT_CLIENT_ID: z.string().default(""),
   MICROSOFT_CLIENT_SECRET: z.string().default(""),
   MICROSOFT_TENANT_ID: z.string().default("common"),
-  MICROSOFT_REDIRECT_URI: z.string().default("http://127.0.0.1:8787/api/mail/connections/outlook/direct/callback"),
+  MICROSOFT_REDIRECT_URI: z.string().default(""),
   MICROSOFT_SCOPES: z
     .string()
     .default("openid profile email offline_access User.Read Mail.Read Calendars.ReadWrite"),
@@ -80,6 +81,12 @@ const llmProviderApiKey =
   parsed.data?.LLM_PROVIDER_API_KEY?.trim() || parsed.data?.SILICONFLOW_API_KEY?.trim() || "";
 const llmProviderModel =
   parsed.data?.LLM_PROVIDER_MODEL?.trim() || parsed.data?.SILICONFLOW_MODEL?.trim() || "";
+const publicBaseUrl = normalizeUrl(parsed.data?.PUBLIC_BASE_URL ?? "");
+const microsoftRedirectUri =
+  parsed.data?.MICROSOFT_REDIRECT_URI?.trim() ||
+  (publicBaseUrl
+    ? `${publicBaseUrl}/api/mail/connections/outlook/direct/callback`
+    : "http://127.0.0.1:8787/api/mail/connections/outlook/direct/callback");
 
 if (parsed.success) {
   const runtime = parsed.data.AGENT_RUNTIME;
@@ -91,6 +98,14 @@ if (parsed.success) {
     if (!llmProviderBaseUrl) missing.push("LLM_PROVIDER_BASE_URL or SILICONFLOW_BASE_URL");
     if (!llmProviderApiKey) missing.push("LLM_PROVIDER_API_KEY or SILICONFLOW_API_KEY");
     if (!llmProviderModel) missing.push("LLM_PROVIDER_MODEL or SILICONFLOW_MODEL");
+  }
+  if (parsed.data.NODE_ENV === "production") {
+    if (!parsed.data.DATABASE_URL?.trim()) missing.push("DATABASE_URL");
+    if (!parsed.data.APP_ENCRYPTION_KEY?.trim()) missing.push("APP_ENCRYPTION_KEY");
+    if (!parsed.data.MICROSOFT_CLIENT_ID?.trim()) missing.push("MICROSOFT_CLIENT_ID");
+    if (!parsed.data.MICROSOFT_REDIRECT_URI?.trim() && !publicBaseUrl) {
+      missing.push("MICROSOFT_REDIRECT_URI or PUBLIC_BASE_URL");
+    }
   }
   if (missing.length > 0) {
     throw new Error(`Invalid environment config: missing ${missing.join(", ")} for AGENT_RUNTIME=${runtime}`);
@@ -132,6 +147,7 @@ export const env = {
   llmProviderBaseUrl,
   llmProviderApiKey,
   llmProviderModel,
+  publicBaseUrl,
   appEncryptionKey: parsed.data.APP_ENCRYPTION_KEY.trim(),
   smtpEnabled: parseBooleanFlag(parsed.data.SMTP_ENABLED),
   smtpSecure: parseBooleanFlag(parsed.data.SMTP_SECURE),
@@ -159,7 +175,7 @@ export const env = {
   microsoftClientId: parsed.data.MICROSOFT_CLIENT_ID.trim(),
   microsoftClientSecret: parsed.data.MICROSOFT_CLIENT_SECRET.trim(),
   microsoftTenantId: parsed.data.MICROSOFT_TENANT_ID.trim() || "common",
-  microsoftRedirectUri: parsed.data.MICROSOFT_REDIRECT_URI.trim(),
+  microsoftRedirectUri,
   microsoftScopes: parsed.data.MICROSOFT_SCOPES.trim(),
   agentSkillsDir: parsed.data.AGENT_SKILLS_DIR.trim(),
   agentDataDir: parsed.data.AGENT_DATA_DIR.trim(),
