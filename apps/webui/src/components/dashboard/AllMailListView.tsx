@@ -6,15 +6,12 @@
 import React, { useState, useCallback, useMemo, useEffect } from "react";
 import { useMail } from "../../contexts/MailContext";
 import { useApp } from "../../contexts/AppContext";
-import type { TriageMailItem } from "@mail-agent/shared-types";
 import { MailDetailPage } from "./MailDetailPage";
 import { LoadingSpinner } from "../shared/LoadingSpinner";
 
 export function AllMailListView() {
-  const { triage, isLoadingMail, activeSourceId, fetchTriage, selectMail, clearSelectedMail } = useMail();
+  const { triage, isLoadingMail, activeSourceId, fetchTriage, selectedMail, setSelectedMail, prefetchMailBodies } = useMail();
   const { locale } = useApp();
-
-  const [selectedItem, setSelectedItem] = useState<TriageMailItem | null>(null);
   const [filter, setFilter] = useState<"all" | "unread" | "read">("all");
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -23,6 +20,14 @@ export function AllMailListView() {
       fetchTriage(100); // 获取更多邮件
     }
   }, [activeSourceId, fetchTriage]);
+
+  // 预加载前 10 封邮件的内容
+  useEffect(() => {
+    if (triage?.allItems?.length) {
+      const messageIds = triage.allItems.slice(0, 10).map((item) => item.id);
+      prefetchMailBodies(messageIds);
+    }
+  }, [triage, prefetchMailBodies]);
 
   const allItems = triage?.allItems ?? [];
 
@@ -44,9 +49,8 @@ export function AllMailListView() {
   }, [allItems, filter, searchQuery]);
 
   const handleBack = useCallback(() => {
-    setSelectedItem(null);
-    clearSelectedMail(); // 清除 Context 中的 selectedMail
-  }, [clearSelectedMail]);
+    setSelectedMail(null);
+  }, [setSelectedMail]);
 
   const labels = {
     allMail: locale === "zh" ? "邮件历史" : locale === "ja" ? "メール履歴" : "Mail History",
@@ -58,10 +62,10 @@ export function AllMailListView() {
     noMail: locale === "zh" ? "暂无可展示邮件" : locale === "ja" ? "表示できるメールはありません" : "No messages to display",
   };
 
-  if (selectedItem) {
+  if (selectedMail) {
     return (
       <MailDetailPage
-        item={selectedItem}
+        item={selectedMail}
         activeSourceId={activeSourceId ?? ""}
         authLocale={locale}
         onBack={handleBack}
@@ -137,7 +141,7 @@ export function AllMailListView() {
             >
               <div
                 className="flex items-start justify-between gap-3 px-4 py-3"
-                onClick={() => setSelectedItem(item)}
+                onClick={() => setSelectedMail(item)}
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
@@ -179,8 +183,7 @@ export function AllMailListView() {
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setSelectedItem(item);
-                    selectMail(item); // 同时更新 Context，这样 MailDetailModal 也能工作
+                    setSelectedMail(item);
                   }}
                   className="shrink-0 rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-600 dark:text-zinc-400"
                 >

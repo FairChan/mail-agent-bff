@@ -1,0 +1,54 @@
+# Dependabot 配置
+version: 2
+updates:
+  # npm 依赖
+  - package-ecosystem: "npm"
+    directory: "/apps/bff"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 5
+    groups:
+      production-dependencies:
+        dependency-type: "production"
+      development-dependencies:
+        dependency-type: "development"
+    labels:
+      - "dependencies"
+      - "bff"
+    commit-message:
+      prefix: "bff"
+      include: "scope"
+
+  - package-ecosystem: "npm"
+    directory: "/apps/webui"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 5
+    groups:
+      production-dependencies:
+        dependency-type: "production"
+      development-dependencies:
+        dependency-type: "development"
+    labels:
+      - "dependencies"
+      - "webui"
+    commit-message:
+      prefix: "webui"
+      include: "scope"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"

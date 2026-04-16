@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: mery
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - bff-deployment.yaml
+  - webui-deployment.yaml
+  - ingress.yaml
+
+images:
+  - name: ghcr.io/true-sight/mery-bff
+    newTag: latest
+  - name: ghcr.io/true-sight/mery-webui
+    newTag: latest

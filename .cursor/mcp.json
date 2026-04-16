@@ -1,0 +1,43 @@
+{
+  "mcpServers": {
+    "openclaw-gateway": {
+      "command": "npx",
+      "args": ["-y", "openclaw-mcp"],
+      "env": {
+        "OPENCLAW_GATEWAY_URL": "http://127.0.0.1:18789",
+        "OPENCLAW_GATEWAY_TOKEN": "7e9bc73ebfb5e3f42d847324a9b75e94d39e24ad0eddc2ea"
+      }
+    },
+    "openclaw-molt-mcp": {
+      "command": "/root/openclaw-molt-mcp/.venv/bin/python",
+      "args": ["-m", "openclaw_molt_mcp"],
+      "env": {
+        "PYTHONPATH": "/root/openclaw-molt-mcp/src",
+        "PYTHONUNBUFFERED": "1",
+        "OPENCLAW_GATEWAY_URL": "http://127.0.0.1:18789",
+        "OPENCLAW_GATEWAY_TOKEN": "7e9bc73ebfb5e3f42d847324a9b75e94d39e24ad0eddc2ea"
+      }
+    },
+    "openclaw-cursor-brain": {
+      "command": "node",
+      "args": ["/root/openclaw-cursor-brain/mcp-server/server.mjs"],
+      "env": {
+        "OPENCLAW_GATEWAY_URL": "http://127.0.0.1:18789",
+        "OPENCLAW_GATEWAY_TOKEN": "7e9bc73ebfb5e3f42d847324a9b75e94d39e24ad0eddc2ea",
+        "OPENCLAW_CONFIG_PATH": "/root/.openclaw/openclaw.json"
+      }
+    },
+    "magicui-mcp": {
+      "command": "node",
+      "args": [
+        "/root/.nvm/versions/node/v22.22.1/lib/node_modules/@magicuidesign/mcp/dist/server.js"
+      ]
+    },
+    "reactbits-mcp": {
+      "command": "node",
+      "args": [
+        "/root/.nvm/versions/node/v22.22.1/lib/node_modules/reactbits-dev-mcp-server/dist/index.js"
+      ]
+    }
+  }
+}

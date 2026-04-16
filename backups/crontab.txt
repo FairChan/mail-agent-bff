@@ -1,0 +1,8 @@
+# Mery 数据备份定时任务
+# 安装：crontab backups/crontab.txt
+
+# 每天凌晨 2:00 执行全量备份
+0 2 * * * cd /path/to/workspace && ./backups/backup-all.sh >> ./backups/crontab.log 2>&1
+
+# 每周日凌晨 3:00 执行全量备份（周备份，保留更久）
+0 3 * * 0 cd /path/to/workspace && ./backups/backup-all.sh >> ./backups/weekly-backup.log 2>&1

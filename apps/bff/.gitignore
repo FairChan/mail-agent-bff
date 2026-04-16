@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment files (contain secrets)
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test files
+test-*.mjs
+test-*.ts
+
+# Prisma
+prisma/migrations/
+
+# OpenAPI
+openapi.json
+
+# Lock files (optional - can keep)
+# package-lock.json

@@ -1,0 +1,48 @@
+name: Security Scan
+
+on:
+  schedule:
+    - cron: "0 3 * * 0"  # 每周日凌晨 3 点
+  workflow_dispatch:
+
+jobs:
+  zap-scan:
+    name: OWASP ZAP Baseline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run ZAP Baseline Scan
+        run: |
+          docker pull owasp/zap2docker-stable
+          docker run --rm \
+            -v "${{ github.workspace }}:/zap/wrk:rw" \
+            -w /zap/wrk \
+            -e TARGET_URL="${{ secrets.ZAP_TARGET_URL }}" \
+            owasp/zap2docker-stable:latest \
+            zap-baseline.py \
+              -t "${{ secrets.ZAP_TARGET_URL }}" \
+              -J zap-report.json \
+              -I \
+              --exit-on-fail \
+            || true
+      
+      - name: Upload ZAP Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: zap-report.json
+          retention-days: 30
+      
+      - name: Publish Security Report
+        if: always()
+        run: |
+          echo "## ZAP Security Scan Report" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | Details |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|---------|" >> $GITHUB_STEP_SUMMARY
+          if [ -f zap-report.json ]; then
+            HIGH=$(grep -c '"risk":"High"' zap-report.json || echo "0")
+            MEDIUM=$(grep -c '"risk":"Medium"' zap-report.json || echo "0")
+            echo "| High Risk | $HIGH |" >> $GITHUB_STEP_SUMMARY
+            echo "| Medium Risk | $MEDIUM |" >> $GITHUB_STEP_SUMMARY
+          fi

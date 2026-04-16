@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "workspaces": [
+    "packages/shared-types",
     "apps/bff",
     "apps/webui"
   ],
@@ -10,6 +11,12 @@
     "dev:bff": "npm --workspace apps/bff run dev",
     "dev:web": "npm --workspace apps/webui run dev",
     "build": "npm run build --workspaces --if-present",
-    "check": "npm run check --workspaces --if-present"
+    "check": "npm run check --workspaces --if-present",
+    "security:scan": "./security/zap-scan.sh",
+    "security:report": "echo 'See security/README.md for report instructions'",
+    "security:audit": "npm audit --audit-level=moderate",
+    "security:check": "./scripts/check-dependencies.sh",
+    "security:update": "./scripts/update-dependencies.sh",
+    "deps:check": "cd apps/bff && npm outdated && cd ../webui && npm outdated"
   }
 }

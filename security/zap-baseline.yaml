@@ -1,0 +1,49 @@
+# OWASP ZAP Baseline Scan Configuration
+# 用于快速扫描目标站点的常见安全问题
+
+name: "Mery BFF + WebUI Security Baseline"
+type: baseline
+target:
+  url: "${TARGET_URL:-http://localhost:3000}"
+context:
+  name: "mery-context"
+  include:
+    - "^https?://localhost:3000.*"
+  exclude:
+    - "^https?://localhost:3000/outlook-auth-bridge\\.html.*"
+
+rules:
+  # 忽略低风险和 informational 告警
+  exclude:
+    # informational
+    - "10011"  # Cookie No HttpOnly Flag
+    - "10015"  # Re-examine Cache-control Header
+    - "10016"  # Cross-Domain JavaScript Source File Inclusion
+    - "10019"  # Content-Type Options Header Missing
+    - "10020"  # Unused CSS Rules
+    - "10021"  # Storable but Non-Cacheable Response
+    - "10023"  # Information Disclosure - Debug Error Messages
+    - "10024"  # Information Disclosure - Sensitive Infos in URL
+    - "10025"  # Information Disclosure - Sensitive GET Parameters
+    # low
+    - "10026"  # Open API Default Server URL
+    # 忽略认证相关的告警（测试环境）
+    - "10109"  # Modern Web Application
+    - "10202"  # Authorization Header Not Sent
+      
+  # 重点关注高风险告警
+  alert:
+    - id: "40012"  # Path Traversal
+    - id: "40008"  # SQL Injection
+    - id: "40014"  # Cross Site Scripting (Reflected)
+    - id: "40016"  # Cross Site Scripting (Persistent)
+    - id: "40017"  # Cross Site Scripting (DOM)
+    - id: "40018"  # SQL Injection (Header Based)
+    - id: "40019"  # SQL Injection (URl Based)
+    - id: "6"      # Path Traversal
+    - id: "90011"  # JWT Token
+
+reporting:
+  format: "json"
+  output: "zap-report-{timestamp}.json"
+  include-alerts: true

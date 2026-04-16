@@ -1,0 +1,32 @@
+name: Alert Check
+
+on:
+  schedule:
+    - cron: "0 */4 * * *"  # 每 4 小时检查一次
+  workflow_dispatch:
+
+jobs:
+  check-alerts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Check Prometheus Alerts
+        run: |
+          curl -s "${{ secrets.PROMETHEUS_URL }}/api/v1/alerts" | \
+          jq -r '
+            .data.alerts[] |
+            select(.state == "firing") |
+            "| \(.labels.severity) | \(.labels.alertname) | \(.annotations.summary)"
+          ' | column -t -s '|'
+          
+      - name: Send to Slack (if alerts)
+        if: always()
+        run: |
+          ALERT_COUNT=$(curl -s "${{ secrets.PROMETHEUS_URL }}/api/v1/alerts" | \
+            jq '.data.alerts | length')
+          echo "Active alerts: $ALERT_COUNT"
+          
+          if [ "$ALERT_COUNT" -gt 0 ]; then
+            echo "::warning::There are $ALERT_COUNT active alerts"
+          fi

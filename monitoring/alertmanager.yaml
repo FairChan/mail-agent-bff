@@ -1,0 +1,85 @@
+# AlertManager 配置
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: 'smtp.example.com:587'
+  smtp_from: 'alerts@true-sight.asia'
+  smtp_auth_username: 'alerts@true-sight.asia'
+  smtp_auth_password: '${SMTP_PASSWORD}'
+
+# 告警路由配置
+route:
+  group_by: ['alertname', 'service', 'severity']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'default-receiver'
+  routes:
+    # 严重告警立即通知
+    - match:
+        severity: critical
+      receiver: 'critical-receiver'
+      group_wait: 0s
+      repeat_interval: 1h
+    
+    # 警告告警普通通知
+    - match:
+        severity: warning
+      receiver: 'warning-receiver'
+
+# 接收器配置
+receivers:
+  - name: 'default-receiver'
+    email_configs:
+      - to: 'devops@true-sight.asia'
+        send_resolved: true
+        headers:
+          subject: '[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }} - {{ .CommonLabels.service }}'
+
+  - name: 'critical-receiver'
+    email_configs:
+      - to: 'oncall@true-sight.asia,pagerduty@true-sight.asia'
+        send_resolved: true
+        headers:
+          subject: '[CRITICAL] {{ .GroupLabels.alertname }}'
+    slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL}'
+        channel: '#alerts-critical'
+        send_resolved: true
+        title: '[CRITICAL] {{ .GroupLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Service:* {{ .Labels.service }}
+          *Severity:* {{ .Labels.severity }}
+          *Runbook:* {{ .Annotations.runbook_url }}
+          {{ end }}
+    pagerduty_configs:
+      - service_key: '${PAGERDUTY_SERVICE_KEY}'
+        severity: critical
+
+  - name: 'warning-receiver'
+    email_configs:
+      - to: 'devops@true-sight.asia'
+        send_resolved: true
+    slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL}'
+        channel: '#alerts-warning'
+        send_resolved: true
+        title: '[WARNING] {{ .GroupLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Service:* {{ .Labels.service }}
+          {{ end }}
+
+# 抑制规则
+inhibit_rules:
+  # 当 BFFDown 触发时，抑制所有其他告警
+  - source_match:
+      severity: 'critical'
+    target_match_re:
+      severity: 'warning'
+    source_match:
+      alertname: 'BFFDown'
+    equal: ['service']

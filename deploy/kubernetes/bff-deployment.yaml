@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mery-bff
+  namespace: mery
+  labels:
+    app: mery-bff
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mery-bff
+  template:
+    metadata:
+      labels:
+        app: mery-bff
+    spec:
+      containers:
+        - name: bff
+          image: ghcr.io/true-sight/mery-bff:latest
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: mery-config
+            - secretRef:
+                name: mery-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bff-svc
+  namespace: mery
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 3000
+  selector:
+    app: mery-bff

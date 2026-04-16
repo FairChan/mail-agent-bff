@@ -24,6 +24,7 @@ interface MailState {
   // 邮件详情
   selectedMail: TriageMailItem | null;
   isLoadingDetail: boolean;
+  mailBodyCache: Map<string, string>;
 
   // 优先级规则
   priorityRules: MailPriorityRule[];
@@ -58,6 +59,7 @@ type MailAction =
   | { type: "SET_KB_EVENTS"; payload: EventCluster[] }
   | { type: "SET_KB_PERSONS"; payload: PersonProfile[] }
   | { type: "SET_ERROR"; payload: string | null }
+  | { type: "SET_MAIL_BODY_CACHE"; payload: { messageId: string; bodyContent: string } }
   | { type: "RESET" };
 
 const initialState: MailState = {
@@ -70,6 +72,7 @@ const initialState: MailState = {
   isLoadingMail: false,
   selectedMail: null,
   isLoadingDetail: false,
+  mailBodyCache: new Map(),
   priorityRules: [],
   notificationPrefs: null,
   kbStats: null,
@@ -118,6 +121,11 @@ function mailReducer(state: MailState, action: MailAction): MailState {
       return { ...state, kbPersons: action.payload };
     case "SET_ERROR":
       return { ...state, error: action.payload };
+    case "SET_MAIL_BODY_CACHE": {
+      const newCache = new Map(state.mailBodyCache);
+      newCache.set(action.payload.messageId, action.payload.bodyContent);
+      return { ...state, mailBodyCache: newCache };
+    }
     case "RESET":
       return initialState;
     default:
@@ -162,8 +170,9 @@ interface MailContextValue extends MailState {
 
   // 状态重置
   resetMailState: () => void;
-  selectMail: (item: TriageMailItem) => void;
   clearSelectedMail: () => void;
+  setSelectedMail: (mail: TriageMailItem | null) => void;
+  prefetchMailBodies: (messageIds: string[]) => void;
 }
 
 const MailContext = createContext<MailContextValue | null>(null);
@@ -534,9 +543,30 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     dispatch({ type: "SET_SELECTED_MAIL", payload: null });
   }, []);
 
-  const selectMail = useCallback((item: TriageMailItem) => {
-    dispatch({ type: "SET_SELECTED_MAIL", payload: item });
+  const setSelectedMail = useCallback((mail: TriageMailItem | null) => {
+    dispatch({ type: "SET_SELECTED_MAIL", payload: mail });
   }, []);
+
+  // ========== 预加载邮件内容 ==========
+
+  const prefetchMailBodies = useCallback((messageIds: string[]) => {
+    // 过滤掉已经在缓存中的 ID
+    const uncachedIds = messageIds.filter((id) => !state.mailBodyCache.has(id));
+
+    // 并行预取前 5 个邮件的内容
+    uncachedIds.slice(0, 5).forEach((messageId) => {
+      fetchMailDetail(messageId).then((result) => {
+        if (result?.bodyContent) {
+          dispatch({
+            type: "SET_MAIL_BODY_CACHE",
+            payload: { messageId, bodyContent: result.bodyContent },
+          });
+        }
+      }).catch(() => {
+        // 静默忽略错误
+      });
+    });
+  }, [state.mailBodyCache, fetchMailDetail]);
 
   // ========== 自动加载数据 ==========
 
@@ -575,8 +605,9 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     fetchKbPersons,
     triggerSummarize,
     resetMailState,
-    selectMail,
     clearSelectedMail,
+    setSelectedMail,
+    prefetchMailBodies,
   };
 
   return <MailContext.Provider value={value}>{children}</MailContext.Provider>;

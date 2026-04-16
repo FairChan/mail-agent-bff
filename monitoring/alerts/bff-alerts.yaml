@@ -1,0 +1,111 @@
+# BFF 告警规则
+groups:
+  - name: bff_alerts
+    rules:
+      # HTTP 请求错误率
+      - alert: HighHTTPErrorRate
+        expr: |
+          rate(bff_operations_errors_total_total[5m]) /
+          rate(bff_operations_total_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          service: mery-bff
+        annotations:
+          summary: "High HTTP error rate detected"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 5%) for more than 5 minutes."
+          runbook_url: "https://wiki.true-sight.asia/runbooks/high-http-errors"
+
+      # 服务响应时间过长
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95,
+            rate(bff_operations_avg_duration_ms_bucket[5m])
+          ) > 1000
+        for: 5m
+        labels:
+          severity: warning
+          service: mery-bff
+        annotations:
+          summary: "High service latency"
+          description: "P95 latency is {{ $value | humanizeDuration }} (threshold: 1s)."
+          runbook_url: "https://wiki.true-sight.asia/runbooks/high-latency"
+
+      # 认证失败率过高
+      - alert: HighAuthFailureRate
+        expr: |
+          rate(bff_operations_errors_total{operation="auth.login"}[5m]) /
+          rate(bff_operations_total{operation="auth.login"}[5m]) > 0.2
+        for: 2m
+        labels:
+          severity: warning
+          service: mery-bff
+        annotations:
+          summary: "High authentication failure rate"
+          description: "Auth failure rate is {{ $value | humanizePercentage }} (possible brute force attack)."
+          runbook_url: "https://wiki.true-sight.asia/runbooks/auth-failures"
+
+      # 服务不可用
+      - alert: BFFDown
+        expr: |
+          up{job="mery-bff"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: mery-bff
+        annotations:
+          summary: "BFF service is down"
+          description: "BFF instance {{ $labels.instance }} has been down for more than 1 minute."
+          runbook_url: "https://wiki.true-sight.asia/runbooks/service-down"
+
+      # 内存使用率过高
+      - alert: HighMemoryUsage
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          service: mery-bff
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is {{ $value | humanizePercentage }} (threshold: 90%)."
+          runbook_url: "https://wiki.true-sight.asia/runbooks/high-memory"
+
+      # CPU 使用率过高
+      - alert: HighCPUUsage
+        expr: |
+          100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 10m
+        labels:
+          severity: warning
+          service: mery-bff
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is {{ $value | humanizePercentage }} (threshold: 90%)."
+          runbook_url: "https://wiki.true-sight.asia/runbooks/high-cpu"
+
+      # 磁盘空间不足
+      - alert: LowDiskSpace
+        expr: |
+          (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) < 0.1
+        for: 5m
+        labels:
+          severity: critical
+          service: mery-bff
+        annotations:
+          summary: "Low disk space"
+          description: "Disk space available is {{ $value | humanizePercentage }}."
+          runbook_url: "https://wiki.true-sight.asia/runbooks/low-disk"
+
+      # 进程重启次数过多
+      - alert: HighProcessRestarts
+        expr: |
+          increase(process_restart_count[1h]) > 5
+        for: 0m
+        labels:
+          severity: warning
+          service: mery-bff
+        annotations:
+          summary: "High number of process restarts"
+          description: "Process has restarted {{ $value }} times in the last hour."
+          runbook_url: "https://wiki.true-sight.asia/runbooks/process-restarts"

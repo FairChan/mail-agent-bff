@@ -1,0 +1,21 @@
+# Webhook URL Configuration
+# Generated: 2026-04-07 (placeholder — update after running setup-ngrok-tunnel.sh)
+# Tool: ngrok
+# Local target: http://127.0.0.1:8787
+#
+# Run: bash scripts/setup-ngrok-tunnel.sh start
+#
+# Configuration status:
+# - ngrok: PENDING (run --install first, then --start)
+# - BFF webhook routes: READY (apps/bff/src/server.ts)
+# - OpenClaw hooks: READY (hooks/mail-event-handler.md)
+# - Composio trigger: PENDING (register URL in Composio dashboard)
+# - MS Graph subscription: PENDING (register URL in Azure AD app)
+#
+# After running setup-ngrok-tunnel.sh, this file will be auto-updated with:
+PUBLIC_WEBHOOK_BASE=https://PENDING.ngrok-free.app
+# Then use these endpoints:
+# Composio trigger: https://PENDING.ngrok-free.app/api/webhook/mail-event
+# MS Graph sub:     https://PENDING.ngrok-free.app/api/webhook/outlook-subscription
+# Subscribe:       https://PENDING.ngrok-free.app/api/webhook/subscribe
+# Status:          https://PENDING.ngrok-free.app/api/webhook/public-url

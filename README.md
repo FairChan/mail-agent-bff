@@ -124,6 +124,7 @@ The Gateway token is operator-grade credential and should not be exposed to brow
   - When all items fail, returns non-200 (`502`) with `ok=false`
 
 Auth flow:
+
 - `POST /api/auth/register` creates account and issues an HttpOnly session cookie.
   - user profile now includes `locale` (`zh-CN/en-US/ja-JP`), initialized from request locale hints.
 - `POST /api/auth/login` supports account login (`email + password + remember`) and legacy api-key login (compatibility mode).
@@ -143,42 +144,41 @@ Auth flow:
 npm install
 ```
 
-2. Create env files
+1. Create env files
 
 ```bash
 cp apps/bff/.env.example apps/bff/.env
 cp apps/webui/.env.example apps/webui/.env
 ```
 
-3. Fill `apps/bff/.env` with your real `OPENCLAW_GATEWAY_BEARER` and keep a strong `BFF_API_KEY` (legacy compatibility mode)
-   - If deployed behind reverse proxy, set `TRUST_PROXY` to hop count (for example `1`) or proxy CIDR list; avoid `true` on internet-facing deployments.
-   - Optional: set `COMPOSIO_PLATFORM_URL` to your workspace/project page (used as OAuth fallback open target)
-   - Optional persistent auth store:
-     - `PRISMA_AUTH_ENABLED=true`
-     - `DATABASE_URL=postgresql://...`
-     - generate client: `npx prisma generate --schema apps/bff/prisma/schema.prisma`
-     - apply schema: `npx prisma migrate deploy --schema apps/bff/prisma/schema.prisma`
-     - when enabled, startup is fail-closed: invalid/unreachable DB will fail service startup instead of silently falling back to in-memory auth
-   - Optional persistent auth sessions (survive BFF restart):
-     - `REDIS_AUTH_SESSIONS_ENABLED=true`
-     - `REDIS_URL=redis://127.0.0.1:6379`
-     - `REDIS_KEY_PREFIX=true_sight:bff`
-     - `REDIS_CONNECT_TIMEOUT_MS=3000`
-
-4. Start BFF
+1. Fill `apps/bff/.env` with your real `OPENCLAW_GATEWAY_BEARER` and keep a strong `BFF_API_KEY` (legacy compatibility mode)
+  - If deployed behind reverse proxy, set `TRUST_PROXY` to hop count (for example `1`) or proxy CIDR list; avoid `true` on internet-facing deployments.
+  - Optional: set `COMPOSIO_PLATFORM_URL` to your workspace/project page (used as OAuth fallback open target)
+  - Optional persistent auth store:
+    - `PRISMA_AUTH_ENABLED=true`
+    - `DATABASE_URL=postgresql://...`
+    - generate client: `npx prisma generate --schema apps/bff/prisma/schema.prisma`
+    - apply schema: `npx prisma migrate deploy --schema apps/bff/prisma/schema.prisma`
+    - when enabled, startup is fail-closed: invalid/unreachable DB will fail service startup instead of silently falling back to in-memory auth
+  - Optional persistent auth sessions (survive BFF restart):
+    - `REDIS_AUTH_SESSIONS_ENABLED=true`
+    - `REDIS_URL=redis://127.0.0.1:6379`
+    - `REDIS_KEY_PREFIX=true_sight:bff`
+    - `REDIS_CONNECT_TIMEOUT_MS=3000`
+2. Start BFF
 
 ```bash
 npm run dev:bff
 ```
 
-5. Start WebUI in another terminal
+1. Start WebUI in another terminal
 
 ```bash
 npm run dev:web
 ```
 
-6. Open `http://127.0.0.1:5173`
-7. In WebUI, register a new account or login with existing email/password
+1. Open `http://127.0.0.1:5173`
+2. In WebUI, register a new account or login with existing email/password
 
 ## Server deployment (current production shape)
 
@@ -302,3 +302,4 @@ npm run dev:web
 - Add rate limits on `/api/gateway/tools/invoke` and `/api/agent/query`.
 - Persist audit logs for tool calls (caller, tool name, timestamp, outcome).
 - Put BFF behind a trusted reverse proxy (TLS + IP controls + WAF as needed).
+

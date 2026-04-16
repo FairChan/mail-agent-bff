@@ -1,0 +1,28 @@
+version: "3.8"
+
+# 本地开发覆盖配置
+# 使用: docker-compose up -d
+
+services:
+  bff:
+    build:
+      # 开发模式：直接从源文件运行
+      target: builder
+    command: ["npx", "tsx", "watch", "src/server.ts"]
+    volumes:
+      - ../../apps/bff/src:/app/src:ro
+      - ../../apps/bff/prisma:/app/prisma:ro
+    environment:
+      - NODE_ENV=development
+      - LOG_LEVEL=debug
+      - DEBUG=*
+
+  webui:
+    build:
+      # 开发模式：使用 Vite 开发服务器
+      target: builder
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+    volumes:
+      - ../../apps/webui/src:/app/src:ro
+    environment:
+      - VITE_API_URL=http://localhost:3000

@@ -1,0 +1,34 @@
+# Prometheus 配置
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - 'alertmanager:9093'
+
+rule_files:
+  - '/etc/prometheus/rules/*.yaml'
+
+scrape_configs:
+  # BFF 服务
+  - job_name: 'mery-bff'
+    static_configs:
+      - targets: ['bff.true-sight.asia:3000']
+    metrics_path: '/api/metrics/prometheus'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+
+  # WebUI
+  - job_name: 'mery-webui'
+    static_configs:
+      - targets: ['webui.true-sight.asia:80']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Node Exporter (系统指标)
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
