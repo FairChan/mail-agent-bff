@@ -29,7 +29,7 @@ import { authMessages, type AuthLocale, type AuthMode } from "./types";
 
 // ========== API 客户端 ==========
 
-const API_BASE = import.meta.env.VITE_BFF_BASE_URL ?? "/api";
+const API_BASE = (import.meta.env.VITE_BFF_BASE_URL ?? "/api").trim().replace(/\/+$/, "");
 
 async function apiFetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${endpoint}`, {
@@ -378,9 +378,9 @@ export function App() {
     <ErrorBoundary>
       <ThemeProvider>
         <AppProvider>
-          <AuthProvider>
-            <MailProvider>
-              <AppContent />
+          <AuthProvider apiBase={API_BASE}>
+            <MailProvider apiBase={API_BASE}>
+                <AppContent />
             </MailProvider>
           </AuthProvider>
         </AppProvider>

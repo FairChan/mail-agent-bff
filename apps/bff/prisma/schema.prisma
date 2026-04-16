@@ -56,11 +56,6 @@ model MailSource {
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt
   priorityRules      PriorityRule[]
-  agentThreads       AgentThread[]
-  agentMessages      AgentMessage[]
-  agentMemories      AgentMemory[]
-  llmRoutes          LlmRoute[]
-  llmUsages          LlmUsage[]
   mailSummaries      MailSummary[]
   mailEvents         MailEvent[]
   senderProfiles     SenderProfile[]
@@ -92,7 +87,6 @@ model AgentThread {
   userId    String
   user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   sourceId  String
-  source    MailSource     @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   title     String?
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
@@ -108,7 +102,6 @@ model AgentMessage {
   userId    String
   user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   sourceId  String
-  source    MailSource  @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   role      String
   content   String      @db.Text
   createdAt DateTime    @default(now())
@@ -122,7 +115,6 @@ model AgentMemory {
   userId    String
   user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   sourceId  String
-  source    MailSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   key       String
   value     String     @db.Text
   createdAt DateTime   @default(now())
@@ -137,7 +129,6 @@ model LlmRoute {
   userId    String?
   user      User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
   sourceId  String?
-  source    MailSource? @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   name      String
   provider  String
   baseUrl   String
@@ -154,7 +145,6 @@ model LlmUsage {
   userId       String
   user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   sourceId     String
-  source       MailSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   routeId      String?
   model        String
   inputTokens  Int?

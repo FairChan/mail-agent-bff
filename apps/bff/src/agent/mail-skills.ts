@@ -63,6 +63,10 @@ export type MailToolOptions = {
   logger: FastifyBaseLogger;
 };
 
+function defineMailTool(config: any) {
+  return createTool(config) as any;
+}
+
 function truncateText(value: string, maxChars: number): string {
   if (value.length <= maxChars) {
     return value;
@@ -81,7 +85,7 @@ export async function createMailAssistantTools(
 ): Promise<ToolsInput> {
   const priorityRules = options.priorityRules ?? [];
   const tools: ToolsInput = {
-    searchMail: createTool({
+    searchMail: defineMailTool({
       id: "searchMail",
       description:
         "Answer questions by searching recent mail in the current user's selected mailbox. Always use this before answering mail-specific questions.",
@@ -90,7 +94,7 @@ export async function createMailAssistantTools(
         limit: z.number().int().min(5).max(100).optional(),
         horizonDays: z.number().int().min(1).max(30).optional(),
       }),
-      execute: async ({ query, limit, horizonDays }) =>
+      execute: async ({ query, limit, horizonDays }: any) =>
         answerMailQuestion({
           question: query,
           limit: limit ?? 40,
@@ -100,14 +104,14 @@ export async function createMailAssistantTools(
           sourceContext: tenant,
         }),
     }),
-    getMailDetail: createTool({
+    getMailDetail: defineMailTool({
       id: "getMailDetail",
       description:
         "Fetch one mail message by id from the current user's selected mailbox. The returned body is truncated to reduce private data exposure.",
       inputSchema: z.object({
         messageId: z.string().trim().min(1).max(512),
       }),
-      execute: async ({ messageId }) => {
+      execute: async ({ messageId }: any) => {
         const detail = await getMailMessageById(messageId, tenant);
         return {
           ...detail,
@@ -115,14 +119,14 @@ export async function createMailAssistantTools(
         };
       },
     }),
-    summarizeInbox: createTool({
+    summarizeInbox: defineMailTool({
       id: "summarizeInbox",
       description: "Build a concise digest of the current user's selected inbox.",
       inputSchema: z.object({
         limit: z.number().int().min(5).max(100).optional(),
         horizonDays: z.number().int().min(1).max(30).optional(),
       }),
-      execute: async ({ limit, horizonDays }) => {
+      execute: async ({ limit, horizonDays }: any) => {
         const insights = await buildMailInsights(
           limit ?? 40,
           horizonDays ?? 14,
@@ -141,7 +145,7 @@ export async function createMailAssistantTools(
         };
       },
     }),
-    extractEvents: createTool({
+    extractEvents: defineMailTool({
       id: "extractEvents",
       description: "Extract dated event signals from current user's selected mailbox.",
       inputSchema: z.object({
@@ -149,7 +153,7 @@ export async function createMailAssistantTools(
         horizonDays: z.number().int().min(1).max(30).optional(),
         type: insightTypeSchema.optional(),
       }),
-      execute: async ({ limit, horizonDays, type }) => {
+      execute: async ({ limit, horizonDays, type }: any) => {
         const insights = await buildMailInsights(
           limit ?? 60,
           horizonDays ?? 21,
@@ -170,7 +174,7 @@ export async function createMailAssistantTools(
         };
       },
     }),
-    syncCalendar: createTool({
+    syncCalendar: defineMailTool({
       id: "syncCalendar",
       description:
         "Create an Outlook calendar event for the current user's selected mailbox. Use only after extracting an event and confirming the message id.",
@@ -183,7 +187,7 @@ export async function createMailAssistantTools(
         evidence: z.string().trim().max(500).optional(),
         timeZone: z.string().trim().max(80).optional(),
       }),
-      execute: async (input) => {
+      execute: async (input: any) => {
         if (!tenant.connectedAccountId) {
           return {
             ok: false,
@@ -206,7 +210,7 @@ export async function createMailAssistantTools(
         };
       },
     }),
-    rememberPreference: createTool({
+    rememberPreference: defineMailTool({
       id: "rememberPreference",
       description:
         "Store a lightweight preference scoped to the current user and mailbox source. Never store full mail bodies, provider keys, or tokens.",
@@ -214,7 +218,7 @@ export async function createMailAssistantTools(
         key: z.string().trim().min(1).max(120),
         value: z.string().trim().min(1).max(1200),
       }),
-      execute: async ({ key, value }) => {
+      execute: async ({ key, value }: any) => {
         if (tenant.isLegacySession || tenant.userId.startsWith("legacy:")) {
           return {
             ok: false,

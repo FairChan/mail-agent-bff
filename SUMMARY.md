@@ -292,3 +292,10 @@ triggerMailSummary()
 - Added scripts/ensure-local-postgres.ps1 and root npm db:* commands so local development can bootstrap a portable PostgreSQL instance from apps/bff/.env without depending on Docker Desktop or a system PostgreSQL service.
 - Verified the portable PostgreSQL instance on 127.0.0.1:5432, created the true_sight database, applied Prisma migrations with prisma migrate deploy, and confirmed prisma migrate status now reports the schema is up to date.
 - Removed the OpenClaw fallback restriction that only allowed default_outlook. Legacy fallback calls remain tenant-scoped by userId/sourceId and sessionToken/sourceId so non-default mailbox sources can use the same privacy boundary.
+
+### 2026-04-16T22:25:00+08:00
+
+- Fixed WebUI API base normalization in apps/webui/src/App.tsx: VITE_BFF_BASE_URL is now trimmed, trailing slashes are removed, and the same API_BASE is passed into AuthProvider, MailProvider, and AgentChatPanel so auth/mail/agent requests stop drifting between env-based URLs and hardcoded /api.
+- Added virtual default source support for the agent persistence path. AgentThread, AgentMessage, AgentMemory, LlmRoute, and LlmUsage keep sourceId for tenant isolation but no longer require a MailSource FK, and migration 202604162220_virtual_default_source_support is applied locally.
+- Simplified createTool typing in apps/bff/src/agent/mail-skills.ts to avoid TypeScript deep instantiation failures while keeping runtime behavior unchanged.
+- Local delivery testing: portable PostgreSQL is running, Prisma migrate deploy/status succeeded, local registration -> dashboard flow works, AgentChatPanel requests now reach POST /api/agent/chat and always exit busy state. Current remaining runtime blocker is upstream LLM connectivity to api.siliconflow.cn timing out, plus dashboard triage/insights still depend on the legacy OpenClaw gateway bearer path.
