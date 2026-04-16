@@ -7,8 +7,8 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import argon2 from "argon2";
+import type { AiSummaryLocale } from "@mail-agent/shared-types";
 import type { AuthUserRecord, AuthUserView } from "../types/auth.js";
-import type { AiSummaryLocale } from "../../../../packages/shared-types/src/index.js";
 
 export type AuthDeps = {
   prismaAuthStore: unknown;
@@ -98,6 +98,13 @@ function timingSafeEqualStr(a: string, b: string): boolean {
 }
 
 export function registerAuthRoutes(server: FastifyInstance, deps: AuthDeps) {
+  function cookieAwareReply(reply: FastifyReply) {
+    return reply as FastifyReply & {
+      clearCookie: (name: string) => FastifyReply;
+      setCookie: (name: string, value: string, options: Record<string, unknown>) => FastifyReply;
+    };
+  }
+
   // 解析认证 token
   async function resolveAuthToken(request: FastifyRequest): Promise<string | null> {
     const apiKey = request.headers["x-api-key"] as string | undefined;
@@ -108,7 +115,7 @@ export function registerAuthRoutes(server: FastifyInstance, deps: AuthDeps) {
     }
 
     const cookieToken = deps.sessionCookieName
-      ? request.cookies[deps.sessionCookieName]
+      ? (request as FastifyRequest & { cookies?: Record<string, string | undefined> }).cookies?.[deps.sessionCookieName]
       : undefined;
     if (cookieToken) {
       const userId = deps.authSessionUserByToken.get(cookieToken);
@@ -152,7 +159,7 @@ export function registerAuthRoutes(server: FastifyInstance, deps: AuthDeps) {
         deps.authSessionUserByToken.delete(token);
         deps.authSessionUserViewByToken.delete(token);
         deps.sessionTtlMsByToken.delete(token);
-        reply.clearCookie(deps.sessionCookieName);
+        cookieAwareReply(reply).clearCookie(deps.sessionCookieName);
         return { ok: true, authenticated: false };
       }
 
@@ -372,7 +379,7 @@ export function registerAuthRoutes(server: FastifyInstance, deps: AuthDeps) {
     deps.sessions.set(token, ttl);
     deps.sessionsByIp.get(request.ip)?.add(token);
 
-    reply.setCookie(deps.sessionCookieName, token, {
+    cookieAwareReply(reply).setCookie(deps.sessionCookieName, token, {
       path: "/",
       httpOnly: true,
       sameSite: "strict",
@@ -484,7 +491,7 @@ export function registerAuthRoutes(server: FastifyInstance, deps: AuthDeps) {
     deps.sessionsByIp.get(ip)!.add(token);
 
     const cookieMaxAge = Math.floor((ttl - Date.now()) / 1000);
-    reply.setCookie(deps.sessionCookieName, token, {
+    cookieAwareReply(reply).setCookie(deps.sessionCookieName, token, {
       path: "/",
       httpOnly: true,
       sameSite: "strict",
@@ -509,7 +516,7 @@ export function registerAuthRoutes(server: FastifyInstance, deps: AuthDeps) {
         const ip = request.ip;
         deps.sessionsByIp.get(ip)?.delete(token);
       }
-      reply.clearCookie(deps.sessionCookieName);
+      cookieAwareReply(reply).clearCookie(deps.sessionCookieName);
     }
 
     return { ok: true };

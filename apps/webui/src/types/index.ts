@@ -8,6 +8,7 @@
  */
 
 import { z } from "zod";
+import type { AuthLocale } from "@mail-agent/shared-types";
 
 // Re-export shared types
 export type {

@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "danger-rm-rf",
+      "scope": "command",
+      "severity": "error",
+      "regex": "\\brm\\s+(?:-[a-z]*r[a-z]*f[a-z]*|-[a-z]*f[a-z]*r[a-z]*|-r\\s+-f|-f\\s+-r)\\b",
+      "flags": "i",
+      "message": "Refuse destructive recursive delete unless it is explicitly approved and scoped.",
+      "allowTag": "@allow-danger-rm-rf"
+    },
+    {
+      "id": "danger-force-push",
+      "scope": "command",
+      "severity": "error",
+      "regex": "\\bgit\\s+push\\b[^\\n]*(--force|-f|--force-with-lease)",
+      "message": "Force-push is an external destructive action and needs explicit human approval.",
+      "allowTag": "@allow-force-push"
+    },
+    {
+      "id": "danger-db-drop",
+      "scope": "command",
+      "severity": "error",
+      "regex": "\\b(drop\\s+table|drop\\s+database|truncate\\s+table)\\b",
+      "flags": "i",
+      "message": "Destructive database commands are denied by default.",
+      "allowTag": "@allow-destructive-db"
+    },
+    {
+      "id": "no-direct-env-write",
+      "scope": "command",
+      "severity": "error",
+      "regex": "(>|tee|sed\\s+-i|perl\\s+-pi)[^\\n]*(\\.env|\\.env\\.)",
+      "message": "Do not write env files from automated commands unless the user explicitly approves.",
+      "allowTag": "@allow-env-write"
+    },
+    {
+      "id": "zod-safe-parse",
+      "scope": "source",
+      "severity": "warn",
+      "fileGlobs": [
+        "apps/bff/src/**/*.ts",
+        "apps/webui/src/**/*.ts",
+        "apps/webui/src/**/*.tsx"
+      ],
+      "regex": "(?<!JSON)\\.parse\\(",
+      "antiRegex": "\\.safeParse\\(",
+      "message": "Prefer safeParse at API and UI boundaries so validation errors are handled explicitly.",
+      "allowTag": "@allow-zod-parse"
+    },
+    {
+      "id": "no-get-side-effect",
+      "scope": "source",
+      "severity": "warn",
+      "fileGlobs": [
+        "apps/bff/src/**/*.ts"
+      ],
+      "regex": "server\\.get\\([^\\n]*=>[^\\n]*(create|update|delete|insert|remove|send|sync|mark|move|write)\\(",
+      "flags": "i",
+      "message": "GET routes must not perform same-line side effects; use a route-body detector before upgrading this rule.",
+      "allowTag": "@allow-get-side-effect"
+    },
+    {
+      "id": "no-existence-leak",
+      "scope": "source",
+      "severity": "warn",
+      "fileGlobs": [
+        "apps/bff/src/**/*.ts"
+      ],
+      "regex": "\\bexists\\s*:\\s*(true|false|[A-Za-z0-9_]+)",
+      "message": "Public API responses should not leak object existence with bare exists booleans.",
+      "allowTag": "@allow-existence-leak"
+    }
+  ]
+}

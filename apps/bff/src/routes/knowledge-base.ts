@@ -11,7 +11,7 @@ import type {
   PersonProfile,
   MailScoreIndex,
   KnowledgeBaseStats,
-} from "../../../../packages/shared-types/src/index.js";
+} from "@mail-agent/shared-types";
 
 export type KnowledgeBaseDeps = {
   sessionTokenForRequest: (request: FastifyRequest) => string | null;

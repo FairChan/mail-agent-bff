@@ -6,6 +6,7 @@ import cors from "@fastify/cors";
 import { z } from "zod";
 import { env } from "./config.js";
 import { GatewayHttpError, invokeTool, queryAgent } from "./gateway.js";
+import { initComposioClient } from "./composio-service.js";
 import { getPrismaClient, isPrismaUniqueConstraintError } from "./persistence.js";
 import { createRedisAuthSessionStore } from "./redis-session-store.js";
 import {
@@ -22,8 +23,16 @@ import {
   type MailPriorityRule,
   triageInbox,
 } from "./mail.js";
+import { createAgentRuntime } from "./runtime/agent-runtime.js";
 
 const server = Fastify({ logger: true, trustProxy: env.trustProxy });
+if (env.composioApiKey && env.composioMcpUrl) {
+  initComposioClient({
+    apiKey: env.composioApiKey,
+    mcpUrl: env.composioMcpUrl,
+  });
+}
+const agentRuntime = createAgentRuntime();
 const sessions = new Map<string, number>();
 const loginAttempts = new Map<string, { count: number; windowStart: number }>();
 const batchRouteAttempts = new Map<string, { count: number; windowStart: number }>();
@@ -467,6 +476,17 @@ function getAuthUserBySessionToken(sessionToken: string | null): AuthUserRecord 
   }
 
   return authUsersById.get(userId) ?? null;
+}
+
+function runtimeUserIdForSession(sessionToken: string | null): string {
+  const authUser = getAuthUserBySessionToken(sessionToken);
+  if (authUser) {
+    return authUser.id;
+  }
+  if (!sessionToken) {
+    return "anonymous";
+  }
+  return `session:${sessionToken.slice(0, 16)}`;
 }
 
 function hydrateAuthUserCache(user: AuthUserRecord) {
@@ -3547,6 +3567,10 @@ const querySchema = z.object({
   message: z.string().min(1),
   user: z.string().min(1).optional(),
   sessionKey: z.string().min(1).optional(),
+  sourceId: z.string().trim().min(3).max(80).optional(),
+  horizonDays: z.number().int().min(1).max(30).optional(),
+  tz: z.string().trim().min(1).max(80).optional(),
+  requestedSkillIds: z.array(z.string().trim().min(1)).max(8).optional(),
 });
 
 const sourceIdSchema = z
@@ -3574,6 +3598,18 @@ const mailQuestionSchema = z.object({
     .refine((value) => value === undefined || isValidIanaTimeZone(value), {
       message: "Invalid IANA time zone",
     }),
+});
+
+const agentMemoryQuerySchema = z.object({
+  sourceId: sourceIdOptionalSchema,
+  limit: z.coerce.number().int().min(1).max(20).optional(),
+});
+
+const agentRememberSchema = z.object({
+  note: z.string().trim().min(1).max(1200),
+  kind: z.enum(["fact", "preference"]).optional(),
+  sourceId: sourceIdOptionalSchema,
+  tags: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
 });
 
 const priorityRuleFieldSchema = z.enum(["from", "subject", "body", "any"]);
@@ -4037,6 +4073,26 @@ server.get("/live", async () => {
 
 async function readinessProbe() {
   const startedAt = Date.now();
+
+  if (!env.openClawGatewayBearer) {
+    const siliconFlowConfigured = env.siliconFlowApiKey.length > 0;
+    const composioConfigured = env.composioApiKey.length > 0 && env.composioMcpUrl.length > 0;
+    const ready = siliconFlowConfigured && composioConfigured;
+
+    return {
+      statusCode: ready ? 200 : 503,
+      payload: {
+        ok: ready,
+        service: "mail-agent-bff",
+        latencyMs: Date.now() - startedAt,
+        runtime: {
+          mode: "direct",
+          siliconFlow: { ok: siliconFlowConfigured },
+          composio: { ok: composioConfigured },
+        },
+      },
+    };
+  }
 
   try {
     await invokeTool({
@@ -6790,18 +6846,27 @@ server.post("/api/mail/query", async (request, reply) => {
   }
   try {
     const sourceContext = buildMailSourceContext(sessionToken, sourceId);
-    const result = await answerMailQuestion({
+    const result = await agentRuntime.query({
+      userId: runtimeUserIdForSession(sessionToken),
+      sessionToken,
       question,
+      sourceId,
+      sourceContext,
+      timeZone: parsed.data.tz,
       limit,
       horizonDays,
-      timeZone: parsed.data.tz,
       priorityRules: getPriorityRulesSnapshotBySession(sessionToken, sourceId),
-      sourceContext,
     });
     return {
       ok: true,
       sourceId,
-      result,
+      result: {
+        answer: result.answer,
+        references: result.references,
+        usedSkills: result.usedSkills,
+        memoryHits: result.memoryHits,
+        generatedAt: result.generatedAt,
+      },
     };
   } catch (error) {
     if (error instanceof GatewayHttpError) {
@@ -7357,6 +7422,15 @@ server.post("/api/mail/calendar/delete/batch", async (request, reply) => {
 });
 
 server.post("/api/gateway/tools/invoke", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  if (!sessionToken) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+    };
+  }
+
   const parsed = invokeSchema.safeParse(request.body);
 
   if (!parsed.success) {
@@ -7419,8 +7493,42 @@ server.post("/api/agent/query", async (request, reply) => {
     };
   }
 
+  const sessionToken = getSessionTokenFromRequest(request);
+  if (!sessionToken) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+    };
+  }
+
+  const requestedSourceId =
+    parsed.data.sourceId && parsed.data.sourceId.trim().length > 0 ? parsed.data.sourceId.trim() : undefined;
+  let sourceId: string | undefined;
+  if (requestedSourceId) {
+    const resolvedSource = resolveSourceIdForSession(sessionToken, requestedSourceId);
+    if (!resolvedSource.ok) {
+      reply.status(404);
+      return {
+        ok: false,
+        error: "Mail source not found or disabled",
+      };
+    }
+    sourceId = resolvedSource.sourceId;
+  }
+
   try {
-    const result = await queryAgent(parsed.data);
+    const result = await agentRuntime.query({
+      userId: runtimeUserIdForSession(sessionToken),
+      sessionToken,
+      question: parsed.data.message,
+      ...(sourceId ? { sourceId } : {}),
+      ...(sourceId ? { sourceContext: buildMailSourceContext(sessionToken, sourceId) } : {}),
+      ...(parsed.data.tz ? { timeZone: parsed.data.tz } : {}),
+      ...(parsed.data.horizonDays ? { horizonDays: parsed.data.horizonDays } : {}),
+      ...(parsed.data.requestedSkillIds ? { requestedSkillIds: parsed.data.requestedSkillIds } : {}),
+      ...(sourceId ? { priorityRules: getPriorityRulesSnapshotBySession(sessionToken, sourceId) } : {}),
+    });
     return { ok: true, result };
   } catch (error) {
     if (error instanceof GatewayHttpError) {
@@ -7441,6 +7549,131 @@ server.post("/api/agent/query", async (request, reply) => {
 
     throw error;
   }
+});
+
+server.get("/api/agent/skills", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  if (!sessionToken) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+    };
+  }
+
+  const skills = await agentRuntime.listSkills();
+  return {
+    ok: true,
+    result: {
+      skills,
+    },
+  };
+});
+
+server.get("/api/agent/memory/recent", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  if (!sessionToken) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+    };
+  }
+
+  const parsed = agentMemoryQuerySchema.safeParse(request.query);
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid query parameters",
+      details: parsed.error.issues,
+    };
+  }
+
+  const requestedSourceId =
+    parsed.data.sourceId && parsed.data.sourceId.trim().length > 0 ? parsed.data.sourceId.trim() : undefined;
+  let sourceId: string | undefined;
+  if (requestedSourceId) {
+    const resolvedSource = resolveSourceIdForSession(sessionToken, requestedSourceId);
+    if (!resolvedSource.ok) {
+      reply.status(404);
+      return {
+        ok: false,
+        error: "Mail source not found or disabled",
+      };
+    }
+    sourceId = resolvedSource.sourceId;
+  }
+  const memory = await agentRuntime.recentMemory(
+    {
+      userId: runtimeUserIdForSession(sessionToken),
+      ...(sourceId ? { sourceId } : {}),
+    },
+    parsed.data.limit ?? 8
+  );
+
+  return {
+    ok: true,
+    result: {
+      sourceId,
+      memory,
+    },
+  };
+});
+
+server.post("/api/agent/memory", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  if (!sessionToken) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+    };
+  }
+
+  const parsed = agentRememberSchema.safeParse(request.body);
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid payload",
+      details: parsed.error.issues,
+    };
+  }
+
+  const requestedSourceId =
+    parsed.data.sourceId && parsed.data.sourceId.trim().length > 0 ? parsed.data.sourceId.trim() : undefined;
+  let sourceId: string | undefined;
+  if (requestedSourceId) {
+    const resolvedSource = resolveSourceIdForSession(sessionToken, requestedSourceId);
+    if (!resolvedSource.ok) {
+      reply.status(404);
+      return {
+        ok: false,
+        error: "Mail source not found or disabled",
+      };
+    }
+    sourceId = resolvedSource.sourceId;
+  }
+  const record = await agentRuntime.remember(
+    {
+      userId: runtimeUserIdForSession(sessionToken),
+      ...(sourceId ? { sourceId } : {}),
+    },
+    {
+      note: parsed.data.note,
+      kind: parsed.data.kind,
+      tags: parsed.data.tags,
+    }
+  );
+
+  return {
+    ok: true,
+    result: {
+      sourceId,
+      record,
+    },
+  };
 });
 
 server.addHook("onClose", async () => {

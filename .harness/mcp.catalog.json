@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "active": [
+    {
+      "name": "filesystem",
+      "package": "@modelcontextprotocol/server-filesystem",
+      "version": "2026.1.14",
+      "purpose": "Safe workspace file access for memory and Harness files.",
+      "requiresEnv": []
+    },
+    {
+      "name": "playwright",
+      "package": "@playwright/mcp",
+      "version": "0.0.70",
+      "purpose": "Browser automation for L3 smoke tests and UI inspection.",
+      "requiresEnv": []
+    },
+    {
+      "name": "openclaw-molt-mcp",
+      "package": "local-python",
+      "version": "existing",
+      "purpose": "OpenClaw local gateway/dashboard diagnostics.",
+      "requiresEnv": [
+        "OPENCLAW_GATEWAY_URL",
+        "OPENCLAW_GATEWAY_TOKEN"
+      ]
+    }
+  ],
+  "optional": [
+    {
+      "name": "inspectr",
+      "package": "@inspectr/inspectr",
+      "version": "1.8.2",
+      "purpose": "Local API mock and traffic inspection. Use `npm run harness:mock`.",
+      "requiresEnv": []
+    },
+    {
+      "name": "imap-mini",
+      "package": "@iflow-mcp/florianbuetow-imap-mini-mcp",
+      "version": "0.1.0",
+      "purpose": "Isolated IMAP sandbox for mail parsing tests.",
+      "requiresEnv": [
+        "IMAP_HOST",
+        "IMAP_PORT",
+        "IMAP_USER",
+        "IMAP_PASS"
+      ]
+    },
+    {
+      "name": "github",
+      "package": "ghcr.io/github/github-mcp-server",
+      "version": "docker-latest",
+      "purpose": "Repository and PR workflow automation.",
+      "requiresEnv": [
+        "GITHUB_PERSONAL_ACCESS_TOKEN"
+      ]
+    },
+    {
+      "name": "agentops",
+      "package": "agentops-mcp",
+      "version": "0.3.5",
+      "purpose": "Agent trace and routing observability after multi-agent workflows are active.",
+      "requiresEnv": [
+        "AGENTOPS_API_KEY"
+      ]
+    },
+    {
+      "name": "sentry",
+      "package": "@sentry/mcp-server",
+      "version": "0.32.0",
+      "purpose": "Read Sentry issues and stack traces for failure recovery.",
+      "requiresEnv": [
+        "SENTRY_ACCESS_TOKEN"
+      ]
+    }
+  ],
+  "deferred": [
+    {
+      "name": "mockloop",
+      "reason": "No verified local package was found during setup. Inspectr is the default mock layer for now."
+    }
+  ]
+}
+

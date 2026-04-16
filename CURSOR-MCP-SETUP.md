@@ -1,5 +1,10 @@
 # Cursor MCP 配置指南
 
+> Harness update: the active local config now lives in `.cursor/mcp.json`.
+> Local/no-secret additions are `filesystem` and `playwright`.
+> Credentialed or external servers are staged in `.cursor/mcp.optional.json` and should only be activated after credentials are intentionally supplied.
+> Run `npm run harness:mcp:check` after editing MCP config.
+
 ## 第一步：在 Cursor 中添加 MCP 服务器
 
 ### 1. 打开 Cursor 设置
@@ -18,8 +23,8 @@
 ```
 名称: openclaw-gateway
 类型: Command
-命令: node
-参数: /root/.openclaw/workspace/apps/bff/dist/mcp-gateway.js
+命令: npx
+参数: -y openclaw-mcp@1.3.1
 ```
 
 ### 4. 环境变量配置
@@ -28,7 +33,7 @@
 
 ```
 OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789
-OPENCLAW_GATEWAY_TOKEN=7e9bc73ebfb5e3f42d847324a9b75e94d39e24ad0eddc2ea
+OPENCLAW_GATEWAY_TOKEN=<read from your local OpenClaw config; rotate if it was ever committed>
 ```
 
 ---

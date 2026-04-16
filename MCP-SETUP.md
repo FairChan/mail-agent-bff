@@ -1,11 +1,16 @@
 # MCP 配置说明
 
+> Harness update: prefer `.cursor/mcp.json` as the active Cursor config.
+> `.cursor/mcp-servers.json` is kept compatible but now uses `openclaw-mcp@1.3.1` instead of the unpublished `openclaw-mcp-gateway`.
+> Optional credentialed servers live in `.cursor/mcp.optional.json`.
+> Run `npm run harness:mcp:check` after changes.
+
 ## 1. OpenClaw Gateway MCP 桥接
 
 ### 安装 OpenClaw MCP Server
 
 ```bash
-npm install -g @openclaw/openclaw-mcp
+npm install -g openclaw-mcp@1.3.1
 ```
 
 ### 在 Cursor 中配置
@@ -19,10 +24,10 @@ npm install -g @openclaw/openclaw-mcp
 名称: openclaw-gateway
 类型: Command
 命令: npx
-参数: -y @openclaw/openclaw-mcp
+参数: -y openclaw-mcp@1.3.1
 环境变量:
   OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789
-  OPENCLAW_GATEWAY_TOKEN=7e9bc73ebfb5e3f42d847324a9b75e94d39e24ad0eddc2ea
+  OPENCLAW_GATEWAY_TOKEN=<read from your local OpenClaw config; rotate if it was ever committed>
 ```
 
 ### 可用工具

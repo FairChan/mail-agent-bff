@@ -56,10 +56,7 @@ function readOptionalStringField(
 }
 
 export function authFriendlyMessage(error: unknown, locale: AuthLocale): string {
-  const code = readOptionalStringField(
-    error instanceof HttpError ? error.payload : null,
-    "code"
-  );
+  const code = readOptionalStringField(error instanceof HttpError ? asRecord(error.payload) : null, "code");
   const zh = locale === "zh";
   if (code === "EMAIL_ALREADY_EXISTS") {
     return zh ? "该邮箱已注册，请直接登录。" : "This email is already registered.";

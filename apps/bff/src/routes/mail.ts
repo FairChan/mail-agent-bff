@@ -50,7 +50,6 @@ export type MailDeps = {
   recordMetric: (operation: string, durationMs: number, success: boolean) => void;
   recordBatchMetric: (operation: string, count: number) => void;
   calendarSyncRecords: Map<string, { expiresAt: number; result: Awaited<ReturnType<typeof createCalendarEventFromInsight>> }>;
-  recordMetric: (operation: string, durationMs: number, success: boolean) => void;
 };
 
 const MAIL_RATE_LIMITS = {
@@ -93,10 +92,14 @@ const rateLimitMaps = {
   insights: new Map<string, { count: number; windowStart: number }>(),
   message: new Map<string, { count: number; windowStart: number }>(),
   query: new Map<string, { count: number; windowStart: number }>(),
+  inboxView: new Map<string, { count: number; windowStart: number }>(),
   priorityRulesRead: new Map<string, { count: number; windowStart: number }>(),
   priorityRulesWrite: new Map<string, { count: number; windowStart: number }>(),
   sourcesRead: new Map<string, { count: number; windowStart: number }>(),
   sourcesWrite: new Map<string, { count: number; windowStart: number }>(),
+  sourcesVerify: new Map<string, { count: number; windowStart: number }>(),
+  notificationsRead: new Map<string, { count: number; windowStart: number }>(),
+  notificationsWrite: new Map<string, { count: number; windowStart: number }>(),
   calendarSync: new Map<string, { count: number; windowStart: number }>(),
 };
 
@@ -116,17 +119,19 @@ export function registerMailRoutes(server: FastifyInstance, deps: MailDeps) {
     request: FastifyRequest,
     reply: FastifyReply,
     sessionToken: string
-  ) {
+  ): MailSourceProfile | null {
     const activeSourceId = deps.getActiveMailSourceId(sessionToken);
     if (!activeSourceId) {
       reply.status(400);
-      return reply.send({ ok: false, error: "No active mail source. Please connect Outlook first." });
+      void reply.send({ ok: false, error: "No active mail source. Please connect Outlook first." });
+      return null;
     }
 
     const profile = deps.getMailSourceProfileView(activeSourceId, sessionToken);
     if (!profile) {
       reply.status(404);
-      return reply.send({ ok: false, error: "Mail source not found" });
+      void reply.send({ ok: false, error: "Mail source not found" });
+      return null;
     }
 
     return profile;

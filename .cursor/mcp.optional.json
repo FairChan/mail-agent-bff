@@ -1,0 +1,53 @@
+{
+  "mcpServers": {
+    "github": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "ghcr.io/github/github-mcp-server"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      }
+    },
+    "imap-mini": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@iflow-mcp/florianbuetow-imap-mini-mcp@0.1.0"
+      ],
+      "env": {
+        "IMAP_HOST": "127.0.0.1",
+        "IMAP_PORT": "1143",
+        "IMAP_USER": "${IMAP_USER}",
+        "IMAP_PASS": "${IMAP_PASS}",
+        "IMAP_TLS": "false"
+      }
+    },
+    "agentops": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "agentops-mcp@0.3.5"
+      ],
+      "env": {
+        "AGENTOPS_API_KEY": "${AGENTOPS_API_KEY}"
+      }
+    },
+    "sentry": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@sentry/mcp-server@0.32.0"
+      ],
+      "env": {
+        "SENTRY_ACCESS_TOKEN": "${SENTRY_ACCESS_TOKEN}"
+      }
+    }
+  }
+}
+

@@ -136,10 +136,20 @@ function mailReducer(state: MailState, action: MailAction): MailState {
 interface MailContextValue extends MailState {
   // 邮件源操作
   fetchSources: () => Promise<void>;
-  addSource: (name: string, mailboxUserId?: string) => Promise<void>;
+  addSource: (label: string, mailboxUserId?: string, connectedAccountId?: string) => Promise<void>;
   selectSource: (sourceId: string) => Promise<void>;
   deleteSource: (sourceId: string) => Promise<void>;
   verifySource: (sourceId: string) => Promise<boolean>;
+  launchOutlookAuth: (forceReinitiate?: boolean) => Promise<{
+    status: string;
+    hasActiveConnection: boolean;
+    needsUserAction: boolean;
+    redirectUrl: string | null;
+    connectedAccountId: string | null;
+    mailboxUserIdHint: string | null;
+    sessionInstructions: string | null;
+    message: string | null;
+  }>;
 
   // 邮件操作
   fetchInbox: (limit?: number) => Promise<void>;
@@ -229,11 +239,16 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     }
   }, [apiBase]);
 
-  const addSource = useCallback(async (name: string, mailboxUserId?: string) => {
+  const addSource = useCallback(async (label: string, mailboxUserId?: string, connectedAccountId?: string) => {
     try {
       await apiFetch(`${apiBase}/mail/sources`, {
         method: "POST",
-        body: JSON.stringify({ name, mailboxUserId }),
+        body: JSON.stringify({
+          label,
+          mailboxUserId,
+          connectedAccountId,
+          provider: "outlook",
+        }),
       });
       await fetchSources();
     } catch (err) {
@@ -246,7 +261,7 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     try {
       await apiFetch(`${apiBase}/mail/sources/select`, {
         method: "POST",
-        body: JSON.stringify({ sourceId }),
+        body: JSON.stringify({ id: sourceId }),
       });
       dispatch({ type: "SET_ACTIVE_SOURCE", payload: sourceId });
     } catch (err) {
@@ -278,6 +293,32 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     } catch {
       return false;
     }
+  }, [apiBase]);
+
+  const launchOutlookAuth = useCallback(async (forceReinitiate = false) => {
+    const data = await apiFetch<{
+      ok: boolean;
+      error?: string;
+      result?: {
+        status: string;
+        hasActiveConnection: boolean;
+        needsUserAction: boolean;
+        redirectUrl: string | null;
+        connectedAccountId: string | null;
+        mailboxUserIdHint: string | null;
+        sessionInstructions: string | null;
+        message: string | null;
+      };
+    }>(`${apiBase}/mail/connections/outlook/launch-auth`, {
+      method: "POST",
+      body: JSON.stringify({ forceReinitiate }),
+    });
+
+    if (!data.ok || !data.result) {
+      throw new Error(data.error || "Failed to launch Outlook auth");
+    }
+
+    return data.result;
   }, [apiBase]);
 
   // ========== 邮件操作 ==========
@@ -587,6 +628,7 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     selectSource,
     deleteSource,
     verifySource,
+    launchOutlookAuth,
     fetchInbox,
     fetchTriage,
     fetchInsights,

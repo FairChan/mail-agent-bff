@@ -1,0 +1,22 @@
+{
+  "name": "suggesting-cursor-hooks",
+  "version": "0.1.0",
+  "description": "Suggest and draft Cursor hook automation for repeated Harness checks.",
+  "author": "local-harness",
+  "license": "MIT",
+  "keywords": [
+    "cursor",
+    "hooks",
+    "harness",
+    "verification"
+  ],
+  "security": {
+    "permissions": [
+      "filesystem.write.cursor-template"
+    ],
+    "notes": [
+      "Only writes local Cursor hook templates unless the user confirms activation."
+    ]
+  }
+}
+

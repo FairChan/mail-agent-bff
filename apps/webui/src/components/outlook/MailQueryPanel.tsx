@@ -59,7 +59,7 @@ export function MailQueryPanel({
 
       {agentAnswer ? (
         <div
-          className="mt-3 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-700 [&_p]:my-1 [&_strong]:font-semibold [&_em]:italic [&_code]:rounded bg-zinc-50 px-2 py-1 font-mono text-[11px]"
+          className="mt-3 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-700 [&_p]:my-1 [&_strong]:font-semibold [&_em]:italic [&_code]:rounded [&_code]:bg-zinc-50 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[11px]"
           dangerouslySetInnerHTML={{ __html: renderSimpleMarkdown(agentAnswer) }}
         />
       ) : null}

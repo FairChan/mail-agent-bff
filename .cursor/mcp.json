@@ -5,7 +5,7 @@
       "args": ["-y", "openclaw-mcp"],
       "env": {
         "OPENCLAW_GATEWAY_URL": "http://127.0.0.1:18789",
-        "OPENCLAW_GATEWAY_TOKEN": "7e9bc73ebfb5e3f42d847324a9b75e94d39e24ad0eddc2ea"
+        "OPENCLAW_GATEWAY_TOKEN": "${OPENCLAW_GATEWAY_TOKEN}"
       }
     },
     "openclaw-molt-mcp": {
@@ -15,7 +15,7 @@
         "PYTHONPATH": "/root/openclaw-molt-mcp/src",
         "PYTHONUNBUFFERED": "1",
         "OPENCLAW_GATEWAY_URL": "http://127.0.0.1:18789",
-        "OPENCLAW_GATEWAY_TOKEN": "7e9bc73ebfb5e3f42d847324a9b75e94d39e24ad0eddc2ea"
+        "OPENCLAW_GATEWAY_TOKEN": "${OPENCLAW_GATEWAY_TOKEN}"
       }
     },
     "openclaw-cursor-brain": {
@@ -23,9 +23,28 @@
       "args": ["/root/openclaw-cursor-brain/mcp-server/server.mjs"],
       "env": {
         "OPENCLAW_GATEWAY_URL": "http://127.0.0.1:18789",
-        "OPENCLAW_GATEWAY_TOKEN": "7e9bc73ebfb5e3f42d847324a9b75e94d39e24ad0eddc2ea",
+        "OPENCLAW_GATEWAY_TOKEN": "${OPENCLAW_GATEWAY_TOKEN}",
         "OPENCLAW_CONFIG_PATH": "/root/.openclaw/openclaw.json"
       }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem@2026.1.14",
+        "/Users/fairchan/Desktop/mail-agent-bff"
+      ]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@0.0.70",
+        "--headless",
+        "--isolated",
+        "--output-dir",
+        "/Users/fairchan/Desktop/mail-agent-bff/.harness/tmp/playwright-mcp"
+      ]
     },
     "magicui-mcp": {
       "command": "node",

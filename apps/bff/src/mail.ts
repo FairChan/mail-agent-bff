@@ -958,7 +958,7 @@ function asCreateEventFromMultiExecute(payload: ComposioMultiExecutePayload): Ou
   return parsed.data;
 }
 
-function normalizeSourceContext(sourceContext?: MailSourceContext): MailSourceContext | null {
+export function normalizeSourceContext(sourceContext?: MailSourceContext): MailSourceContext | null {
   if (!sourceContext) {
     return null;
   }
@@ -1009,7 +1009,7 @@ function withSourceAwareToolArguments(
   };
 }
 
-function composioMultiExecuteArgs(
+export function composioMultiExecuteArgs(
   tools: Array<{
     tool_slug: string;
     arguments: Record<string, unknown>;
@@ -1849,7 +1849,7 @@ function quadrantPriority(quadrant: MailQuadrant): number {
 const maxReliableOutlookInboxTop = 35;
 const outlookInboxFallbackTop = 20;
 
-async function queryInboxMessagesForSource(
+export async function queryInboxMessagesForSource(
   limit: number,
   sourceContext?: MailSourceContext
 ): Promise<OutlookMessage[]> {

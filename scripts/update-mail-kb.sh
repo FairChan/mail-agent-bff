@@ -8,7 +8,7 @@ echo "[$DATE] Starting mail knowledge base update..." >> $LOGFILE
 # 获取最近一天的邮件
 BFF_URL="http://127.0.0.1:8787"
 GATEWAY_URL="http://127.0.0.1:18789"
-GATEWAY_TOKEN="7e9bc73ebfb5e3f42d847324a9b75e94d39e24ad0eddc2ea"
+GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
 
 # 调用 BFF API 触发总结
 RESPONSE=$(curl -s -X POST "$BFF_URL/api/mail/knowledge-base/summarize" \

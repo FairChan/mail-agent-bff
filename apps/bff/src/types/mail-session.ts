@@ -2,7 +2,7 @@
  * 邮件会话状态类型
  */
 
-import type { MailPriorityRule } from "../../../../packages/shared-types/src/index.js";
+import type { MailCalendarSyncInput, MailPriorityRule } from "@mail-agent/shared-types";
 
 export type MailSourceProvider = "outlook";
 
@@ -10,7 +10,7 @@ export type MailSourceRoutingCheckStatus = "skipped" | "verified" | "failed" | "
 
 export type MailSourceRoutingCheckResult = {
   required: boolean;
-  status: MailRoutingCheckStatus;
+  status: MailSourceRoutingCheckStatus;
   verified: boolean;
   message: string;
 };
@@ -56,3 +56,5 @@ export type SessionNotificationState = {
   lastDigestDateKey: string | null;
   lastDigestSentAt: string | null;
 };
+
+export type { MailCalendarSyncInput };

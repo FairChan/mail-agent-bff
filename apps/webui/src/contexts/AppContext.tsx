@@ -4,7 +4,8 @@
  */
 
 import React, { createContext, useContext, useState, useCallback } from "react";
-import type { ViewKey, AuthLocale } from "../../../../packages/shared-types/src/index.js";
+import i18n from "i18next";
+import type { ViewKey, AuthLocale } from "@mail-agent/shared-types";
 
 interface AppState {
   currentView: ViewKey;
@@ -25,6 +26,12 @@ const AppContext = createContext<AppContextValue | null>(null);
 
 const LOCALE_STORAGE_KEY = "mail-agent-locale";
 
+function localeToI18nLanguage(locale: AuthLocale): string {
+  if (locale === "en") return "en-US";
+  if (locale === "ja") return "ja-JP";
+  return "zh-CN";
+}
+
 function getStoredLocale(): AuthLocale {
   if (typeof window === "undefined") return "zh";
   const stored = localStorage.getItem(LOCALE_STORAGE_KEY) as AuthLocale | null;
@@ -44,6 +51,7 @@ export function AppProvider({ children }: AppProviderProps) {
   const setLocale = useCallback((newLocale: AuthLocale) => {
     setLocaleState(newLocale);
     localStorage.setItem(LOCALE_STORAGE_KEY, newLocale);
+    void i18n.changeLanguage(localeToI18nLanguage(newLocale));
   }, []);
 
   const toggleSidebar = useCallback(() => {

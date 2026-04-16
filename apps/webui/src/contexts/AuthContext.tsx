@@ -7,7 +7,7 @@ import React, { createContext, useContext, useReducer, useCallback, useEffect } 
 import type {
   AuthUser,
   SessionEnvelope,
-} from "../../../../packages/shared-types/src/index.js";
+} from "@mail-agent/shared-types";
 
 // ========== 类型定义 ==========
 
@@ -145,12 +145,11 @@ export function AuthProvider({ children, apiBase = "/api" }: AuthProviderProps) 
   const register = useCallback(async (email: string, displayName: string, password: string) => {
     dispatch({ type: "AUTH_START" });
     try {
-      await apiFetch(`${apiBase}/auth/register`, {
+      const data = await apiFetch<{ user: AuthUser }>(`${apiBase}/auth/register`, {
         method: "POST",
-        body: JSON.stringify({ email, displayName, password }),
+        body: JSON.stringify({ email, username: displayName, password }),
       });
-      // 注册后自动登录
-      await login(email, password);
+      dispatch({ type: "AUTH_SUCCESS", payload: data.user });
     } catch (err) {
       dispatch({
         type: "AUTH_FAILURE",
@@ -158,7 +157,7 @@ export function AuthProvider({ children, apiBase = "/api" }: AuthProviderProps) 
       });
       throw err;
     }
-  }, [apiBase, login]);
+  }, [apiBase]);
 
   const logout = useCallback(async () => {
     try {

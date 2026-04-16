@@ -28,6 +28,7 @@ export function SettingsView() {
 
   const [newSourceLabel, setNewSourceLabel] = useState("");
   const [newMailboxUserId, setNewMailboxUserId] = useState("");
+  const [newConnectedAccountId, setNewConnectedAccountId] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [authInfo, setAuthInfo] = useState<string | null>(null);
@@ -49,8 +50,15 @@ export function SettingsView() {
     try {
       const result = await launchOutlookAuth(false);
 
+      if (result.mailboxUserIdHint) {
+        setNewMailboxUserId(result.mailboxUserIdHint);
+      }
+      if (result.connectedAccountId) {
+        setNewConnectedAccountId(result.connectedAccountId);
+      }
+
       if (result.hasActiveConnection) {
-        setAuthInfo("Outlook 已通过 Composio 连接，无需重复授权。");
+        setAuthInfo("Outlook 已通过 Composio 连接，已帮你预填授权信息。");
         await fetchSources();
         return;
       }
@@ -89,16 +97,22 @@ export function SettingsView() {
     setSourceError(null);
 
     try {
-      await addSource(newSourceLabel, newMailboxUserId || undefined);
+      if (!newMailboxUserId.trim() || !newConnectedAccountId.trim()) {
+        setSourceError("手动添加需要同时填写 mailboxUserId 和 connectedAccountId");
+        return;
+      }
+
+      await addSource(newSourceLabel, newMailboxUserId || undefined, newConnectedAccountId || undefined);
       setSourceInfo("数据源添加成功");
       setNewSourceLabel("");
       setNewMailboxUserId("");
+      setNewConnectedAccountId("");
     } catch (err) {
       setSourceError(err instanceof Error ? err.message : "添加失败");
     } finally {
       setIsCreating(false);
     }
-  }, [newSourceLabel, newMailboxUserId, addSource]);
+  }, [newSourceLabel, newMailboxUserId, newConnectedAccountId, addSource]);
 
   const handleSelectSource = useCallback(async (sourceId: string) => {
     try {
@@ -321,12 +335,19 @@ export function SettingsView() {
             type="text"
             value={newMailboxUserId}
             onChange={(e) => setNewMailboxUserId(e.target.value)}
-            placeholder="邮箱地址（可选）"
+            placeholder="mailboxUserId（例如邮箱地址）"
+            className="h-10 rounded-lg border border-zinc-300 px-3 text-sm outline-none transition focus:border-zinc-900 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100"
+          />
+          <input
+            type="text"
+            value={newConnectedAccountId}
+            onChange={(e) => setNewConnectedAccountId(e.target.value)}
+            placeholder="connectedAccountId（Composio 授权后获得）"
             className="h-10 rounded-lg border border-zinc-300 px-3 text-sm outline-none transition focus:border-zinc-900 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100"
           />
           <button
             onClick={handleAddSource}
-            disabled={isCreating || !newSourceLabel.trim()}
+            disabled={isCreating || !newSourceLabel.trim() || !newMailboxUserId.trim() || !newConnectedAccountId.trim()}
             className="inline-flex h-10 items-center justify-center rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-700"
           >
             {isCreating ? <LoadingSpinner size="sm" /> : "添加并验证"}
