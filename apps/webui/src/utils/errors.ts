@@ -64,11 +64,17 @@ export function authFriendlyMessage(error: unknown, locale: AuthLocale): string 
   if (code === "INVALID_CREDENTIALS" || code === "UNAUTHORIZED") {
     return zh ? "邮箱或密码错误。" : "Invalid email or password.";
   }
-  if (code === "INVALID_VERIFICATION") {
+  if (code === "INVALID_VERIFICATION_CODE" || code === "INVALID_VERIFICATION") {
     return zh ? "验证码错误，请检查后重试。" : "Incorrect verification code. Please check and try again.";
   }
-  if (code === "VERIFICATION_EXPIRED") {
+  if (code === "VERIFICATION_CODE_EXPIRED" || code === "VERIFICATION_EXPIRED") {
     return zh ? "验证码已过期，请重新注册。" : "Verification code expired. Please register again.";
+  }
+  if (code === "VERIFICATION_NOT_FOUND") {
+    return zh ? "没有找到待验证注册，请重新注册。" : "No pending registration was found. Please register again.";
+  }
+  if (code === "VERIFICATION_SEND_FAILED") {
+    return zh ? "验证码邮件发送失败，请检查邮件配置后重试。" : "Failed to send verification email. Check email settings and try again.";
   }
   if (code === "RATE_LIMITED") {
     return zh ? "请求过于频繁，请稍后重试。" : "Too many attempts. Please try again later.";

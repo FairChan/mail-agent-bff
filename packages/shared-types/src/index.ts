@@ -258,14 +258,18 @@ export type AuthLoginEnvelope = {
 };
 
 export type AuthRegisterEnvelope = {
-  pending: boolean;
-  message: string;
-  expiresInSeconds?: number;
+  pending: true;
+  email: string;
+  expiresInSeconds: number;
+  resendAvailableInSeconds: number;
+  delivery?: "sent" | "logged";
 };
 
 export type AuthVerifyEnvelope = {
   user: AuthUser;
 };
+
+export type AuthResendVerificationEnvelope = AuthRegisterEnvelope;
 
 export type AuthMeEnvelope = {
   user: AuthUser;

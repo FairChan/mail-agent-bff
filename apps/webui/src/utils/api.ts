@@ -104,10 +104,37 @@ class ApiClient {
     email: string,
     displayName: string,
     password: string
-  ): Promise<void> {
-    await this.request("/auth/register", {
+  ): Promise<{
+    pending: true;
+    email: string;
+    expiresInSeconds: number;
+    resendAvailableInSeconds: number;
+    delivery?: "sent" | "logged";
+  }> {
+    return this.request("/auth/register", {
       method: "POST",
-      body: JSON.stringify({ email, displayName, password }),
+      body: JSON.stringify({ email, username: displayName, password }),
+    });
+  }
+
+  async verifyRegistration(email: string, code: string): Promise<AuthUser> {
+    const data = await this.request<{ user: AuthUser }>("/auth/verify", {
+      method: "POST",
+      body: JSON.stringify({ email, code }),
+    });
+    return data.user;
+  }
+
+  async resendVerificationCode(email: string): Promise<{
+    pending: true;
+    email: string;
+    expiresInSeconds: number;
+    resendAvailableInSeconds: number;
+    delivery?: "sent" | "logged";
+  }> {
+    return this.request("/auth/resend", {
+      method: "POST",
+      body: JSON.stringify({ email }),
     });
   }
 

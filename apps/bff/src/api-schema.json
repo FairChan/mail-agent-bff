@@ -101,7 +101,7 @@
       "post": {
         "tags": ["Auth"],
         "summary": "Register new user",
-        "description": "Creates a new user account",
+        "description": "Starts registration by sending an email verification code. The account is created only after /api/auth/verify succeeds.",
         "operationId": "register",
         "requestBody": {
           "required": true,
@@ -114,8 +114,56 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "Registration successful",
+          "202": {
+            "description": "Verification email accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterStartResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/verify": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Verify registration email code",
+        "description": "Validates the 6-digit email code, creates the user account, and returns an authenticated session cookie.",
+        "operationId": "verifyRegistration",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyRegistrationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Account created and session established",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Session cookie"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -125,7 +173,57 @@
             }
           },
           "400": {
-            "description": "Invalid request",
+            "description": "Invalid verification code or payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Verification code expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/resend": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Resend registration verification code",
+        "description": "Issues a new 6-digit code for an existing pending registration.",
+        "operationId": "resendRegistrationVerification",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResendVerificationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Verification email accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterStartResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No pending registration found",
             "content": {
               "application/json": {
                 "schema": {
@@ -380,22 +478,73 @@
       },
       "RegisterRequest": {
         "type": "object",
-        "required": ["email", "password", "code"],
+        "required": ["email", "username", "password"],
         "properties": {
           "email": {
             "type": "string",
             "format": "email"
           },
+          "username": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
           "password": {
             "type": "string",
             "minLength": 8,
             "format": "password"
+          }
+        }
+      },
+      "RegisterStartResponse": {
+        "type": "object",
+        "required": ["pending", "email", "expiresInSeconds", "resendAvailableInSeconds"],
+        "properties": {
+          "pending": {
+            "type": "boolean",
+            "enum": [true]
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "expiresInSeconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "resendAvailableInSeconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "delivery": {
+            "type": "string",
+            "enum": ["sent", "logged"]
+          }
+        }
+      },
+      "VerifyRegistrationRequest": {
+        "type": "object",
+        "required": ["email", "code"],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
           },
           "code": {
             "type": "string",
             "description": "Email verification code",
             "minLength": 6,
             "maxLength": 6
+          }
+        }
+      },
+      "ResendVerificationRequest": {
+        "type": "object",
+        "required": ["email"],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
           }
         }
       },

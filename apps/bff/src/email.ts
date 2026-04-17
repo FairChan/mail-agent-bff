@@ -99,7 +99,7 @@ function getSMTPTransporter(): nodemailer.Transporter {
 // Transport selection
 // ---------------------------------------------------------------------------
 function getTransporter(): nodemailer.Transporter {
-  if (env.oauthEnabled && env.oauthClientId && env.oauthRefreshToken) {
+  if (env.oauthEnabled) {
     return getOAuth2Transporter();
   }
   return getSMTPTransporter();
@@ -109,24 +109,43 @@ function getTransporter(): nodemailer.Transporter {
 // Config validation on module load
 // ---------------------------------------------------------------------------
 function validateEmailConfig(): void {
+  const missingOAuthFields = [
+    ["OAUTH_CLIENT_ID", env.oauthClientId],
+    ["OAUTH_CLIENT_SECRET", env.oauthClientSecret],
+    ["OAUTH_REFRESH_TOKEN", env.oauthRefreshToken],
+    ["OAUTH_USER", env.oauthUser],
+  ].filter(([, value]) => !value);
+  const missingSMTPFields = [
+    ["SMTP_HOST", env.SMTP_HOST],
+    ["SMTP_USER", env.SMTP_USER],
+    ["SMTP_PASS", env.SMTP_PASS],
+    ["SMTP_FROM", env.SMTP_FROM],
+  ].filter(([, value]) => !value);
   const hasOAuth2 =
-    env.oauthEnabled && env.oauthClientId && env.oauthRefreshToken && env.oauthUser;
+    env.oauthEnabled && missingOAuthFields.length === 0;
   const hasSMTP =
-    env.smtpEnabled && env.SMTP_HOST && env.SMTP_PORT;
+    env.smtpEnabled && env.SMTP_PORT && missingSMTPFields.length === 0;
+
+  if (env.oauthEnabled && missingOAuthFields.length > 0) {
+    throw new Error(
+      `[email] OAuth2 is enabled (OAUTH_ENABLED=true) but required fields are missing: ${missingOAuthFields
+        .map(([name]) => name)
+        .join(", ")}.`
+    );
+  }
+
+  if (env.smtpEnabled && missingSMTPFields.length > 0) {
+    throw new Error(
+      `[email] SMTP is enabled (SMTP_ENABLED=true) but required fields are missing: ${missingSMTPFields
+        .map(([name]) => name)
+        .join(", ")}.`
+    );
+  }
 
   if (!hasOAuth2 && !hasSMTP) {
     console.warn(
       "[email] ⚠️  Email sending is disabled — verification codes will be logged to console only. " +
         "Set OAUTH_ENABLED=true or SMTP_ENABLED=true to enable."
-    );
-  } else if (hasOAuth2 && !env.oauthUser) {
-    throw new Error(
-      "[email] OAuth2 is enabled (OAUTH_ENABLED=true) but OAUTH_USER is not set. " +
-        "Set OAUTH_USER to the Gmail address used for sending."
-    );
-  } else if (hasSMTP && !env.SMTP_HOST) {
-    throw new Error(
-      "[email] SMTP is enabled (SMTP_ENABLED=true) but SMTP_HOST is not set."
     );
   }
 
@@ -323,8 +342,18 @@ export async function sendVerificationEmail(
   opts: SendVerificationEmailOptions
 ): Promise<SendResult> {
   const hasOAuth2 =
-    env.oauthEnabled && env.oauthClientId && env.oauthRefreshToken;
-  const hasSMTP = env.smtpEnabled && env.SMTP_HOST;
+    env.oauthEnabled &&
+    env.oauthClientId &&
+    env.oauthClientSecret &&
+    env.oauthRefreshToken &&
+    env.oauthUser;
+  const hasSMTP =
+    env.smtpEnabled &&
+    env.SMTP_HOST &&
+    env.SMTP_PORT &&
+    env.SMTP_USER &&
+    env.SMTP_PASS &&
+    env.SMTP_FROM;
 
   if (!hasOAuth2 && !hasSMTP) {
     // P1 fix: NODE_ENV-aware logging — never log plain code in production

@@ -8,7 +8,7 @@ export type MailSourceProvider = "outlook";
 export type MailRoutingCheckStatus = "skipped" | "verified" | "failed" | "unverifiable";
 export type MailQaIntent = "tomorrow_ddl" | "upcoming" | "unread_count" | "urgent_important" | "unknown";
 export type AiSummaryLocale = "zh-CN" | "en-US" | "ja-JP";
-export type ViewKey = "inbox" | "allmail" | "stats" | "calendar" | "knowledgebase" | "settings" | "aichat";
+export type ViewKey = "inbox" | "allmail" | "stats" | "calendar" | "knowledgebase" | "settings";
 export type AuthLocale = "zh" | "en" | "ja";
 export type TriageMailItem = {
     id: string;
@@ -205,13 +205,16 @@ export type AuthLoginEnvelope = {
     user: AuthUser;
 };
 export type AuthRegisterEnvelope = {
-    pending: boolean;
-    message: string;
-    expiresInSeconds?: number;
+    pending: true;
+    email: string;
+    expiresInSeconds: number;
+    resendAvailableInSeconds: number;
+    delivery?: "sent" | "logged";
 };
 export type AuthVerifyEnvelope = {
     user: AuthUser;
 };
+export type AuthResendVerificationEnvelope = AuthRegisterEnvelope;
 export type AuthMeEnvelope = {
     user: AuthUser;
 };

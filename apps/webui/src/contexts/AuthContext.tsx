@@ -18,6 +18,14 @@ interface AuthState {
   error: string | null;
 }
 
+type RegisterStartResult = {
+  pending: true;
+  email: string;
+  expiresInSeconds: number;
+  resendAvailableInSeconds: number;
+  delivery?: "sent" | "logged";
+};
+
 type AuthAction =
   | { type: "AUTH_START" }
   | { type: "AUTH_SUCCESS"; payload: AuthUser }
@@ -69,7 +77,9 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
 
 interface AuthContextValue extends AuthState {
   login: (email: string, password: string, remember?: boolean) => Promise<void>;
-  register: (email: string, displayName: string, password: string) => Promise<void>;
+  register: (email: string, displayName: string, password: string) => Promise<RegisterStartResult>;
+  verifyRegistration: (email: string, code: string) => Promise<void>;
+  resendVerificationCode: (email: string) => Promise<RegisterStartResult>;
   logout: () => Promise<void>;
   checkSession: () => Promise<void>;
   updatePreferences: (prefs: { locale?: string; displayName?: string }) => Promise<void>;
@@ -145,15 +155,51 @@ export function AuthProvider({ children, apiBase = "/api" }: AuthProviderProps) 
   const register = useCallback(async (email: string, displayName: string, password: string) => {
     dispatch({ type: "AUTH_START" });
     try {
-      const data = await apiFetch<{ user: AuthUser }>(`${apiBase}/auth/register`, {
+      const data = await apiFetch<RegisterStartResult>(`${apiBase}/auth/register`, {
         method: "POST",
         body: JSON.stringify({ email, username: displayName, password }),
+      });
+      dispatch({ type: "AUTH_CHECK_END" });
+      return data;
+    } catch (err) {
+      dispatch({
+        type: "AUTH_FAILURE",
+        payload: err instanceof Error ? err.message : "Registration failed",
+      });
+      throw err;
+    }
+  }, [apiBase]);
+
+  const verifyRegistration = useCallback(async (email: string, code: string) => {
+    dispatch({ type: "AUTH_START" });
+    try {
+      const data = await apiFetch<{ user: AuthUser }>(`${apiBase}/auth/verify`, {
+        method: "POST",
+        body: JSON.stringify({ email, code }),
       });
       dispatch({ type: "AUTH_SUCCESS", payload: data.user });
     } catch (err) {
       dispatch({
         type: "AUTH_FAILURE",
-        payload: err instanceof Error ? err.message : "Registration failed",
+        payload: err instanceof Error ? err.message : "Verification failed",
+      });
+      throw err;
+    }
+  }, [apiBase]);
+
+  const resendVerificationCode = useCallback(async (email: string) => {
+    dispatch({ type: "AUTH_START" });
+    try {
+      const data = await apiFetch<RegisterStartResult>(`${apiBase}/auth/resend`, {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      dispatch({ type: "AUTH_CHECK_END" });
+      return data;
+    } catch (err) {
+      dispatch({
+        type: "AUTH_FAILURE",
+        payload: err instanceof Error ? err.message : "Failed to resend verification code",
       });
       throw err;
     }
@@ -181,6 +227,8 @@ export function AuthProvider({ children, apiBase = "/api" }: AuthProviderProps) 
     ...state,
     login,
     register,
+    verifyRegistration,
+    resendVerificationCode,
     logout,
     checkSession,
     updatePreferences,

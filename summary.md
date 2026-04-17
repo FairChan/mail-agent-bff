@@ -3911,6 +3911,29 @@ cp .env.example .env
 - Fixed `Low`: direct-auth start now has per-session/per-IP rate limiting.
 - Final audit status after fixes and rerun validation: `Critical=0`, `High=0`, `Medium=0`, `Low=0`.
 
+### 2026-04-17T11:59:48+08:00
+
+- Scope: Check whether the latest pushed commit excludes sensitive information and explain how to restart the local service in the future.
+- Task type: `Non-code`
+- Main updates:
+- Confirmed `apps/bff/.env` is ignored by Git and not present in the latest tracked commit.
+- Searched the latest tracked commit for literal SiliconFlow API key, Microsoft client secret, local admin password, and the previously pasted Outlook password; no literal matches were found.
+- Noted that the pushed commit includes several tracked `.DS_Store` files, which are not secrets but should be removed in a cleanup commit.
+- Prepared restart guidance for same-machine restart and fresh-clone restart, emphasizing that ignored secrets must be recreated locally rather than committed.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
+
+### 2026-04-17T12:02:59+08:00
+
+- Scope: Explain what must be provided when deploying/running the project on another computer and whether copying `.env` is sufficient.
+- Task type: `Non-code`
+- Main updates:
+- Clarified that copying `apps/bff/.env` is usually sufficient for configuration on another local development machine, but it must be accompanied by the repository, dependencies, build output, and path adjustments.
+- Identified environment-specific fields that need review on a new machine: `AGENT_SKILLS_DIR`, `AGENT_DATA_DIR`, ports/hosts, Microsoft redirect URI, and local admin credentials.
+- Emphasized that `.env` contains sensitive secrets and should be transferred securely, not committed to Git.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
+
 ### 2026-04-17T11:16:55+08:00
 
 - Scope: Independently audit the OAuth callback `Unauthorized` bugfix that whitelisted Microsoft direct-auth start/callback routes in the global auth hook.
@@ -3928,3 +3951,45 @@ cp .env.example .env
 - Low: direct-auth start has no route-specific rate limit; map bounds reduce blast radius, but adding per-IP/per-session throttling would be cleaner.
 - Final fixes after audit:
 - No fixes applied because the requested task was audit-only and explicitly asked not to edit files.
+
+### 2026-04-17T12:35:58+08:00
+
+- Scope: Complete account registration -> email verification code -> verify-and-login flow, with Gmail sender configuration for `mery.secretary@gmail.com`.
+- Task type: `Code`
+- Main updates:
+- Updated active BFF auth flow in `apps/bff/src/server.ts`:
+- `POST /api/auth/register` now validates input, checks duplicate email, hashes the password, creates a pending registration, sends/logs a 6-digit verification code, and returns `202` with pending metadata instead of creating an account immediately.
+- `POST /api/auth/verify` validates the 6-digit code, enforces expiry and max attempts, creates the real user only after successful verification, sets the session cookie, and returns the authenticated user.
+- `POST /api/auth/resend` issues a new verification code for an existing pending registration with resend cooldown and rate limiting.
+- Added pending-registration cleanup and bounded in-memory storage.
+- Hardened `apps/bff/src/email.ts` config validation so `SMTP_ENABLED=true` requires host/user/password/from fields and `OAUTH_ENABLED=true` requires the full OAuth2 Gmail credential set.
+- Added ignored local Gmail SMTP config in `apps/bff/.env` for `smtp.gmail.com:465`, sender `mery.secretary@gmail.com`, and safe disabled mode until an app password is provided.
+- Updated WebUI auth state in `apps/webui/src/contexts/AuthContext.tsx` and `apps/webui/src/components/auth/ContextAuthScreen.tsx` so registration moves into the verification step, verifies with `/api/auth/verify`, and supports resend.
+- Updated API client/schema/contracts:
+- `apps/webui/src/utils/api.ts`
+- `apps/webui/src/utils/errors.ts`
+- `apps/bff/src/api-schema.json`
+- `packages/shared-types/src/index.ts`
+- Validation completed:
+- `npm --workspace apps/bff run check` passed.
+- `npm --workspace apps/webui run check` passed.
+- `npm --workspace apps/bff run build` passed.
+- `npm --workspace apps/webui run build` passed.
+- `npm run harness:semantic -- apps/bff/src/server.ts apps/bff/src/email.ts apps/bff/src/api-schema.json apps/webui/src/contexts/AuthContext.tsx apps/webui/src/components/auth/ContextAuthScreen.tsx apps/webui/src/utils/api.ts apps/webui/src/utils/errors.ts packages/shared-types/src/index.ts` passed with one existing zod-safe-parse warning.
+- Runtime API verification passed:
+- `POST /api/auth/register` returned `202` with `pending=true` and `delivery=logged`.
+- Development log emitted the verification code.
+- `POST /api/auth/verify` returned `201`, created the user, and returned `Set-Cookie`.
+- `GET /api/auth/session` with that cookie returned `authenticated=true`.
+- `npm run harness:smoke` passed (`10/10`).
+- `npm run check:standard` passed (`HARNESS_STANDARD_OK`).
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit evidence location: `.harness/audit/2026-04-17-email-verification-flow-audit.md`.
+- Independent reviewer: `Archimedes` (`019d99b5-005c-7533-9f5f-6c5fd940fedd`), model `gpt-5.4-mini`.
+- Initial audit status: `Critical=0`, `High=0`, `Medium=1`, `Low=3`.
+- Audit-driven fixes:
+- Fixed `Low`: synchronized shared auth contract and frontend friendly error mappings with the new verification response/error codes.
+- Deferred `Medium`: pending registration storage is in memory only. Rationale: durable storage should be designed with the same Redis/DB strategy as auth sessions instead of adding an incomplete one-off persistence path. Owner: project backend. Target date: 2026-04-24.
+- Deferred `Low`: real Gmail delivery remains disabled until a Gmail App Password or OAuth refresh token is provided. Owner: user/developer. Target date: when credential is available.
+- Deferred `Low`: automated tests do not yet cover register -> verify success/resend/expiry. Rationale: deterministic coverage needs a dedicated test mail transport or fixture hook that does not expose codes in production responses. Owner: project QA/backend. Target date: 2026-04-24.
+- Final audit status after fixes and rerun validation: `Critical=0`, `High=0`, `Medium=1 deferred`, `Low=2 deferred`, `Low=1 fixed`.

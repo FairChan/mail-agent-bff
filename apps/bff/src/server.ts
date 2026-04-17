@@ -5,6 +5,11 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { z } from "zod";
 import { env } from "./config.js";
+import {
+  generateSixDigitCode,
+  sendVerificationEmail,
+  timingSafeEqualHex,
+} from "./email.js";
 import { GatewayHttpError, invokeTool, queryAgent } from "./gateway.js";
 import { initComposioClient } from "./composio-service.js";
 import {
@@ -45,12 +50,16 @@ const agentRuntime = createAgentRuntime();
 const sessions = new Map<string, number>();
 const loginAttempts = new Map<string, { count: number; windowStart: number }>();
 const batchRouteAttempts = new Map<string, { count: number; windowStart: number }>();
-type AuthField = "email" | "password" | "username";
+type AuthField = "email" | "password" | "username" | "code";
 type AuthErrorCode =
   | "VALIDATION_ERROR"
   | "INVALID_CREDENTIALS"
   | "EMAIL_ALREADY_EXISTS"
   | "AUTH_STORE_UNAVAILABLE"
+  | "VERIFICATION_NOT_FOUND"
+  | "VERIFICATION_CODE_EXPIRED"
+  | "INVALID_VERIFICATION_CODE"
+  | "VERIFICATION_SEND_FAILED"
   | "UNAUTHORIZED"
   | "UPSTREAM_UNAVAILABLE"
   | "ACCOUNT_LOCKED"
@@ -79,6 +88,21 @@ type AuthErrorPayload = {
 };
 const authUsersById = new Map<string, AuthUserRecord>();
 const authUserIdByEmail = new Map<string, string>();
+type PendingRegistrationRecord = {
+  email: string;
+  displayName: string;
+  locale: AiSummaryLocale;
+  passwordSalt: string;
+  passwordHash: string;
+  verificationSalt: string;
+  verificationHash: string;
+  attempts: number;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
+  resendAvailableAt: number;
+};
+const pendingRegistrationsByEmail = new Map<string, PendingRegistrationRecord>();
 const authSessionUserByToken = new Map<string, string>();
 const authSessionUserViewByToken = new Map<string, AuthUserView>();
 const sessionTtlMsByToken = new Map<string, number>();
@@ -176,6 +200,9 @@ const sessionCookieName = "bff_session";
 const loginAttemptWindowMs = 60000;
 const loginAttemptTtlMs = 10 * 60 * 1000;
 const rememberSessionTtlMs = 30 * 24 * 60 * 60 * 1000;
+const registrationVerificationTtlMs = 30 * 60 * 1000;
+const registrationVerificationResendCooldownMs = 60 * 1000;
+const maxRegistrationVerificationAttempts = 6;
 const recentlyClearedSessionTtlMs = 5 * 60 * 1000;
 const batchRouteWindowMs = 60000;
 const batchRouteTtlMs = 10 * 60 * 1000;
@@ -197,6 +224,7 @@ const maxOutlookConnectionSessionEntries = 5000;
 const maxOutlookSessionsPerSession = 32;
 const maxAiSummaryCacheEntries = 50000;
 const maxAuthUserEntries = 200000;
+const maxPendingRegistrationEntries = 5000;
 const notificationSeenUrgentTtlMs = 14 * 24 * 60 * 60 * 1000;
 const aiSummaryCacheTtlMs = 24 * 60 * 60 * 1000;
 const aiSummaryBatchSize = 8;
@@ -236,6 +264,8 @@ const notificationPollRateLimitPerMin = 60;
 const notificationStreamConnectRateLimitPerMin = 24;
 const mailInboxViewRateLimitPerMin = 60;
 const sessionStatusRateLimitPerMin = 180;
+const authVerificationRateLimitPerMin = 24;
+const authVerificationResendRateLimitPerMin = 8;
 const gatewayInvokeDenylist = new Set([
   "COMPOSIO_MULTI_EXECUTE_TOOL",
   "COMPOSIO_MANAGE_CONNECTIONS",
@@ -247,6 +277,7 @@ let lastLoginAttemptSweepAt = 0;
 let lastBatchRouteSweepAt = 0;
 let lastCalendarSyncSweepAt = 0;
 let lastAiSummarySweepAt = 0;
+let lastPendingRegistrationSweepAt = 0;
 
 await server.register(cors, {
   origin: env.corsOrigins,
@@ -438,6 +469,117 @@ function validateRegisterBody(input: {
   }
 
   return null;
+}
+
+function validateVerificationBody(input: { email?: unknown; code?: unknown }): AuthErrorPayload | null {
+  const email = typeof input.email === "string" ? input.email.trim() : "";
+  const code = typeof input.code === "string" ? input.code.trim() : "";
+
+  const fieldErrors: Partial<Record<AuthField, string>> = {};
+  if (!email) {
+    fieldErrors.email = "emailRequired";
+  } else if (!isEmailFormat(email)) {
+    fieldErrors.email = "invalidEmail";
+  }
+
+  if (!code) {
+    fieldErrors.code = "codeRequired";
+  } else if (!/^\d{6}$/.test(code)) {
+    fieldErrors.code = "invalidCode";
+  }
+
+  if (Object.keys(fieldErrors).length > 0) {
+    return authError("VALIDATION_ERROR", { fieldErrors });
+  }
+
+  return null;
+}
+
+function validateResendVerificationBody(input: { email?: unknown }): AuthErrorPayload | null {
+  const email = typeof input.email === "string" ? input.email.trim() : "";
+  const fieldErrors: Partial<Record<AuthField, string>> = {};
+
+  if (!email) {
+    fieldErrors.email = "emailRequired";
+  } else if (!isEmailFormat(email)) {
+    fieldErrors.email = "invalidEmail";
+  }
+
+  if (Object.keys(fieldErrors).length > 0) {
+    return authError("VALIDATION_ERROR", { fieldErrors });
+  }
+
+  return null;
+}
+
+function hashRegistrationVerificationCode(email: string, code: string, salt: string): string {
+  return createHash("sha256")
+    .update(`${normalizeAuthEmail(email)}\0${salt}\0${code.trim()}`, "utf8")
+    .digest("hex");
+}
+
+function isRegistrationVerificationCodeValid(
+  record: PendingRegistrationRecord,
+  code: string
+): boolean {
+  const candidateHash = hashRegistrationVerificationCode(record.email, code, record.verificationSalt);
+  return timingSafeEqualHex(candidateHash, record.verificationHash);
+}
+
+function toVerificationEmailLocale(locale: AiSummaryLocale): "zh-CN" | "en" {
+  return locale === "zh-CN" ? "zh-CN" : "en";
+}
+
+function secondsUntil(timestamp: number, now: number): number {
+  return Math.max(0, Math.ceil((timestamp - now) / 1000));
+}
+
+function buildPendingRegistrationResponse(
+  record: PendingRegistrationRecord,
+  now: number,
+  delivery: "sent" | "logged"
+) {
+  return {
+    pending: true,
+    email: record.email,
+    expiresInSeconds: secondsUntil(record.expiresAt, now),
+    resendAvailableInSeconds: secondsUntil(record.resendAvailableAt, now),
+    delivery,
+  };
+}
+
+function storePendingRegistration(record: PendingRegistrationRecord) {
+  setLruEntry(pendingRegistrationsByEmail, record.email, record);
+  enforceMapLimit(pendingRegistrationsByEmail, maxPendingRegistrationEntries);
+}
+
+function purgeExpiredPendingRegistrations(now: number) {
+  for (const [email, record] of pendingRegistrationsByEmail.entries()) {
+    if (record.expiresAt <= now) {
+      pendingRegistrationsByEmail.delete(email);
+    }
+  }
+}
+
+function maybePurgeExpiredPendingRegistrations(now: number) {
+  if (now - lastPendingRegistrationSweepAt < hotPathSweepIntervalMs) {
+    return;
+  }
+
+  lastPendingRegistrationSweepAt = now;
+  purgeExpiredPendingRegistrations(now);
+}
+
+async function sendPendingRegistrationVerificationEmail(
+  record: PendingRegistrationRecord,
+  code: string
+) {
+  return sendVerificationEmail({
+    to: record.email,
+    displayName: record.displayName,
+    code,
+    locale: toVerificationEmailLocale(record.locale),
+  });
 }
 
 class AuthStoreUnavailableError extends Error {
@@ -3842,13 +3984,16 @@ const maintenanceTimer = setInterval(() => {
   purgeExpiredLoginAttempts(now);
   purgeExpiredBatchRouteAttempts(now);
   purgeExpiredCalendarSyncRecords(now);
+  purgeExpiredPendingRegistrations(now);
   lastSessionSweepAt = now;
   lastLoginAttemptSweepAt = now;
   lastBatchRouteSweepAt = now;
   lastCalendarSyncSweepAt = now;
+  lastPendingRegistrationSweepAt = now;
   enforceSessionEntryLimit();
   enforceMapLimit(loginAttempts, maxLoginAttemptEntries);
   enforceMapLimit(batchRouteAttempts, maxBatchRouteEntries);
+  enforceMapLimit(pendingRegistrationsByEmail, maxPendingRegistrationEntries);
   enforceMapLimit(calendarSyncRecords, maxCalendarSyncEntries);
   enforceMapLimit(mailSourcesBySession, maxMailSourceSessionEntries);
   enforceMapLimit(activeMailSourceBySession, maxMailSourceSessionEntries);
@@ -3880,6 +4025,8 @@ server.addHook("onRequest", async (request, reply) => {
   if (
     pathname === "/api/auth/login" ||
     pathname === "/api/auth/register" ||
+    pathname === "/api/auth/verify" ||
+    pathname === "/api/auth/resend" ||
     pathname === "/api/auth/me" ||
     pathname === "/api/auth/logout" ||
     pathname === "/api/auth/session" ||
@@ -3919,6 +4066,15 @@ const registerSchema = z.object({
   email: z.string().trim().min(1).max(254),
   username: z.string().trim().min(1).max(120),
   password: z.string().min(1).max(1024),
+});
+
+const verifyRegistrationSchema = z.object({
+  email: z.string().trim().min(1).max(254),
+  code: z.string().trim().regex(/^\d{6}$/),
+});
+
+const resendVerificationSchema = z.object({
+  email: z.string().trim().min(1).max(254),
 });
 
 const authPreferenceUpdateSchema = z.object({
@@ -4789,13 +4945,13 @@ server.post("/api/auth/preferences", async (request, reply) => {
 server.post("/api/auth/register", async (request, reply) => {
   const now = Date.now();
   maybePurgeExpiredSessions(now);
+  maybePurgeExpiredPendingRegistrations(now);
   if (isLoginRateLimited(request.ip, now)) {
     reply.header("Retry-After", "60");
     reply.status(429);
-    return {
-      code: "UPSTREAM_UNAVAILABLE",
-      message: "Too many register attempts",
-    } satisfies AuthErrorPayload;
+    return authError("RATE_LIMITED", {
+      message: "Too many register attempts. Please try again later.",
+    });
   }
 
   const parsed = registerSchema.safeParse(request.body ?? {});
@@ -4812,7 +4968,8 @@ server.post("/api/auth/register", async (request, reply) => {
 
   const normalizedEmail = normalizeAuthEmail(parsed.data.email);
   const preferredLocale = resolveRequestAiSummaryLocale(request.headers);
-  let user: AuthUserRecord;
+  let pendingRecord: PendingRegistrationRecord;
+  let verificationCode = "";
   try {
     const existingUser = await getAuthUserByEmail(normalizedEmail);
     if (existingUser) {
@@ -4821,18 +4978,22 @@ server.post("/api/auth/register", async (request, reply) => {
     }
 
     const { passwordSalt, passwordHash } = await createPasswordRecord(parsed.data.password);
-    const created = await createAuthUserRecord({
+    verificationCode = generateSixDigitCode();
+    const verificationSalt = randomBytes(16).toString("hex");
+    pendingRecord = {
       email: normalizedEmail,
       displayName: parsed.data.username.trim(),
       locale: preferredLocale,
       passwordSalt,
       passwordHash,
-    });
-    if (!created.user || created.duplicated) {
-      reply.status(409);
-      return authError("EMAIL_ALREADY_EXISTS");
-    }
-    user = created.user;
+      verificationSalt,
+      verificationHash: hashRegistrationVerificationCode(normalizedEmail, verificationCode, verificationSalt),
+      attempts: 0,
+      createdAt: now,
+      updatedAt: now,
+      expiresAt: now + registrationVerificationTtlMs,
+      resendAvailableAt: now + registrationVerificationResendCooldownMs,
+    };
   } catch (error) {
     if (error instanceof AuthStoreUnavailableError) {
       server.log.warn(
@@ -4847,6 +5008,136 @@ server.post("/api/auth/register", async (request, reply) => {
     throw error;
   }
 
+  const sendResult = await sendPendingRegistrationVerificationEmail(pendingRecord, verificationCode);
+  if (!sendResult.ok) {
+    reply.status(502);
+    return authError("VERIFICATION_SEND_FAILED", {
+      message: "Failed to send verification email. Please check email settings and try again.",
+    });
+  }
+
+  storePendingRegistration(pendingRecord);
+  reply.status(202);
+  return buildPendingRegistrationResponse(
+    pendingRecord,
+    now,
+    sendResult.skipped ? "logged" : "sent"
+  );
+});
+
+server.post("/api/auth/verify", async (request, reply) => {
+  const now = Date.now();
+  maybePurgeExpiredSessions(now);
+  maybePurgeExpiredPendingRegistrations(now);
+  if (isBatchRouteRateLimited(scopedRouteKey("auth_verify", null), request.ip, now, authVerificationRateLimitPerMin)) {
+    reply.header("Retry-After", "60");
+    reply.status(429);
+    return authError("RATE_LIMITED", {
+      message: "Too many verification attempts. Please try again later.",
+    });
+  }
+
+  const parsed = verifyRegistrationSchema.safeParse(request.body ?? {});
+  if (!parsed.success) {
+    const body = isRecord(request.body) ? request.body : {};
+    const validationError = validateVerificationBody({
+      email: body.email,
+      code: body.code,
+    });
+    reply.status(400);
+    return validationError ?? authError("VALIDATION_ERROR");
+  }
+
+  const normalizedEmail = normalizeAuthEmail(parsed.data.email);
+  const record = pendingRegistrationsByEmail.get(normalizedEmail);
+  if (!record) {
+    reply.status(404);
+    return authError("VERIFICATION_NOT_FOUND", {
+      message: "No pending registration was found for this email.",
+      fieldErrors: { email: "verificationNotFound" },
+    });
+  }
+
+  if (record.expiresAt <= now) {
+    pendingRegistrationsByEmail.delete(normalizedEmail);
+    reply.status(410);
+    return authError("VERIFICATION_CODE_EXPIRED", {
+      message: "Verification code expired. Please register again.",
+      fieldErrors: { code: "codeExpired" },
+    });
+  }
+
+  if (record.attempts >= maxRegistrationVerificationAttempts) {
+    pendingRegistrationsByEmail.delete(normalizedEmail);
+    reply.header("Retry-After", "60");
+    reply.status(429);
+    return authError("RATE_LIMITED", {
+      message: "Too many invalid verification codes. Please register again.",
+      fieldErrors: { code: "tooManyAttempts" },
+    });
+  }
+
+  if (!isRegistrationVerificationCodeValid(record, parsed.data.code)) {
+    const nextAttempts = record.attempts + 1;
+    if (nextAttempts >= maxRegistrationVerificationAttempts) {
+      pendingRegistrationsByEmail.delete(normalizedEmail);
+      reply.header("Retry-After", "60");
+      reply.status(429);
+      return authError("RATE_LIMITED", {
+        message: "Too many invalid verification codes. Please register again.",
+        fieldErrors: { code: "tooManyAttempts" },
+      });
+    }
+
+    storePendingRegistration({
+      ...record,
+      attempts: nextAttempts,
+      updatedAt: now,
+    });
+    reply.status(400);
+    return authError("INVALID_VERIFICATION_CODE", {
+      message: "Invalid verification code.",
+      fieldErrors: { code: "invalidCode" },
+    });
+  }
+
+  let user: AuthUserRecord;
+  try {
+    const existingUser = await getAuthUserByEmail(normalizedEmail);
+    if (existingUser) {
+      pendingRegistrationsByEmail.delete(normalizedEmail);
+      reply.status(409);
+      return authError("EMAIL_ALREADY_EXISTS");
+    }
+
+    const created = await createAuthUserRecord({
+      email: normalizedEmail,
+      displayName: record.displayName,
+      locale: record.locale,
+      passwordSalt: record.passwordSalt,
+      passwordHash: record.passwordHash,
+    });
+    if (!created.user || created.duplicated) {
+      pendingRegistrationsByEmail.delete(normalizedEmail);
+      reply.status(409);
+      return authError("EMAIL_ALREADY_EXISTS");
+    }
+    user = created.user;
+  } catch (error) {
+    if (error instanceof AuthStoreUnavailableError) {
+      server.log.warn(
+        {
+          operation: error.operation,
+          detail: error.detail instanceof Error ? error.detail.message : String(error.detail),
+        },
+        "Auth store unavailable during /api/auth/verify"
+      );
+      return sendAuthStoreUnavailable(reply);
+    }
+    throw error;
+  }
+
+  pendingRegistrationsByEmail.delete(normalizedEmail);
   const sessionToken = randomBytes(32).toString("hex");
   const maxAgeSeconds = Math.floor(rememberSessionTtlMs / 1000);
   const secureCookie = shouldUseSecureCookie(request);
@@ -4859,6 +5150,84 @@ server.post("/api/auth/register", async (request, reply) => {
   return {
     user: toAuthUserView(user),
   };
+});
+
+server.post("/api/auth/resend", async (request, reply) => {
+  const now = Date.now();
+  maybePurgeExpiredPendingRegistrations(now);
+  if (isBatchRouteRateLimited(scopedRouteKey("auth_resend", null), request.ip, now, authVerificationResendRateLimitPerMin)) {
+    reply.header("Retry-After", "60");
+    reply.status(429);
+    return authError("RATE_LIMITED", {
+      message: "Too many resend requests. Please try again later.",
+    });
+  }
+
+  const parsed = resendVerificationSchema.safeParse(request.body ?? {});
+  if (!parsed.success) {
+    const body = isRecord(request.body) ? request.body : {};
+    const validationError = validateResendVerificationBody({
+      email: body.email,
+    });
+    reply.status(400);
+    return validationError ?? authError("VALIDATION_ERROR");
+  }
+
+  const normalizedEmail = normalizeAuthEmail(parsed.data.email);
+  const record = pendingRegistrationsByEmail.get(normalizedEmail);
+  if (!record) {
+    reply.status(404);
+    return authError("VERIFICATION_NOT_FOUND", {
+      message: "No pending registration was found for this email.",
+      fieldErrors: { email: "verificationNotFound" },
+    });
+  }
+
+  if (record.expiresAt <= now) {
+    pendingRegistrationsByEmail.delete(normalizedEmail);
+    reply.status(410);
+    return authError("VERIFICATION_CODE_EXPIRED", {
+      message: "Verification code expired. Please register again.",
+      fieldErrors: { code: "codeExpired" },
+    });
+  }
+
+  if (record.resendAvailableAt > now) {
+    const retryAfter = secondsUntil(record.resendAvailableAt, now);
+    reply.header("Retry-After", String(retryAfter));
+    reply.status(429);
+    return authError("RATE_LIMITED", {
+      message: "Please wait before requesting another verification email.",
+    });
+  }
+
+  const verificationCode = generateSixDigitCode();
+  const verificationSalt = randomBytes(16).toString("hex");
+  const nextRecord: PendingRegistrationRecord = {
+    ...record,
+    verificationSalt,
+    verificationHash: hashRegistrationVerificationCode(normalizedEmail, verificationCode, verificationSalt),
+    attempts: 0,
+    updatedAt: now,
+    expiresAt: now + registrationVerificationTtlMs,
+    resendAvailableAt: now + registrationVerificationResendCooldownMs,
+  };
+
+  const sendResult = await sendPendingRegistrationVerificationEmail(nextRecord, verificationCode);
+  if (!sendResult.ok) {
+    reply.status(502);
+    return authError("VERIFICATION_SEND_FAILED", {
+      message: "Failed to send verification email. Please check email settings and try again.",
+    });
+  }
+
+  storePendingRegistration(nextRecord);
+  reply.status(202);
+  return buildPendingRegistrationResponse(
+    nextRecord,
+    now,
+    sendResult.skipped ? "logged" : "sent"
+  );
 });
 
 server.post("/api/auth/login", async (request, reply) => {

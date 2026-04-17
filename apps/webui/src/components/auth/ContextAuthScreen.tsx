@@ -5,14 +5,14 @@ import { useAuth } from "../../contexts/AuthContext";
 import { useApp } from "../../contexts/AppContext";
 import type { AuthLocale, AuthMode } from "../../types";
 
-type AuthFieldErrors = Partial<Record<"email" | "password" | "username", string>>;
+type AuthFieldErrors = Partial<Record<"email" | "password" | "username" | "code", string>>;
 
 function validateEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
 export function ContextAuthScreen() {
-  const { login, register, checkSession, isLoading, error } = useAuth();
+  const { login, register, verifyRegistration, resendVerificationCode, checkSession, isLoading, error } = useAuth();
   const { locale, setLocale } = useApp();
 
   const [authMode, setAuthMode] = useState<AuthMode>("login");
@@ -21,6 +21,9 @@ export function ContextAuthScreen() {
   const [authRemember, setAuthRemember] = useState(false);
   const [registerName, setRegisterName] = useState("");
   const [registerConfirmPassword, setRegisterConfirmPassword] = useState("");
+  const [registerStep, setRegisterStep] = useState<"form" | "verify">("form");
+  const [pendingRegisterEmail, setPendingRegisterEmail] = useState("");
+  const [verifyCode, setVerifyCode] = useState("");
   const [authError, setAuthError] = useState<string | null>(null);
   const [authFieldErrors, setAuthFieldErrors] = useState<AuthFieldErrors>({});
 
@@ -32,7 +35,7 @@ export function ContextAuthScreen() {
             titleLogin: "登录 Mery",
             titleRegister: "创建你的账号",
             subtitleLogin: "登录后进入邮件工作台。",
-            subtitleRegister: "创建账号后会自动登录。",
+            subtitleRegister: "先验证邮箱，验证成功后自动登录。",
           }
         : locale === "ja"
           ? {
@@ -40,14 +43,14 @@ export function ContextAuthScreen() {
               titleLogin: "Mery にログイン",
               titleRegister: "アカウント作成",
               subtitleLogin: "ログインしてメールワークスペースに入ります。",
-              subtitleRegister: "登録後に自動でログインします。",
+              subtitleRegister: "メール確認後に自動でログインします。",
             }
           : {
               brand: "Mery",
               titleLogin: "Sign In to Mery",
               titleRegister: "Create Your Account",
               subtitleLogin: "Sign in to access your mail workspace.",
-              subtitleRegister: "You will be signed in automatically after registration.",
+              subtitleRegister: "Verify your email first, then you will be signed in automatically.",
             },
     [locale]
   );
@@ -68,9 +71,9 @@ export function ContextAuthScreen() {
         "auth.confirmPassword": "确认密码",
         "auth.passwordMismatch": "两次输入的密码不一致",
         "auth.passwordMatch": "密码一致",
-        "auth.sending": "创建中...",
-        "auth.submitRegister": "注册并进入",
-        "auth.registerHint": "建议使用常用邮箱，便于后续找回和多端同步。",
+        "auth.sending": "发送中...",
+        "auth.submitRegister": "发送验证码",
+        "auth.registerHint": "我们会向该邮箱发送 6 位验证码，验证后再创建账号。",
         "auth.switchToLogin": "已有账号？去登录",
         "auth.verifyStepTitle": "输入邮箱验证码",
         "auth.verifyStepSubtitle": "我们已向你的邮箱发送了一封验证邮件。",
@@ -96,9 +99,9 @@ export function ContextAuthScreen() {
         "auth.confirmPassword": "Confirm Password",
         "auth.passwordMismatch": "Passwords do not match",
         "auth.passwordMatch": "Passwords match",
-        "auth.sending": "Creating...",
-        "auth.submitRegister": "Create Account",
-        "auth.registerHint": "Use your primary email for easier recovery and multi-device access.",
+        "auth.sending": "Sending...",
+        "auth.submitRegister": "Send Verification Code",
+        "auth.registerHint": "We will send a 6-digit code and create your account after verification.",
         "auth.switchToLogin": "Already have an account? Sign in",
         "auth.verifyStepTitle": "Enter Email Verification Code",
         "auth.verifyStepSubtitle": "We have sent a verification email to your inbox.",
@@ -124,9 +127,9 @@ export function ContextAuthScreen() {
         "auth.confirmPassword": "パスワード確認",
         "auth.passwordMismatch": "パスワードが一致しません",
         "auth.passwordMatch": "パスワードが一致しました",
-        "auth.sending": "作成中...",
-        "auth.submitRegister": "アカウント作成",
-        "auth.registerHint": "主要メールを使うと復旧と複数端末同期が簡単です。",
+        "auth.sending": "送信中...",
+        "auth.submitRegister": "確認コードを送信",
+        "auth.registerHint": "6桁の確認コードを送信し、確認後にアカウントを作成します。",
         "auth.switchToLogin": "既存アカウントでログイン",
         "auth.verifyStepTitle": "メール確認コードを入力",
         "auth.verifyStepSubtitle": "受信箱に確認メールを送信しました。",
@@ -208,7 +211,12 @@ export function ContextAuthScreen() {
         return;
       }
       try {
-        await register(authEmail.trim(), registerName.trim(), authPassword);
+        const result = await register(authEmail.trim(), registerName.trim(), authPassword);
+        setPendingRegisterEmail(result.email);
+        setRegisterStep("verify");
+        setVerifyCode("");
+        setAuthPassword("");
+        setRegisterConfirmPassword("");
       } catch (err) {
         setAuthError(err instanceof Error ? err.message : "Registration failed");
       }
@@ -216,18 +224,67 @@ export function ContextAuthScreen() {
     [authEmail, authPassword, clearErrors, register, registerName, validateRegisterForm]
   );
 
+  const onVerifyCode = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      clearErrors();
+      const email = pendingRegisterEmail || authEmail.trim();
+      if (!email) {
+        setAuthError(locale === "zh" ? "缺少待验证邮箱。" : locale === "ja" ? "確認するメールアドレスがありません。" : "Missing email to verify.");
+        return;
+      }
+      if (!/^\d{6}$/.test(verifyCode)) {
+        setAuthFieldErrors({ code: "invalidCode" });
+        setAuthError(locale === "zh" ? "请输入 6 位数字验证码。" : locale === "ja" ? "6桁の確認コードを入力してください。" : "Enter the 6-digit verification code.");
+        return;
+      }
+
+      try {
+        await verifyRegistration(email, verifyCode);
+        setVerifyCode("");
+        setPendingRegisterEmail("");
+        setRegisterStep("form");
+      } catch (err) {
+        setAuthError(err instanceof Error ? err.message : "Verification failed");
+      }
+    },
+    [authEmail, clearErrors, locale, pendingRegisterEmail, verifyCode, verifyRegistration]
+  );
+
+  const onResendCode = useCallback(async () => {
+    clearErrors();
+    const email = pendingRegisterEmail || authEmail.trim();
+    if (!email) {
+      setAuthError(locale === "zh" ? "缺少待验证邮箱。" : locale === "ja" ? "確認するメールアドレスがありません。" : "Missing email to verify.");
+      return;
+    }
+
+    try {
+      const result = await resendVerificationCode(email);
+      setPendingRegisterEmail(result.email);
+      setVerifyCode("");
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : "Failed to resend verification code");
+    }
+  }, [authEmail, clearErrors, locale, pendingRegisterEmail, resendVerificationCode]);
+
   const switchMode = useCallback((nextMode: AuthMode) => {
     setAuthMode(nextMode);
+    setRegisterStep("form");
+    setPendingRegisterEmail("");
+    setVerifyCode("");
+    clearErrors();
+  }, [clearErrors]);
+
+  const backToRegisterForm = useCallback(() => {
+    setRegisterStep("form");
+    setVerifyCode("");
     clearErrors();
   }, [clearErrors]);
 
   const retrySessionCheck = useCallback(() => {
     void checkSession();
   }, [checkSession]);
-
-  const noopSubmit = useCallback((event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-  }, []);
 
   return (
     <AuthScreen
@@ -244,9 +301,9 @@ export function ContextAuthScreen() {
       authRemember={authRemember}
       registerName={registerName}
       registerConfirmPassword={registerConfirmPassword}
-      registerStep="form"
-      verifyCode=""
-      pendingRegisterEmail={authEmail}
+      registerStep={registerStep}
+      verifyCode={verifyCode}
+      pendingRegisterEmail={pendingRegisterEmail || authEmail}
       onSelectAuthLocale={setLocale}
       onRetrySessionCheck={retrySessionCheck}
       onEmailChange={setAuthEmail}
@@ -254,14 +311,14 @@ export function ContextAuthScreen() {
       onRememberChange={setAuthRemember}
       onRegisterNameChange={setRegisterName}
       onRegisterConfirmPasswordChange={setRegisterConfirmPassword}
-      onVerifyCodeChange={() => {}}
+      onVerifyCodeChange={setVerifyCode}
       onLogin={onLogin}
       onRegister={onRegister}
-      onVerifyCode={noopSubmit}
-      onResendCode={() => {}}
+      onVerifyCode={onVerifyCode}
+      onResendCode={onResendCode}
       onSwitchToRegister={() => switchMode("register")}
       onSwitchToLogin={() => switchMode("login")}
-      onBackToRegisterForm={() => {}}
+      onBackToRegisterForm={backToRegisterForm}
     />
   );
 }
