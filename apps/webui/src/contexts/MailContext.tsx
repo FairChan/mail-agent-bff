@@ -43,8 +43,8 @@ interface MailState {
 }
 
 type MailAction =
-  | { type: "SET_SOURCES"; payload: { sources: MailSourceProfile[]; activeSourceId: string } }
-  | { type: "SET_ACTIVE_SOURCE"; payload: string }
+  | { type: "SET_SOURCES"; payload: { sources: MailSourceProfile[]; activeSourceId: string | null } }
+  | { type: "SET_ACTIVE_SOURCE"; payload: string | null }
   | { type: "SET_LOADING_SOURCES"; payload: boolean }
   | { type: "SET_INBOX"; payload: MailInboxViewerResponse }
   | { type: "SET_TRIAGE"; payload: MailTriageResult }
@@ -140,21 +140,7 @@ interface MailContextValue extends MailState {
   selectSource: (sourceId: string) => Promise<void>;
   deleteSource: (sourceId: string) => Promise<void>;
   verifySource: (sourceId: string) => Promise<boolean>;
-  launchOutlookAuth: (forceReinitiate?: boolean) => Promise<{
-    status: string;
-    ready: boolean;
-    sourceId: string | null;
-    activeSourceId: string | null;
-    mailboxUserIdHint: string | null;
-    message: string | null;
-    account: {
-      accountId: string;
-      displayName: string;
-      email: string;
-      mailboxUserIdHint: string;
-    } | null;
-    source: MailSourceProfile | null;
-  }>;
+  launchOutlookAuth: (forceReinitiate?: boolean) => Promise<OutlookLaunchResult>;
 
   // 邮件操作
   fetchInbox: (limit?: number) => Promise<void>;
@@ -189,6 +175,27 @@ interface MailContextValue extends MailState {
   setSelectedMail: (mail: TriageMailItem | null) => void;
   prefetchMailBodies: (messageIds: string[]) => void;
 }
+
+type OutlookLaunchResult = {
+  status: string;
+  ready: boolean;
+  sourceId: string | null;
+  activeSourceId: string | null;
+  mailboxUserIdHint: string | null;
+  message: string | null;
+  account: {
+    accountId: string;
+    displayName: string;
+    email: string;
+    mailboxUserIdHint: string;
+  } | null;
+  source: MailSourceProfile | null;
+  hasActiveConnection?: boolean;
+  needsUserAction?: boolean;
+  redirectUrl?: string | null;
+  connectedAccountId?: string | null;
+  sessionInstructions?: string | null;
+};
 
 const MailContext = createContext<MailContextValue | null>(null);
 
@@ -229,7 +236,7 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
   const fetchSources = useCallback(async () => {
     dispatch({ type: "SET_LOADING_SOURCES", payload: true });
     try {
-      const data = await apiFetch<{ ok: boolean; result: { sources: MailSourceProfile[]; activeSourceId: string } }>(
+      const data = await apiFetch<{ ok: boolean; result: { sources: MailSourceProfile[]; activeSourceId: string | null } }>(
         `${apiBase}/mail/sources`
       );
       if (data.ok) {
@@ -250,6 +257,7 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
         method: "POST",
         body: JSON.stringify({
           label,
+          connectionType: "composio",
           mailboxUserId,
           connectedAccountId,
           provider: "outlook",
@@ -300,26 +308,12 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     }
   }, [apiBase]);
 
-  const launchOutlookAuth = useCallback(async (_forceReinitiate = false) => {
+  const launchOutlookAuth = useCallback(async (_forceReinitiate = false): Promise<OutlookLaunchResult> => {
     if (typeof window === "undefined") {
       throw new Error("Microsoft Outlook 登录只能在浏览器环境中发起");
     }
 
-    return await new Promise<{
-      status: string;
-      ready: boolean;
-      sourceId: string | null;
-      activeSourceId: string | null;
-      mailboxUserIdHint: string | null;
-      message: string | null;
-      account: {
-        accountId: string;
-        displayName: string;
-        email: string;
-        mailboxUserIdHint: string;
-      } | null;
-      source: MailSourceProfile | null;
-    }>((resolve, reject) => {
+    return await new Promise<OutlookLaunchResult>((resolve, reject) => {
       const attemptId =
         typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
           ? crypto.randomUUID()

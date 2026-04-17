@@ -53,6 +53,11 @@ async function requestGateway<T>(
   extraHeaders?: Record<string, string>,
   timeoutMs = env.GATEWAY_TIMEOUT_MS
 ): Promise<T> {
+  const bearer = env.OPENCLAW_GATEWAY_BEARER?.trim();
+  if (!bearer) {
+    throw new GatewayHttpError(503, "OPENCLAW_GATEWAY_BEARER is required when AGENT_RUNTIME=openclaw", null);
+  }
+
   const controller = new AbortController();
   const effectiveTimeoutMs = Math.max(1, timeoutMs);
   const timeout = setTimeout(() => controller.abort(), effectiveTimeoutMs);
@@ -62,7 +67,7 @@ async function requestGateway<T>(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${env.openClawGatewayBearer}`,
+        Authorization: `Bearer ${bearer}`,
         ...extraHeaders,
       },
       body: JSON.stringify(payload),

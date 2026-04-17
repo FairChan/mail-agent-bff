@@ -1,5 +1,5 @@
 import type { FastifyBaseLogger } from "fastify";
-import { createClient, type RedisClientType } from "redis";
+import { createClient } from "redis";
 import { env } from "./config.js";
 
 export type PersistedAuthSession = {
@@ -25,7 +25,11 @@ export type RedisAuthSessionStore = {
   close: () => Promise<void>;
 };
 
-type RedisClient = RedisClientType<Record<string, never>, Record<string, never>>;
+type RedisClient = ReturnType<typeof createClient>;
+
+type DestroyableRedisClient = RedisClient & {
+  destroy?: () => void;
+};
 
 function redisSessionKey(sessionToken: string): string {
   return `${env.REDIS_KEY_PREFIX}:auth_session:${sessionToken}`;
@@ -125,6 +129,32 @@ function disabledStore(): RedisAuthSessionStore {
   };
 }
 
+async function connectRedisClientWithDeadline(client: RedisClient, timeoutMs: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      client.connect(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`Redis auth session store init timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+function destroyRedisClient(client: RedisClient): void {
+  try {
+    (client as DestroyableRedisClient).destroy?.();
+  } catch {
+    // Ignore forced shutdown errors during failed init.
+  }
+}
+
 export async function createRedisAuthSessionStore(logger: FastifyBaseLogger): Promise<RedisAuthSessionStore> {
   if (!env.redisAuthSessionsEnabled) {
     logger.info("Redis auth session store disabled via REDIS_AUTH_SESSIONS_ENABLED");
@@ -143,7 +173,7 @@ export async function createRedisAuthSessionStore(logger: FastifyBaseLogger): Pr
   });
 
   try {
-    await client.connect();
+    await connectRedisClientWithDeadline(client, env.REDIS_CONNECT_TIMEOUT_MS);
     await client.ping();
     logger.info({ redisUrl: env.REDIS_URL }, "Redis auth session store initialized");
   } catch (error) {
@@ -152,7 +182,7 @@ export async function createRedisAuthSessionStore(logger: FastifyBaseLogger): Pr
     try {
       await client.disconnect();
     } catch {
-      // Ignore disconnect errors on failed init.
+      destroyRedisClient(client);
     }
     return disabledStore();
   }

@@ -97,6 +97,7 @@ type OutlookMessage = z.infer<typeof outlookMessageSchema>;
 type OutlookCreatedEvent = z.infer<typeof outlookCreatedEventSchema>;
 
 export type MailSourceContext = {
+  userId?: string;
   sourceId: string;
   sessionToken?: string;
   connectionType?: "composio" | "microsoft";
@@ -980,12 +981,14 @@ export function normalizeSourceContext(sourceContext?: MailSourceContext): MailS
   }
 
   const sessionToken = sourceContext.sessionToken?.trim();
+  const userId = sourceContext.userId?.trim();
   const connectionType = sourceContext.connectionType;
   const microsoftAccountId = sourceContext.microsoftAccountId?.trim();
   const mailboxUserId = sourceContext.mailboxUserId?.trim();
   const connectedAccountId = sourceContext.connectedAccountId?.trim();
 
   return {
+    ...(userId ? { userId } : {}),
     sourceId,
     ...(sessionToken ? { sessionToken } : {}),
     ...(connectionType ? { connectionType } : {}),
@@ -1894,7 +1897,8 @@ export async function queryInboxMessagesForSource(
     const messages = await listMicrosoftInboxMessages(
       normalizedContext.sessionToken,
       normalizedContext.microsoftAccountId,
-      requestedTop
+      requestedTop,
+      normalizedContext.userId
     );
     return messages.map((message) => outlookMessageSchema.parse(message));
   }
@@ -2537,7 +2541,8 @@ export async function createCalendarEventFromInsight(
           content: eventBody,
         },
         allowNewTimeProposals: false,
-      }
+      },
+      normalizedContext.userId
     );
 
     const eventId = createdEvent.id?.trim();
@@ -2625,7 +2630,8 @@ export async function deleteCalendarEventById(
       await deleteMicrosoftEventById(
         normalizedContext.sessionToken,
         normalizedContext.microsoftAccountId,
-        normalizedEventId
+        normalizedEventId,
+        normalizedContext.userId
       );
       return {
         eventId: normalizedEventId,
@@ -2726,7 +2732,8 @@ export async function isCalendarEventExisting(
       await getMicrosoftEventById(
         normalizedContext.sessionToken,
         normalizedContext.microsoftAccountId,
-        normalizedEventId
+        normalizedEventId,
+        normalizedContext.userId
       );
       return true;
     } catch (error) {
@@ -2794,7 +2801,8 @@ export async function getMailMessageById(
     const detail = await getMicrosoftGraphMessageById(
       normalizedContext.sessionToken,
       normalizedContext.microsoftAccountId,
-      messageId
+      messageId,
+      normalizedContext.userId
     );
     const bodyContent = detail.body?.content ?? "";
 

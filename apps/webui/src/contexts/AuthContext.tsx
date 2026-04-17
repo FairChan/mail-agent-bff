@@ -152,12 +152,12 @@ export function AuthProvider({ children, apiBase = "/api" }: AuthProviderProps) 
     }
   }, [apiBase]);
 
-  const register = useCallback(async (email: string, displayName: string, password: string) => {
+  const register = useCallback(async (email: string, username: string, password: string) => {
     dispatch({ type: "AUTH_START" });
     try {
       const data = await apiFetch<RegisterStartResult>(`${apiBase}/auth/register`, {
         method: "POST",
-        body: JSON.stringify({ email, username: displayName, password }),
+        body: JSON.stringify({ email, username, displayName: username, password }),
       });
       dispatch({ type: "AUTH_CHECK_END" });
       return data;

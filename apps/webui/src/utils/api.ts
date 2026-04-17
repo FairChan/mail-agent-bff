@@ -156,11 +156,11 @@ class ApiClient {
 
   async getSources(): Promise<{
     sources: MailSourceProfile[];
-    activeSourceId: string;
+    activeSourceId: string | null;
   }> {
     const data = await this.request<ResultEnvelope<{
       sources: MailSourceProfile[];
-      activeSourceId: string;
+      activeSourceId: string | null;
     }>>("/mail/sources");
     return data.result;
   }
@@ -168,13 +168,13 @@ class ApiClient {
   async addSource(
     name: string,
     mailboxUserId?: string
-  ): Promise<{ source: MailSourceProfile; activeSourceId: string }> {
+  ): Promise<{ source: MailSourceProfile; activeSourceId: string | null }> {
     const data = await this.request<ResultEnvelope<{
       source: MailSourceProfile;
-      activeSourceId: string;
+      activeSourceId: string | null;
     }>>("/mail/sources", {
       method: "POST",
-      body: JSON.stringify({ name, mailboxUserId }),
+      body: JSON.stringify({ label: name, connectionType: "composio", mailboxUserId }),
     });
     return data.result;
   }

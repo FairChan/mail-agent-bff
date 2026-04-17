@@ -1,30 +1,45 @@
-name: E2E Tests
+name: WebUI E2E
 
 on:
-  schedule:
-    - cron: "0 2 * * *" # 每天凌晨2点运行
   workflow_dispatch:
+  pull_request:
+    branches: [main, develop, master]
 
 jobs:
-  e2e:
-    timeout-minutes: 30
+  smoke:
+    timeout-minutes: 20
     runs-on: ubuntu-latest
+    env:
+      VITE_BFF_BASE_URL: /api
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
-      
+          cache: npm
+
       - name: Install dependencies
         run: npm ci
-        
-      - name: Install Playwright
+
+      - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
-        
-      - name: Run E2E tests
-        run: npm run test:e2e
+
+      - name: Build WebUI
+        run: npm --workspace apps/webui run build
+
+      - name: Start WebUI preview
+        run: |
+          npm --workspace apps/webui run preview -- --host 127.0.0.1 --port 5173 > /tmp/mail-agent-webui.log 2>&1 &
+          for i in {1..30}; do
+            curl -fsS http://127.0.0.1:5173 >/dev/null && exit 0
+            sleep 1
+          done
+          cat /tmp/mail-agent-webui.log
+          exit 1
+
+      - name: Run Playwright smoke
+        run: npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts
         env:
-          BFF_URL: http://localhost:3000
+          BFF_URL: http://127.0.0.1:5173

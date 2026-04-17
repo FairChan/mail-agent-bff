@@ -435,6 +435,8 @@ const mailSourceProfileSchema = z.object({
   id: z.string(),
   name: z.string(),
   provider: z.literal("outlook"),
+  connectionType: z.enum(["composio", "microsoft"]).optional(),
+  microsoftAccountId: z.string().optional(),
   emailHint: z.string(),
   mailboxUserId: z.string().optional(),
   connectedAccountId: z.string().optional(),
@@ -447,7 +449,7 @@ export const mailSourcesEnvelopeSchema = z.object({
   ok: z.boolean(),
   result: z.object({
     sources: z.array(mailSourceProfileSchema),
-    activeSourceId: z.string(),
+    activeSourceId: z.string().nullable(),
   }),
 });
 
@@ -455,13 +457,13 @@ export const mailSourceMutationEnvelopeSchema = z.object({
   ok: z.boolean(),
   result: z.object({
     source: mailSourceProfileSchema,
-    activeSourceId: z.string(),
+    activeSourceId: z.string().nullable(),
   }),
 });
 
 export const mailSourceSelectEnvelopeSchema = z.object({
   ok: z.boolean(),
-  result: z.object({ activeSourceId: z.string() }),
+  result: z.object({ activeSourceId: z.string().nullable() }),
 });
 
 export const mailSourceDeleteEnvelopeSchema = z.object({
@@ -469,7 +471,7 @@ export const mailSourceDeleteEnvelopeSchema = z.object({
   result: z.object({
     id: z.string(),
     deleted: z.boolean(),
-    activeSourceId: z.string(),
+    activeSourceId: z.string().nullable(),
   }),
 });
 
@@ -570,7 +572,7 @@ export const autoConnectEnvelopeSchema = z.object({
   result: z.object({
     phase: z.string(),
     message: z.string(),
-    activeSourceId: z.string(),
+    activeSourceId: z.string().nullable(),
   }),
 });
 

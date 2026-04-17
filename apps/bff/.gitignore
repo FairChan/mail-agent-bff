@@ -27,9 +27,6 @@ npm-debug.log*
 test-*.mjs
 test-*.ts
 
-# Prisma
-prisma/migrations/
-
 # OpenAPI
 openapi.json
 

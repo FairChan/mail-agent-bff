@@ -1,305 +1,98 @@
-# OpenClaw Mail Agent Web Stack (M31)
+# Mail Agent Web Stack
 
-This workspace now includes a minimal Web stack for integrating OpenClaw + Composio with a browser UI.
+This repository is a monorepo for a privacy-isolated mail assistant:
+
+`WebUI -> Nginx /api proxy -> BFF -> Mastra Agent / LLM Gateway / Microsoft Graph / Prisma`.
+
+OpenClaw is retained only as a legacy fallback. The default production runtime is Mastra, and the v1 supported mail connection path is Microsoft Direct OAuth + Microsoft Graph.
 
 ## Structure
 
-- `apps/bff`: backend-for-frontend (Fastify + TypeScript)
-- `apps/webui`: React + Vite frontend
+- `apps/bff`: Fastify BFF, Prisma, Mastra runtime, Microsoft Graph integration, tenant guards, LLM gateway, and KB worker.
+- `apps/webui`: React + Vite browser UI.
+- `packages/shared-types`: shared TypeScript schemas and types.
+- `deploy/docker`: single-node Docker Compose deployment for WebUI, BFF, Postgres, and Redis.
+- `deploy/docs/DEPLOYMENT.md`: production runbook.
+- `deploy/CHECKLIST.md`: operator checklist.
 
-## Why BFF
+## Core Guarantees
 
-The Gateway token is operator-grade credential and should not be exposed to browser code. The BFF keeps this credential server-side and proxies approved operations.
+- Browser requests never include provider API keys, Microsoft tokens, or Composio credentials.
+- Every mail source, KB row, Agent memory row, LLM usage row, and KB job is scoped by `userId + sourceId`.
+- `default_outlook` is not an executable production source.
+- Microsoft Direct sources are trusted only after owned OAuth account persistence.
+- Composio sources are legacy/advanced and must be server-trusted before they can execute mail, Agent, or KB calls.
 
-## Implemented endpoints (BFF)
+## Main Interfaces
 
-- `GET /live`
-  - Process liveness probe (does not depend on Gateway)
-- `GET /ready` (and alias `GET /health`)
-  - Gateway readiness probe with dependency-aware HTTP status (`200` / `503`)
-- `GET /health`
-  - Alias of `/ready`
-- `GET /api/meta`
-  - Returns tool allowlist and agent id
-- `POST /api/gateway/tools/invoke`
-  - Allowlisted tool invocation proxy for Gateway `/tools/invoke`
-- `POST /api/agent/query`
-  - Proxy to Gateway `/v1/responses` (requires endpoint enabled)
-- `GET /api/mail/sources`
-  - Lists current session mail-source profiles and active source id
-- `POST /api/mail/sources`
-  - Creates one custom mail source profile
-  - Required payload: `label`, `mailboxUserId`, `connectedAccountId`
-  - `mailboxUserId` is mapped to Outlook `user_id`; `connectedAccountId` is persisted as routing context and verified before activation
-  - Validation: `mailboxUserId` must be `me` / email(or UPN) / GUID, and `connectedAccountId` must match `ca_*`
-- `POST /api/mail/sources/update`
-  - Updates one custom mail source profile (`name`, `emailHint`, `mailboxUserId`, `connectedAccountId`, `enabled`)
-- `POST /api/mail/sources/delete`
-  - Deletes one custom mail source profile
-- `POST /api/mail/sources/select`
-  - Switches active mail source for current session
-  - Source must be `ready=true`; otherwise returns `412 MAIL_SOURCE_NOT_READY`
-- `POST /api/mail/sources/verify`
-  - Runs source-routing probes (`OUTLOOK_GET_ME` preferred, fallback to lightweight inbox query) and persists source-level routing status
-  - Returns `routingStatus` with `routingVerified/failFast` and per-check details (`mailbox`, `connectedAccount`)
-  - If `connectedAccount` is not strongly verifiable but mailbox probe is strong (`mailboxUserId != me`), source can still be marked ready in mailbox-anchored mode
-  - Empty JSON body `{}` is accepted (omitted `sourceId` resolves to current active source)
-- `POST /api/mail/connections/outlook`
-  - One-click Outlook connection bootstrap via `COMPOSIO_MANAGE_CONNECTIONS`
-  - Supports optional `sessionId` and optional `reinitiate` for restarting auth flow
-  - Normalized response includes `status (active|initiated|failed)`, `redirectUrl`, `connectedAccountId`, and `sessionId`
-- `POST /api/mail/connections/outlook/launch-auth`
-  - Force-starts Outlook OAuth flow and returns Composio external auth link (`connect.composio.dev`)
-  - Server calls `COMPOSIO_MANAGE_CONNECTIONS` with `reinitiate_all=true` to guarantee login-link generation
-  - If upstream does not return `redirectUrl`, route falls back to `COMPOSIO_PLATFORM_URL` so WebUI button still opens an external Composio page
-  - If Composio consumer key is invalid, route returns `503` with `errorCode=COMPOSIO_CONSUMER_KEY_INVALID` and includes fallback `redirectUrl`
-- `POST /api/mail/sources/auto-connect/outlook`
-  - Fully-automatic Outlook source onboarding for "large third-party mailbox connect" UX:
-    - checks/initiates Composio authorization
-    - auto-creates or reuses source profile
-    - auto-runs routing verify
-    - auto-activates source when verify passes
-  - Optional payload: `label`, `emailHint`, `mailboxUserId`, `sessionId`, `reinitiate`, `autoSelect`
-  - Returns `phase`:
-    - `authorization_required` (contains `redirectUrl/sessionId`, continue after OAuth)
-    - `ready` (source verified + activated)
-    - `verification_failed` (source created/reused but verify did not pass)
-    - `connection_failed` (upstream connection did not reach active usable state)
-- `GET /api/mail/triage?limit=40&sourceId=<id>`
-  - Pulls Outlook inbox and returns four-quadrant classification result
-  - Each mail item includes `aiSummary` generated by OpenClaw (`/v1/responses`) in request locale (`x-true-sight-locale`, fallback `Accept-Language`, default `zh-CN`)
-  - Supported summary locales: `zh-CN`, `en-US`, `ja-JP`
-- `GET /api/mail/insights?limit=60&horizonDays=7&sourceId=<id>`
-  - Extracts DDL/meeting/exam signals, generates daily digest, and returns upcoming timeline
-  - Timeline/signal items include event-level `aiSummary` generated in request locale (`x-true-sight-locale`, fallback `Accept-Language`, default `zh-CN`)
-  - Optional `tz=<IANA timezone>` (for example `Asia/Shanghai`, `America/Los_Angeles`) controls date-boundary calculations
-  - Invalid `tz` returns `400 Invalid query parameters`
-- `GET /api/mail/inbox/view?limit=35&sourceId=<id>`
-  - Lightweight inbox list endpoint for independent mailbox viewer window
-  - Each list item includes `aiSummary` generated in request locale (`x-true-sight-locale`, fallback `Accept-Language`, default `zh-CN`)
-  - Supports larger `limit` values with server-side paged fetch and fallback to avoid false-empty responses
-- `GET /api/mail/message?messageId=<id>&sourceId=<id>`
-  - Fetches a single message detail from Outlook
-  - Detail payload includes `aiSummary` generated in request locale (`x-true-sight-locale`, fallback `Accept-Language`, default `zh-CN`)
-- `POST /api/mail/query`
-  - Natural-language QA over mail insights (for example: tomorrow DDL, upcoming meetings, unread count, urgent-important list)
-  - Request body supports `question`, optional `limit`, optional `horizonDays`, optional `tz`, optional `sourceId`
-- `GET /api/mail/priority-rules?sourceId=<id>`
-  - Lists personalized priority rules (in-memory for local/private stage)
-- `POST /api/mail/priority-rules`
-  - Creates one priority rule (match field + pattern -> target quadrant)
-  - Supports explicit `priority` (smaller number = higher precedence), optional `sourceId`
-- `POST /api/mail/priority-rules/update`
-  - Updates one priority rule (toggle enabled or edit fields, including `priority`), optional `sourceId`
-- `POST /api/mail/priority-rules/delete`
-  - Deletes one priority rule by id, optional `sourceId`
-- `GET /api/mail/notifications/preferences?sourceId=<id>`
-  - Reads notification preferences and per-session notification state (seen urgent count + daily digest markers)
-- `POST /api/mail/notifications/preferences`
-  - Updates notification preferences (`urgentPushEnabled`, `dailyDigestEnabled`, digest schedule and timezone), optional `sourceId`
-- `GET /api/mail/notifications/poll?limit=40&horizonDays=7&tz=Asia/Shanghai&sourceId=<id>`
-  - Polls for newly emerged urgent-important mails and optional daily digest trigger payload
-  - Daily digest triggers at most once per local date (based on configured digest timezone)
-  - Error responses now include notification runtime fields (`errorCode`, `retryable`, `retryAfterSec`)
-- `GET /api/mail/notifications/stream?limit=40&horizonDays=7&tz=Asia/Shanghai&sourceId=<id>`
-  - Server-Sent Events (SSE) stream for real-time notification snapshots
-  - Emits `notification` events (same payload shape as poll result), periodic `keepalive`, `notification_busy` (skip while same-session poll lock is active), `session_expired`, and `notification_error`
-  - `notification_error` / `notification_busy` payloads carry retry hints for client backoff
-- `POST /api/mail/calendar/sync`
-  - Creates an Outlook calendar event from one extracted insight item (DDL/meeting/exam/event)
-  - Server keeps a short dedupe cache by `messageId + type + dueAt` to reduce accidental duplicate writes
-  - On dedupe hit, server verifies cached `eventId` existence and evicts stale entries before re-create
-  - Server resolves authoritative mail subject by `messageId` before writing event content (lookup failure causes sync failure)
-  - Client-provided `evidence` / `dueDateLabel` are not used for persisted event narrative
-- `POST /api/mail/calendar/sync/batch`
-  - Batch version of calendar sync for multiple insight items (max 10 per request)
-  - Returns per-item status with `created/deduplicated/failed` summary
-  - When all items fail, returns non-200 (`502`) with `ok=false`
-- `POST /api/mail/calendar/delete`
-  - Deletes a previously synced Outlook calendar event by `eventId`
-  - On successful delete, server clears related dedupe cache entries to allow re-sync
-- `POST /api/mail/calendar/delete/batch`
-  - Batch version of calendar delete by `eventId` list (max 20 per request, duplicate IDs deduplicated server-side)
-  - Returns per-item status with `deleted/alreadyDeleted/failed` summary
-  - When all items fail, returns non-200 (`502`) with `ok=false`
+- `GET /api/live`: process liveness.
+- `GET /api/ready`: readiness for Prisma/Postgres, LLM route, Microsoft config, and Redis session store.
+- `GET /api/health`: readiness-compatible health summary.
+- `GET /api/mail/sources`: current user's owned sources and active source id.
+- `POST /api/mail/connections/outlook/direct/start`: start Microsoft Direct OAuth.
+- `GET /api/mail/connections/outlook/direct/callback`: Microsoft OAuth callback.
+- `GET /api/mail/triage`: mailbox triage for the current tenant/source.
+- `GET /api/mail/insights`: DDL/meeting/event extraction for the current tenant/source.
+- `POST /api/mail/calendar/sync`: sync one extracted insight to Outlook Calendar.
+- `POST /api/agent/chat`: SSE Mastra agent chat.
+- `POST /api/agent/query`: compatibility wrapper over Mastra.
+- `GET /api/agent/memory/recent`: tenant-scoped Agent memory.
+- `POST /api/agent/memory`: write tenant-scoped Agent memory.
+- `POST /api/mail/knowledge-base/trigger`: create a tenant-scoped KB job.
+- `GET /api/mail/knowledge-base/jobs/:jobId`: read owned KB job status.
+- `GET /api/mail/knowledge-base/jobs/:jobId/stream`: SSE progress for an owned KB job.
+- `GET /api/mail-kb/stats`, `/mails`, `/events`, `/persons`, `/export`: DB-backed KB views for the current tenant/source.
 
-Auth flow:
-
-- `POST /api/auth/register` creates account and issues an HttpOnly session cookie.
-  - user profile now includes `locale` (`zh-CN/en-US/ja-JP`), initialized from request locale hints.
-- `POST /api/auth/login` supports account login (`email + password + remember`) and legacy api-key login (compatibility mode).
-- `GET /api/auth/me` returns current authenticated user (or `204` when no valid user session).
-- `GET /api/auth/session` returns `authenticated` and optional user snapshot.
-- `POST /api/auth/preferences` updates authenticated user preferences (currently supports `locale`).
-  - legacy api-key sessions are not allowed to mutate preferences.
-- Other `/api/*` routes require that session cookie.
-- `POST /api/auth/logout` clears the session.
-- Password hashing now uses async PBKDF2 and includes timing-cost burn for missing users to reduce enumeration side-channel.
-
-## Quick start
-
-1. Install dependencies
+## Local Development
 
 ```bash
-npm install
-```
-
-1. Create env files
-
-```bash
+npm ci
 cp apps/bff/.env.example apps/bff/.env
 cp apps/webui/.env.example apps/webui/.env
 ```
 
-1. Fill `apps/bff/.env` with your real `OPENCLAW_GATEWAY_BEARER` and keep a strong `BFF_API_KEY` (legacy compatibility mode)
-  - If deployed behind reverse proxy, set `TRUST_PROXY` to hop count (for example `1`) or proxy CIDR list; avoid `true` on internet-facing deployments.
-  - Optional: set `COMPOSIO_PLATFORM_URL` to your workspace/project page (used as OAuth fallback open target)
-  - Optional persistent auth store:
-    - `PRISMA_AUTH_ENABLED=true`
-    - `DATABASE_URL=postgresql://...`
-    - generate client: `npx prisma generate --schema apps/bff/prisma/schema.prisma`
-    - apply schema: `npx prisma migrate deploy --schema apps/bff/prisma/schema.prisma`
-    - when enabled, startup is fail-closed: invalid/unreachable DB will fail service startup instead of silently falling back to in-memory auth
-  - Optional persistent auth sessions (survive BFF restart):
-    - `REDIS_AUTH_SESSIONS_ENABLED=true`
-    - `REDIS_URL=redis://127.0.0.1:6379`
-    - `REDIS_KEY_PREFIX=true_sight:bff`
-    - `REDIS_CONNECT_TIMEOUT_MS=3000`
-2. Start BFF
+Fill `apps/bff/.env` with local Postgres, `BFF_API_KEY`, `APP_ENCRYPTION_KEY`, LLM provider config, and Microsoft OAuth config.
 
 ```bash
 npm run dev:bff
-```
-
-1. Start WebUI in another terminal
-
-```bash
 npm run dev:web
 ```
 
-1. Open `http://127.0.0.1:5173`
-2. In WebUI, register a new account or login with existing email/password
+Useful checks:
 
-## Server deployment (current production shape)
+```bash
+npm --workspace apps/bff run check
+npm --workspace apps/webui run check
+DATABASE_URL=postgresql://user:pass@localhost:5432/mail_agent_validate npx prisma validate --schema apps/bff/prisma/schema.prisma
+```
 
-- Domain: `https://true-sight.asia`
-- Runtime:
-  - `openclaw-mail-bff.service` (systemd)
-  - `redis-server.service` (for persistent auth sessions, optional)
-  - `nginx` reverse proxy + static hosting
-- BFF startup chain:
-  - build: `npm run build` (workspace)
-  - runtime: `node apps/bff/dist/server.js` (managed by `openclaw-mail-bff.service`)
-  - env injection: `EnvironmentFile=/root/.openclaw/workspace/apps/bff/.env`
-  - `NODE_ENV=production` is required in service env for production cookie/security defaults
-- Static files:
-  - `/var/www/true-sight.asia`
-- BFF:
-  - listens on `127.0.0.1:8787` (loopback only)
-- Reverse proxy:
-  - `/api/*`, `/live`, `/ready`, `/health` -> `127.0.0.1:8787`
-  - `/api/mail/notifications/stream` has SSE-friendly proxy settings (`proxy_buffering off`)
-- TLS:
-  - Let's Encrypt via `certbot --nginx`
-  - auto-renew handled by `certbot.timer`
-- Frontend production env:
-  - `apps/webui/.env.production` should point `VITE_BFF_BASE_URL` to `https://true-sight.asia`
+On Windows PowerShell, use `npm.cmd`/`npx.cmd` if script execution policy blocks `.ps1` shims.
 
-## M20 UI scope
+## Production Docker
 
-- Mail-source manager:
-  - 查看当前会话内数据源列表与激活源
-  - Outlook 登录区为“单按钮外部授权”模式：点击按钮即拉起 Composio 外部授权页完成 Outlook 登录
-  - 授权完成后可回填 `Composio Account ID` 并进行数据源创建与验证
-  - 新增自定义 Outlook 数据源 profile（必须填写 `label + mailboxUserId + connectedAccountId`）
-  - 支持一键“验证路由”，并展示每个源的路由验证状态
-  - 新创建数据源默认 `ready=false`，完成验证后才允许切换激活
-  - 对含 sourceContext 且未通过验证的数据源做 fail-fast 提示（避免静默回退默认连接）
-  - 启用/禁用/删除自定义数据源
-  - 切换 active source 后自动刷新分拣、摘要、规则与通知配置
-- Inbox four-quadrant panel:
-  - 紧急且重要 / 重要不紧急 / 紧急不重要 / 不紧急不重要
-- Smart insights panel:
-  - 每日摘要（总邮件、未读、紧急且重要、高重要性、未来事项、明日DDL）
-  - 邮件自然语言问答（明日DDL / 未来事项 / 未读数量 / 紧急重要邮件）
-  - 问答结果中的可识别事项支持一键写入日历与撤销同步
-  - 明日 DDL 清单
-  - 未来事项时间线（DDL/会议/考试/事项）
-  - 待补充日期的事项线索
-  - 明日 DDL 和未来事项可一键写入 Outlook 日历，并支持撤销同步
-  - 支持批量写入与批量撤销（基于当前摘要视图）
-- Efficiency dashboard:
-  - 四象限占比可视化
-  - 下一个关键事项倒计时与快速操作
-  - 高频发件人统计
-  - 日历同步覆盖率
-- Personalized priority rules panel:
-  - 自定义“匹配字段 + 匹配词 + 目标象限”
-  - 支持启用/禁用与删除
-  - 规则会实时影响四象限分拣、摘要和问答结果
-- Notification center:
-  - 浏览器通知权限申请
-  - 紧急重要邮件即时提醒开关
-  - 每日摘要定时推送配置（小时/分钟/时区）
-  - SSE 实时通道状态展示（实时/连接中/轮询）
-  - 轮询退避重试（基于 `retryAfterSec` 与错误类型自动调整）
-  - SSE 断线后自动回退轮询，并定时尝试恢复实时流
-  - 轮询日志与最近摘要触发信息
-- Click one mail card to load detail:
-  - sender, received time, read status, importance, body text
-- Dedicated mailbox viewer window:
-  - `/mailbox-viewer.html`
-  - independent list/detail experience for quick inbox verification
-- Keep developer panels:
-  - tool invoke debug
-  - agent query debug
+```bash
+cd deploy/docker
+cp .env.example .env
+# edit .env
+./deploy.sh
+```
 
-## Notes
+The BFF container runs `prisma migrate deploy` before startup. If migrations fail, the BFF does not start. Nginx serves WebUI and proxies `/api/*` to BFF on the internal Docker network.
 
-- If `POST /api/agent/query` returns 404, enable `gateway.http.endpoints.responses.enabled=true` in OpenClaw config.
-- If mail routes return `503` with `COMPOSIO_CONSUMER_KEY_INVALID`, your OpenClaw Composio plugin key is invalid (`plugins.entries.composio.config.consumerKey`). Update it to a valid `ck_...` key, restart gateway, then retry.
-- BFF defaults to `HOST=127.0.0.1`; do not bind publicly unless you also add reverse proxy auth, rate limiting, and audit logging.
-- `/api/mail/insights` date parsing semantics and boundaries (today/tomorrow/horizon) use `tz` when provided, otherwise fallback to the BFF runtime timezone.
-- `horizonDays` uses inclusive day-window semantics (day 1 = today in selected `tz`).
-- Batch calendar routes include per-IP rate limits and will return `429` when exceeded.
-- Summary locale selection prefers `x-true-sight-locale` and falls back to `Accept-Language` (`q` weights respected). Unsupported values safely fall back to `zh-CN`.
-- `POST /api/mail/query` includes per-IP rate limits and will return `429` when exceeded.
-- Priority rules are stored in BFF process memory (current local/private stage). Service restart will clear them.
-- Priority rules are isolated per authenticated session cookie in this stage.
-- Priority rules and notification preferences/state are isolated by `session + sourceId`.
-- Mail source profiles are isolated per authenticated session in this stage (in-memory, non-persistent).
-- Auth sessions support optional Redis persistence in M31.3 (`REDIS_AUTH_SESSIONS_ENABLED=true`) so login state can survive BFF restart.
-- If `PRISMA_AUTH_ENABLED=false`, account registry is still memory-only; Redis only persists active sessions, not long-term account records.
-- Mail data routes are source-context aware in M19:
-  - `mailboxUserId` is passed as Outlook `user_id` to query/detail/insights/QA/calendar read-write flows.
-  - `connectedAccountId` is best-effort for upstream routing. When verify marks it `unverifiable`, BFF falls back to mailbox-anchored routing and does not force-pass it on execution calls.
-- BFF is now tolerant to multiple Composio payload variants for `COMPOSIO_MULTI_EXECUTE_TOOL`:
-  - text payload can be resolved from `result.content` or top-level `content`
-  - Outlook query data can be resolved from `response.data` or direct `response.value/messages/items` shapes
-- Source routing status is now visible and checkable through `POST /api/mail/sources/verify`.
-- WebUI blocks switching into unverified source-context profiles until routing verification passes.
-- Source-context mail data routes now enforce backend fail-fast:
-  - unverified routing returns `412 MAIL_SOURCE_ROUTING_UNVERIFIED`
-  - failed routing returns `412 MAIL_SOURCE_ROUTING_NOT_READY`
-- Notification SSE stream now re-validates routing on every tick; if routing becomes invalid it emits `notification_error` and closes the stream.
-- WebUI notification channel now respects fail-fast state end-to-end (no SSE connect, no fallback poll, no manual poll on blocked source).
-- WebUI source fail-fast rollback now selects only enabled+safe sources and synchronizes rollback to server-side active source.
-- Rule conflict strategy: by `priority ASC`, then `createdAt ASC`; first matched enabled rule wins.
-- Notification preferences/state are stored in BFF process memory and isolated per authenticated session.
-- Browser notification delivery depends on tab activity and granted Notification permission.
-- Notification poll route includes per-IP rate limits and will return `429` when exceeded.
-- Notification poll route also returns `429` when a previous poll for the same session is still in progress.
-- Notification SSE route uses long-lived HTTP connections and includes connect-rate limiting.
-- WebUI uses SSE by default and falls back to periodic polling when stream disconnects.
-- Notification error payloads provide structured retry hints; WebUI applies adaptive retry/backoff instead of fixed-interval blind retries.
-- Initial unauthenticated requests are blocked by the global `/api/*` auth hook and return plain `401 { ok:false, error:\"Unauthorized\" }`; structured notification error fields apply after session-authenticated notification routes/events.
-- This stack is currently for local/private development. Do not expose it directly to public networks.
-- Keep Gateway on loopback/tailnet/private ingress. Do not expose operator credentials publicly.
+See [deploy/docs/DEPLOYMENT.md](deploy/docs/DEPLOYMENT.md) for the full runbook.
 
-## Production hardening checklist
+## Verification
 
-- Replace shared API key login with user/session auth (JWT or SSO) and per-user authorization.
-- Add rate limits on `/api/gateway/tools/invoke` and `/api/agent/query`.
-- Persist audit logs for tool calls (caller, tool name, timestamp, outcome).
-- Put BFF behind a trusted reverse proxy (TLS + IP controls + WAF as needed).
+```bash
+npm run check
+npm run build
+npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts
+```
 
+Production smoke checks:
+
+- Register/login as two users.
+- Connect Microsoft Direct for both.
+- Verify each user can only access their own `sourceId`, `messageId`, `jobId`, memory, KB, and Microsoft account.
+- Run triage, insights, mail detail, Agent chat, KB trigger/stream, and calendar sync.
+- Confirm logs do not contain provider keys, Microsoft tokens, full prompts, or full mail bodies.

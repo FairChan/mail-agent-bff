@@ -224,10 +224,10 @@ This is a starting point. Add your own conventions, style, and rules as you figu
 ## Standing Delivery Requirements (Effective 2026-03-25T17:25:17+08:00)
 
 1. Classify each task as `Code` or `Non-code` at the start of execution.
-2. Append one entry to `summary.md` for every task using ISO-8601 timestamp format (for example, `2026-03-25T17:25:17+08:00`).
+2. Append one entry to `SUMMARY.md` for every task using ISO-8601 timestamp format (for example, `2026-03-25T17:25:17+08:00`).
 3. For `Code` tasks, implement changes first, then run a `sub-agent audit` before final delivery.
 4. `Sub-agent audit` means an independent reviewer (separate model/process from the implementer) covering changed files and relevant tests; record audit evidence including tool/model, timestamp, and output location.
 5. All `Critical` and `High` audit findings must be fixed before delivery; `Medium` and `Low` findings may be deferred only with written rationale, owner, and target date.
 6. After audit-driven fixes, rerun relevant validation (tests/checks) and confirm final audit status.
-7. For `Non-code` tasks, record `Audit: N/A (no code changes)` in `summary.md`.
-8. Final entries in `summary.md` must not contain `Pending`; if blocked, include blocker, owner, ETA, and explicit user approval for any exception.
+7. For `Non-code` tasks, record `Audit: N/A (no code changes)` in `SUMMARY.md`.
+8. Final entries in `SUMMARY.md` must not contain `Pending`; if blocked, include blocker, owner, ETA, and explicit user approval for any exception.

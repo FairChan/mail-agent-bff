@@ -1,9 +1,14 @@
 node_modules/
 .env
 .env.*
+!.env.example
+!apps/*/.env.example
+!deploy/docker/.env.example
 *.log
 
 apps/*/node_modules/
 apps/*/dist/
 apps/*/.vite/
+apps/*/playwright-report/
+apps/*/test-results/
 .harness/tmp/

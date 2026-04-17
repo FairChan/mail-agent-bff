@@ -1,6 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
+import type { FastifyBaseLogger } from "fastify";
 import { z } from "zod";
 import { env } from "./config.js";
+import { getPrismaClient } from "./persistence.js";
+import { decryptSecret, encryptSecret } from "./secret-box.js";
 
 const microsoftGraphBaseUrl = "https://graph.microsoft.com/v1.0";
 const microsoftStateTtlMs = 10 * 60 * 1000;
@@ -125,6 +128,11 @@ export type MicrosoftAccountView = {
 
 const microsoftAuthStates = new Map<string, MicrosoftAuthState>();
 const microsoftAccountsBySession = new Map<string, Map<string, MicrosoftAccountRecord>>();
+const noopLogger = {
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+} as unknown as FastifyBaseLogger;
 
 export class MicrosoftGraphHttpError extends Error {
   status: number;
@@ -283,12 +291,97 @@ function getMicrosoftAccountRecord(sessionToken: string, accountId: string): Mic
   return store.get(accountId) ?? null;
 }
 
+async function loadMicrosoftAccountRecordForUser(
+  logger: FastifyBaseLogger,
+  userId: string,
+  accountId: string
+): Promise<MicrosoftAccountRecord | null> {
+  const prisma = (await getPrismaClient(logger)) as any;
+  if (!prisma?.microsoftAccount?.findFirst) {
+    return null;
+  }
+
+  const row = await prisma.microsoftAccount.findFirst({
+    where: { userId, accountId },
+  });
+  if (!row) {
+    return null;
+  }
+
+  return {
+    accountId: row.accountId,
+    displayName: row.displayName,
+    email: row.email,
+    tenantId: row.tenantId,
+    scope: Array.isArray(row.scope) ? row.scope : [],
+    accessToken: decryptSecret(row.accessTokenCiphertext),
+    refreshToken: row.refreshTokenCiphertext ? decryptSecret(row.refreshTokenCiphertext) : null,
+    expiresAt: row.expiresAt instanceof Date ? row.expiresAt.getTime() : new Date(row.expiresAt).getTime(),
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
+    updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt),
+  };
+}
+
 function upsertMicrosoftAccountRecord(sessionToken: string, record: MicrosoftAccountRecord): MicrosoftAccountRecord {
   const store = getMicrosoftAccountStore(sessionToken, true);
   store.set(record.accountId, record);
   enforceMapLimit(store, maxMicrosoftAccountsPerSession);
   enforceMapLimit(microsoftAccountsBySession, maxMicrosoftSessionEntries);
   return record;
+}
+
+export async function persistMicrosoftAccountForUser(input: {
+  logger: FastifyBaseLogger;
+  userId: string;
+  sessionToken: string;
+  accountId: string;
+}): Promise<MicrosoftAccountView> {
+  const record = getMicrosoftAccountRecord(input.sessionToken, input.accountId);
+  if (!record) {
+    throw new Error("Microsoft account session not found");
+  }
+
+  const prisma = (await getPrismaClient(input.logger)) as any;
+  if (!prisma?.microsoftAccount?.upsert) {
+    throw new Error("MICROSOFT_ACCOUNT_STORE_UNAVAILABLE");
+  }
+
+  const now = new Date();
+  await prisma.microsoftAccount.upsert({
+    where: {
+      userId_accountId: {
+        userId: input.userId,
+        accountId: record.accountId,
+      },
+    },
+    create: {
+      userId: input.userId,
+      accountId: record.accountId,
+      email: record.email,
+      displayName: record.displayName,
+      mailboxUserIdHint: record.email || "me",
+      tenantId: record.tenantId,
+      scope: record.scope,
+      accessTokenCiphertext: encryptSecret(record.accessToken),
+      refreshTokenCiphertext: record.refreshToken ? encryptSecret(record.refreshToken) : null,
+      expiresAt: new Date(record.expiresAt),
+      createdAt: now,
+      updatedAt: now,
+    },
+    update: {
+      email: record.email,
+      displayName: record.displayName,
+      mailboxUserIdHint: record.email || "me",
+      tenantId: record.tenantId,
+      scope: record.scope,
+      accessTokenCiphertext: encryptSecret(record.accessToken),
+      refreshTokenCiphertext: record.refreshToken ? encryptSecret(record.refreshToken) : null,
+      expiresAt: new Date(record.expiresAt),
+      updatedAt: now,
+    },
+  });
+
+  return accountViewFromRecord(record);
 }
 
 async function requestMicrosoftToken(body: Record<string, string>): Promise<MicrosoftTokenResponse> {
@@ -343,8 +436,18 @@ async function fetchMicrosoftProfileByToken(accessToken: string): Promise<Micros
   return parseBoundary(microsoftProfileSchema, json, "Microsoft profile response");
 }
 
-async function ensureMicrosoftAccessToken(sessionToken: string, accountId: string): Promise<string> {
-  const record = getMicrosoftAccountRecord(sessionToken, accountId);
+async function ensureMicrosoftAccessToken(
+  sessionToken: string,
+  accountId: string,
+  userId?: string
+): Promise<string> {
+  let record = getMicrosoftAccountRecord(sessionToken, accountId);
+  if (!record && userId) {
+    record = await loadMicrosoftAccountRecordForUser(noopLogger, userId, accountId);
+    if (record) {
+      upsertMicrosoftAccountRecord(sessionToken, record);
+    }
+  }
   if (!record) {
     throw new Error("Microsoft account session not found");
   }
@@ -376,6 +479,21 @@ async function ensureMicrosoftAccessToken(sessionToken: string, accountId: strin
   };
 
   upsertMicrosoftAccountRecord(sessionToken, refreshed);
+  if (userId) {
+    const prisma = (await getPrismaClient(noopLogger)) as any;
+    if (prisma?.microsoftAccount?.updateMany) {
+      await prisma.microsoftAccount.updateMany({
+        where: { userId, accountId: refreshed.accountId },
+        data: {
+          accessTokenCiphertext: encryptSecret(refreshed.accessToken),
+          refreshTokenCiphertext: refreshed.refreshToken ? encryptSecret(refreshed.refreshToken) : null,
+          scope: refreshed.scope,
+          expiresAt: new Date(refreshed.expiresAt),
+          updatedAt: new Date(),
+        },
+      });
+    }
+  }
   return refreshed.accessToken;
 }
 
@@ -384,9 +502,10 @@ async function requestMicrosoftGraphJson(
   accountId: string,
   path: string,
   init?: RequestInit,
-  extraHeaders?: Record<string, string>
+  extraHeaders?: Record<string, string>,
+  userId?: string
 ): Promise<unknown> {
-  const accessToken = await ensureMicrosoftAccessToken(sessionToken, accountId);
+  const accessToken = await ensureMicrosoftAccessToken(sessionToken, accountId, userId);
   const response = await fetch(`${microsoftGraphBaseUrl}${path}`, {
     ...init,
     headers: {
@@ -545,7 +664,7 @@ export function getMicrosoftAccountView(sessionToken: string, accountId: string)
   return record ? accountViewFromRecord(record) : null;
 }
 
-export async function verifyMicrosoftMailboxAccess(sessionToken: string, accountId: string): Promise<{
+export async function verifyMicrosoftMailboxAccess(sessionToken: string, accountId: string, userId?: string): Promise<{
   ok: boolean;
   mailboxUserIdHint: string | null;
   error?: string;
@@ -556,13 +675,17 @@ export async function verifyMicrosoftMailboxAccess(sessionToken: string, account
         sessionToken,
         accountId,
         "/me?$select=id,displayName,mail,userPrincipalName",
-        { method: "GET" }
+        { method: "GET" },
+        undefined,
+        userId
       ),
       requestMicrosoftGraphJson(
         sessionToken,
         accountId,
         "/me/messages?$top=1&$select=id&$orderby=receivedDateTime%20desc",
-        { method: "GET" }
+        { method: "GET" },
+        undefined,
+        userId
       ),
     ]);
     const profile = parseBoundary(microsoftProfileSchema, profileRaw, "Microsoft mailbox verification profile");
@@ -582,14 +705,17 @@ export async function verifyMicrosoftMailboxAccess(sessionToken: string, account
 export async function listMicrosoftInboxMessages(
   sessionToken: string,
   accountId: string,
-  limit: number
+  limit: number,
+  userId?: string
 ): Promise<MicrosoftMessage[]> {
   const top = Math.max(5, Math.min(limit, 100));
   const payload = await requestMicrosoftGraphJson(
     sessionToken,
     accountId,
     `/me/messages?$top=${top}&$orderby=receivedDateTime%20desc&$select=id,subject,from,bodyPreview,receivedDateTime,importance,isRead,hasAttachments,webLink`,
-    { method: "GET" }
+    { method: "GET" },
+    undefined,
+    userId
   );
   return parseBoundary(microsoftMessageListSchema, payload, "Microsoft inbox list response").value;
 }
@@ -597,7 +723,8 @@ export async function listMicrosoftInboxMessages(
 export async function getMicrosoftMessageById(
   sessionToken: string,
   accountId: string,
-  messageId: string
+  messageId: string,
+  userId?: string
 ): Promise<MicrosoftMessage> {
   const select = [
     "id",
@@ -615,7 +742,9 @@ export async function getMicrosoftMessageById(
     sessionToken,
     accountId,
     `/me/messages/${encodeURIComponent(messageId)}?$select=${encodeURIComponent(select)}`,
-    { method: "GET" }
+    { method: "GET" },
+    undefined,
+    userId
   );
   return parseBoundary(microsoftMessageSchema, payload, "Microsoft message response");
 }
@@ -629,7 +758,8 @@ export async function createMicrosoftEvent(
     end: { dateTime: string; timeZone: string };
     body: { contentType: string; content: string };
     allowNewTimeProposals: boolean;
-  }
+  },
+  userId?: string
 ): Promise<MicrosoftEvent> {
   const payload = await requestMicrosoftGraphJson(
     sessionToken,
@@ -641,7 +771,8 @@ export async function createMicrosoftEvent(
     },
     {
       Prefer: `outlook.timezone="${input.start.timeZone}"`,
-    }
+    },
+    userId
   );
   return parseBoundary(microsoftEventSchema, payload, "Microsoft event creation response");
 }
@@ -649,13 +780,16 @@ export async function createMicrosoftEvent(
 export async function getMicrosoftEventById(
   sessionToken: string,
   accountId: string,
-  eventId: string
+  eventId: string,
+  userId?: string
 ): Promise<MicrosoftEvent> {
   const payload = await requestMicrosoftGraphJson(
     sessionToken,
     accountId,
     `/me/events/${encodeURIComponent(eventId)}?$select=id,subject,webLink,start,end`,
-    { method: "GET" }
+    { method: "GET" },
+    undefined,
+    userId
   );
   return parseBoundary(microsoftEventSchema, payload, "Microsoft event response");
 }
@@ -663,12 +797,15 @@ export async function getMicrosoftEventById(
 export async function deleteMicrosoftEventById(
   sessionToken: string,
   accountId: string,
-  eventId: string
+  eventId: string,
+  userId?: string
 ): Promise<void> {
   await requestMicrosoftGraphJson(
     sessionToken,
     accountId,
     `/me/events/${encodeURIComponent(eventId)}`,
-    { method: "DELETE" }
+    { method: "DELETE" },
+    undefined,
+    userId
   );
 }

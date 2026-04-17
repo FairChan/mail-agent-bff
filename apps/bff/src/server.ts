@@ -1,9 +1,11 @@
 import "dotenv/config";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import argon2 from "argon2";
-import Fastify from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import { z } from "zod";
+import { createAgentRuntime, type TenantContext } from "./agent/index.js";
+import { LlmGatewayService } from "./agent/llm-gateway.js";
 import { env } from "./config.js";
 import {
   generateSixDigitCode,
@@ -18,9 +20,11 @@ import {
   consumeMicrosoftDirectAuthState,
   getMicrosoftAccountView,
   isMicrosoftDirectAuthConfigured,
+  persistMicrosoftAccountForUser,
   MicrosoftDirectAuthSessionInactiveError,
   verifyMicrosoftMailboxAccess,
 } from "./microsoft-graph.js";
+import { MailSourceService } from "./mail-source-service.js";
 import { getPrismaClient, isPrismaUniqueConstraintError } from "./persistence.js";
 import { createRedisAuthSessionStore } from "./redis-session-store.js";
 import {
@@ -37,7 +41,6 @@ import {
   type MailPriorityRule,
   triageInbox,
 } from "./mail.js";
-import { createAgentRuntime } from "./runtime/agent-runtime.js";
 
 const server = Fastify({ logger: true, trustProxy: env.trustProxy });
 if (env.composioApiKey && env.composioMcpUrl) {
@@ -46,7 +49,9 @@ if (env.composioApiKey && env.composioMcpUrl) {
     mcpUrl: env.composioMcpUrl,
   });
 }
-const agentRuntime = createAgentRuntime();
+const agentRuntime = createAgentRuntime(server.log);
+const llmGatewayService = new LlmGatewayService(server.log);
+const mailSourceService = new MailSourceService(server.log);
 const sessions = new Map<string, number>();
 const loginAttempts = new Map<string, { count: number; windowStart: number }>();
 const batchRouteAttempts = new Map<string, { count: number; windowStart: number }>();
@@ -1372,21 +1377,28 @@ function getSourceRoutingStatusBySession(
 
 function resolveRoutingContextForSource(
   _sessionToken: string,
-  source: Pick<MailSourceProfile, "id" | "mailboxUserId" | "connectedAccountId">
-): { mailboxUserId?: string; connectedAccountId?: string } {
+  source: Pick<MailSourceProfile, "id" | "mailboxUserId" | "connectedAccountId" | "microsoftAccountId">
+): { mailboxUserId?: string; connectedAccountId?: string; microsoftAccountId?: string } {
   const directMailboxUserId = cleanOptionalText(source.mailboxUserId);
   const directConnectedAccountId = cleanOptionalText(source.connectedAccountId);
+  const directMicrosoftAccountId = cleanOptionalText(source.microsoftAccountId);
   return {
     ...(directMailboxUserId ? { mailboxUserId: directMailboxUserId } : {}),
     ...(directConnectedAccountId ? { connectedAccountId: directConnectedAccountId } : {}),
+    ...(directMicrosoftAccountId ? { microsoftAccountId: directMicrosoftAccountId } : {}),
   };
 }
 
 function sourceNeedsRoutingVerification(sourceContext: {
   mailboxUserId?: string;
   connectedAccountId?: string;
+  microsoftAccountId?: string;
 }): boolean {
-  return Boolean(cleanOptionalText(sourceContext.mailboxUserId) || cleanOptionalText(sourceContext.connectedAccountId));
+  return Boolean(
+    cleanOptionalText(sourceContext.mailboxUserId) ||
+      cleanOptionalText(sourceContext.connectedAccountId) ||
+      cleanOptionalText(sourceContext.microsoftAccountId)
+  );
 }
 
 function sourceIsReady(
@@ -1441,20 +1453,22 @@ function getMailSourceStoreBySession(
 
 function getMailSourcesSnapshotBySession(sessionToken: string): {
   sources: MailSourceProfileView[];
-  activeSourceId: string;
+  activeSourceId: string | null;
 } {
   const store = getMailSourceStoreBySession(sessionToken, false);
   const customSources = [...store.values()]
     .map((item) => withRoutingStatus(sessionToken, item))
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
-  const sources = [withRoutingStatus(sessionToken, defaultMailSourceProfile(sessionToken)), ...customSources];
-  const selected = activeMailSourceBySession.get(sessionToken) ?? defaultMailSourceId;
+  const sources = customSources;
+  const selected = activeMailSourceBySession.get(sessionToken) ?? null;
   const resolved = sources.find((source) => source.id === selected && source.enabled)
     ? selected
-    : defaultMailSourceId;
+    : sources.find((source) => source.enabled)?.id ?? null;
 
-  if (resolved !== selected) {
+  if (resolved && resolved !== selected) {
     activeMailSourceBySession.set(sessionToken, resolved);
+  } else if (!resolved) {
+    activeMailSourceBySession.delete(sessionToken);
   }
 
   return {
@@ -1468,10 +1482,16 @@ function resolveSourceIdForSession(
   requestedSourceId?: string
 ): {
   ok: boolean;
-  sourceId: string;
+  sourceId: string | null;
 } {
   const snapshot = getMailSourcesSnapshotBySession(sessionToken);
   if (!requestedSourceId) {
+    if (!snapshot.activeSourceId) {
+      return {
+        ok: false,
+        sourceId: null,
+      };
+    }
     return {
       ok: true,
       sourceId: snapshot.activeSourceId,
@@ -1506,7 +1526,7 @@ function requireResolvedSourceId(
 
   const resolved = resolveSourceIdForSession(sessionToken, requestedSourceId);
   if (!resolved.ok) {
-    reply.status(404);
+    reply.status(resolved.sourceId ? 404 : 412);
     return null;
   }
 
@@ -1516,7 +1536,11 @@ function requireResolvedSourceId(
 type SourceRoutingGuardFailurePayload = {
   ok: false;
   error: string;
-  errorCode: "MAIL_SOURCE_NOT_FOUND" | "MAIL_SOURCE_ROUTING_UNVERIFIED" | "MAIL_SOURCE_ROUTING_NOT_READY";
+  errorCode:
+    | "MAIL_SOURCE_CONNECTION_REQUIRED"
+    | "MAIL_SOURCE_NOT_FOUND"
+    | "MAIL_SOURCE_ROUTING_UNVERIFIED"
+    | "MAIL_SOURCE_ROUTING_NOT_READY";
   sourceId: string;
   routingStatus?: MailSourceRoutingStatus;
   retryable: boolean;
@@ -1524,19 +1548,95 @@ type SourceRoutingGuardFailurePayload = {
   at: string;
 };
 
+type SourceRoutingGuardResult =
+  | {
+      ok: true;
+    }
+  | {
+      ok: false;
+      payload: SourceRoutingGuardFailurePayload;
+    };
+
 function failSourceRoutingGuard(
   reply: {
     status: (code: number) => unknown;
   },
   payload: SourceRoutingGuardFailurePayload
-): {
-  ok: false;
-  payload: SourceRoutingGuardFailurePayload;
-} {
+): Extract<SourceRoutingGuardResult, { ok: false }> {
   reply.status(payload.status);
   return {
     ok: false,
     payload,
+  };
+}
+
+function getSourceRoutingReady(sessionToken: string, sourceId: string): SourceRoutingGuardResult {
+  const source = getMailSourcesSnapshotBySession(sessionToken).sources.find((item) => item.id === sourceId);
+  if (!source || !source.enabled) {
+    return {
+      ok: false,
+      payload: {
+        ok: false,
+        error: "Mail source not found or disabled",
+        errorCode: "MAIL_SOURCE_NOT_FOUND",
+        sourceId,
+        retryable: false,
+        status: 404,
+        at: new Date().toISOString(),
+      },
+    };
+  }
+
+  const sourceContext = resolveRoutingContextForSource(sessionToken, source);
+  if (!sourceNeedsRoutingVerification(sourceContext)) {
+    return {
+      ok: false,
+      payload: {
+        ok: false,
+        error: "Mail source connection is required before reading mail",
+        errorCode: "MAIL_SOURCE_CONNECTION_REQUIRED",
+        sourceId,
+        retryable: true,
+        status: 412,
+        at: new Date().toISOString(),
+      },
+    };
+  }
+
+  const routingStatus = getSourceRoutingStatusBySession(sessionToken, sourceId);
+  if (!routingStatus) {
+    return {
+      ok: false,
+      payload: {
+        ok: false,
+        error: "Mail source routing not verified",
+        errorCode: "MAIL_SOURCE_ROUTING_UNVERIFIED",
+        sourceId,
+        retryable: true,
+        status: 412,
+        at: new Date().toISOString(),
+      },
+    };
+  }
+
+  if (!routingStatus.routingVerified || routingStatus.failFast) {
+    return {
+      ok: false,
+      payload: {
+        ok: false,
+        error: `Mail source routing verification failed: ${routingStatus.message}`,
+        errorCode: "MAIL_SOURCE_ROUTING_NOT_READY",
+        sourceId,
+        routingStatus,
+        retryable: true,
+        status: 412,
+        at: new Date().toISOString(),
+      },
+    };
+  }
+
+  return {
+    ok: true,
   };
 }
 
@@ -1546,63 +1646,12 @@ function requireSourceRoutingReady(
   },
   sessionToken: string,
   sourceId: string
-):
-  | {
-      ok: true;
-    }
-  | {
-      ok: false;
-      payload: SourceRoutingGuardFailurePayload;
-    } {
-  const source = getMailSourcesSnapshotBySession(sessionToken).sources.find((item) => item.id === sourceId);
-  if (!source || !source.enabled) {
-    return failSourceRoutingGuard(reply, {
-      ok: false,
-      error: "Mail source not found or disabled",
-      errorCode: "MAIL_SOURCE_NOT_FOUND",
-      sourceId,
-      retryable: false,
-      status: 404,
-      at: new Date().toISOString(),
-    });
+): SourceRoutingGuardResult {
+  const result = getSourceRoutingReady(sessionToken, sourceId);
+  if (!result.ok) {
+    return failSourceRoutingGuard(reply, result.payload);
   }
-
-  const sourceContext = resolveRoutingContextForSource(sessionToken, source);
-  if (!sourceNeedsRoutingVerification(sourceContext)) {
-    return {
-      ok: true,
-    };
-  }
-
-  const routingStatus = getSourceRoutingStatusBySession(sessionToken, sourceId);
-  if (!routingStatus) {
-    return failSourceRoutingGuard(reply, {
-      ok: false,
-      error: "Mail source routing not verified",
-      errorCode: "MAIL_SOURCE_ROUTING_UNVERIFIED",
-      sourceId,
-      retryable: true,
-      status: 412,
-      at: new Date().toISOString(),
-    });
-  }
-
-  if (!routingStatus.routingVerified || routingStatus.failFast) {
-    return failSourceRoutingGuard(reply, {
-      ok: false,
-      error: `Mail source routing verification failed: ${routingStatus.message}`,
-      errorCode: "MAIL_SOURCE_ROUTING_NOT_READY",
-      sourceId,
-      routingStatus,
-      retryable: true,
-      status: 412,
-      at: new Date().toISOString(),
-    });
-  }
-
-  return {
-    ok: true,
-  };
+  return result;
 }
 
 function cleanOptionalText(value: string | undefined): string | undefined {
@@ -2114,14 +2163,6 @@ function gatewaySessionKeyForSession(sessionToken: string): string {
   return gatewaySessionKeyForScope(sessionToken, "default");
 }
 
-function gatewaySessionKeyForAiSummary(
-  sessionToken: string,
-  sourceId: string,
-  locale: AiSummaryLocale
-): string {
-  return gatewaySessionKeyForScope(sessionToken, `ai_summary:${sourceId}:${locale}`);
-}
-
 function gatewayErrorSummary(body: unknown): string | null {
   if (!isRecord(body)) {
     if (typeof body === "string" && body.trim().length > 0) {
@@ -2485,50 +2526,6 @@ function buildAiSummaryPrompt(
   ].join("\n");
 }
 
-function extractAgentOutputText(raw: unknown): string | null {
-  if (!isRecord(raw)) {
-    return null;
-  }
-
-  if (typeof raw.output_text === "string" && raw.output_text.trim().length > 0) {
-    return raw.output_text.trim();
-  }
-
-  const output = raw.output;
-  if (!Array.isArray(output)) {
-    return null;
-  }
-
-  const parts: string[] = [];
-  for (const outputItem of output) {
-    if (!isRecord(outputItem)) {
-      continue;
-    }
-    const content = outputItem.content;
-    if (!Array.isArray(content)) {
-      continue;
-    }
-    for (const contentItem of content) {
-      if (!isRecord(contentItem)) {
-        continue;
-      }
-      if (
-        (contentItem.type === "output_text" || contentItem.type === "text") &&
-        typeof contentItem.text === "string" &&
-        contentItem.text.trim().length > 0
-      ) {
-        parts.push(contentItem.text.trim());
-      }
-    }
-  }
-
-  if (parts.length === 0) {
-    return null;
-  }
-
-  return parts.join("\n").trim();
-}
-
 function extractFirstJsonObjectCandidate(text: string): string | null {
   const input = text.trim();
   if (!input) {
@@ -2621,7 +2618,7 @@ function parseAiSummariesFromAgentText(text: string): Map<string, string> {
   return summaries;
 }
 
-async function summarizeRecordsWithOpenClaw(
+async function summarizeRecordsWithLlmGateway(
   sessionToken: string,
   sourceId: string,
   records: AiSummaryRecord[],
@@ -2630,7 +2627,16 @@ async function summarizeRecordsWithOpenClaw(
   const now = Date.now();
   const startedAt = now;
   maybePurgeExpiredAiSummaryCache(now);
-  const aiSummarySessionKey = gatewaySessionKeyForAiSummary(sessionToken, sourceId, locale);
+  const userId = getUserIdForSessionToken(sessionToken);
+  const tenant: TenantContext | null = userId
+    ? {
+        ...buildMailSourceContext(sessionToken, sourceId),
+        userId,
+        sessionToken,
+        sourceId,
+        ...(legacyApiKeySessions.has(sessionToken) ? { isLegacySession: true } : {}),
+      }
+    : null;
 
   const summaries = new Map<string, string>();
   const missing: Array<{ record: AiSummaryRecord; cacheKey: string }> = [];
@@ -2663,7 +2669,7 @@ async function summarizeRecordsWithOpenClaw(
     enforceMapLimit(aiSummaryCache, maxAiSummaryCacheEntries);
   };
 
-  let skipAgentCalls = false;
+  let skipAgentCalls = !tenant || tenant.isLegacySession || tenant.userId.startsWith("legacy:");
   for (let start = 0; start < missing.length; start += aiSummaryBatchSize) {
     const chunk = missing.slice(start, start + aiSummaryBatchSize);
     const elapsedMs = Date.now() - startedAt;
@@ -2699,12 +2705,21 @@ async function summarizeRecordsWithOpenClaw(
     let parsedSummaries = new Map<string, string>();
     try {
       const requestTimeoutMs = Math.min(env.GATEWAY_TIMEOUT_MS, Math.max(1, remainingBudgetMs));
-      const raw = await queryAgent({
-        message: prompt,
-        sessionKey: aiSummarySessionKey,
+      const outputText = await llmGatewayService.generateText({
+        tenant: tenant!,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You summarize email records for a private mail assistant. Return only compact JSON matching the requested schema.",
+          },
+          { role: "user", content: prompt },
+        ],
         timeoutMs: requestTimeoutMs,
+        maxTokens: Math.max(200, chunk.length * aiSummaryMaxLength),
+        temperature: 0.1,
+        responseFormat: { type: "json_object" },
       });
-      const outputText = extractAgentOutputText(raw);
       if (outputText) {
         parsedSummaries = parseAiSummariesFromAgentText(outputText);
         if (parsedSummaries.size === 0) {
@@ -2719,11 +2734,12 @@ async function summarizeRecordsWithOpenClaw(
         }
       }
     } catch (error) {
-      if (error instanceof GatewayHttpError && (error.status === 504 || error.status === 429)) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/(\b429\b|\b504\b|timeout|abort)/i.test(message)) {
         skipAgentCalls = true;
       }
       server.log.warn(
-        { message: error instanceof Error ? error.message : String(error), sourceId },
+        { message, sourceId },
         "AI summary generation failed, using fallback summary"
       );
     }
@@ -2751,7 +2767,7 @@ async function enrichTriageWithAiSummaries(
     preview: item.bodyPreview,
     receivedDateTime: item.receivedDateTime,
   }));
-  const summaryById = await summarizeRecordsWithOpenClaw(sessionToken, sourceId, summaryRecords, locale);
+  const summaryById = await summarizeRecordsWithLlmGateway(sessionToken, sourceId, summaryRecords, locale);
   const allItems = result.allItems.map((item) => ({
     ...item,
     aiSummary:
@@ -2822,7 +2838,7 @@ async function enrichInsightsWithAiSummaries(
     }
   }
 
-  const summaryById = await summarizeRecordsWithOpenClaw(
+  const summaryById = await summarizeRecordsWithLlmGateway(
     sessionToken,
     sourceId,
     [...eventRecords.values()],
@@ -2888,7 +2904,7 @@ async function enrichInboxViewerWithAiSummaries(
     preview: item.bodyPreview,
     receivedDateTime: item.receivedDateTime,
   }));
-  const summaryById = await summarizeRecordsWithOpenClaw(sessionToken, sourceId, summaryRecords, locale);
+  const summaryById = await summarizeRecordsWithLlmGateway(sessionToken, sourceId, summaryRecords, locale);
 
   return {
     ...result,
@@ -2930,7 +2946,7 @@ async function enrichMailDetailWithAiSummary(
     },
   ];
 
-  const summaryById = await summarizeRecordsWithOpenClaw(sessionToken, sourceId, summaryRecords, locale);
+  const summaryById = await summarizeRecordsWithLlmGateway(sessionToken, sourceId, summaryRecords, locale);
   return {
     ...result,
     aiSummary:
@@ -3086,71 +3102,33 @@ async function upsertMicrosoftSourceForSession(
     throw new Error("Microsoft account session not found");
   }
 
-  const mailboxUserId = cleanOptionalText(account.mailboxUserIdHint) ?? "me";
-  const explicitLabel = preferredLabel?.trim() || "";
-  const sourceLabel =
-    explicitLabel ||
-    (account.email ? `Outlook ${account.email}` : `Outlook ${account.displayName}`);
-  const store = getMailSourceStoreBySession(sessionToken, true);
-  const existingSource =
-    [...store.values()].find(
-      (source) =>
-        source.provider === "outlook" &&
-        source.connectionType === "microsoft" &&
-        cleanOptionalText(source.microsoftAccountId) === accountId
-    ) ?? null;
-  const nowIso = new Date().toISOString();
-
-  let source: MailSourceProfile;
-  if (existingSource) {
-    const baseExistingSource: MailSourceProfile = {
-      ...existingSource,
-    };
-    delete baseExistingSource.connectedAccountId;
-    source = {
-      ...baseExistingSource,
-      name: sourceLabel,
-      connectionType: "microsoft",
-      microsoftAccountId: accountId,
-      emailHint: account.email || existingSource.emailHint || mailboxUserId,
-      mailboxUserId,
-      enabled: true,
-      updatedAt: nowIso,
-    };
-    setLruEntry(store, source.id, source);
-  } else {
-    if (store.size >= maxMailSourcesPerSession) {
-      throw new Error("Mail source limit reached");
-    }
-
-    const sourceId = buildMailSourceId(store, sourceLabel);
-    source = {
-      id: sourceId,
-      name: sourceLabel,
-      provider: "outlook",
-      connectionType: "microsoft",
-      microsoftAccountId: accountId,
-      emailHint: account.email || mailboxUserId,
-      mailboxUserId,
-      enabled: true,
-      createdAt: nowIso,
-      updatedAt: nowIso,
-    };
-    setLruEntry(store, source.id, source);
-    enforceMapLimit(store, maxMailSourcesPerSession);
-    enforceMapLimit(mailSourcesBySession, maxMailSourceSessionEntries);
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId || userId.startsWith("legacy:")) {
+    throw new UnauthorizedSessionError();
   }
 
-  sourceRoutingStatusBySession.delete(sourceScopedSessionKey(sessionToken, source.id));
-  const routingStatus = await verifySourceRoutingForSession(sessionToken, source.id);
+  await persistMicrosoftAccountForUser({
+    logger: server.log,
+    userId,
+    sessionToken,
+    accountId,
+  });
+  const sourceResult = await mailSourceService.upsertMicrosoftSourceForUser({
+    userId,
+    accountId,
+    label: preferredLabel,
+    email: account.email,
+    displayName: account.displayName,
+    mailboxUserIdHint: account.mailboxUserIdHint,
+  });
+  await hydrateMailSourcesForSession(sessionToken);
+
+  const routingStatus = await verifySourceRoutingForSession(sessionToken, sourceResult.source.id);
   const ready = routingStatus.routingVerified && !routingStatus.failFast;
-  if (ready && source.enabled) {
-    activeMailSourceBySession.set(sessionToken, source.id);
-  }
 
   return {
-    source: withRoutingStatus(sessionToken, source),
-    activeSourceId: activeMailSourceBySession.get(sessionToken) ?? defaultMailSourceId,
+    source: getMailSourcesSnapshotBySession(sessionToken).sources.find((item) => item.id === sourceResult.source.id) ?? sourceResult.source,
+    activeSourceId: getMailSourcesSnapshotBySession(sessionToken).activeSourceId ?? sourceResult.source.id,
     ready,
     routingStatus,
   };
@@ -3161,6 +3139,7 @@ function buildMailSourceContext(sessionToken: string | null, sourceId: string): 
     return { sourceId };
   }
 
+  const userId = getUserIdForSessionToken(sessionToken) ?? undefined;
   const snapshot = getMailSourcesSnapshotBySession(sessionToken);
   const profile = snapshot.sources.find((source) => source.id === sourceId);
   const mailboxUserId = cleanOptionalText(profile?.mailboxUserId);
@@ -3171,6 +3150,7 @@ function buildMailSourceContext(sessionToken: string | null, sourceId: string): 
   const connectedAccountId = connectedAccountUsable ? rawConnectedAccountId : undefined;
 
   return {
+    ...(userId ? { userId } : {}),
     sourceId,
     sessionToken,
     ...(profile?.connectionType ? { connectionType: profile.connectionType } : {}),
@@ -3179,6 +3159,86 @@ function buildMailSourceContext(sessionToken: string | null, sourceId: string): 
       : {}),
     ...(mailboxUserId ? { mailboxUserId } : {}),
     ...(connectedAccountId ? { connectedAccountId } : {}),
+  };
+}
+
+function getUserIdForSessionToken(sessionToken: string): string | null {
+  const userId = authSessionUserByToken.get(sessionToken) ?? authSessionUserViewByToken.get(sessionToken)?.id;
+  if (userId) {
+    return userId;
+  }
+
+  if (legacyApiKeySessions.has(sessionToken)) {
+    return `legacy:${createHash("sha256").update(sessionToken).digest("hex").slice(0, 16)}`;
+  }
+
+  return null;
+}
+
+async function hydrateMailSourcesForSession(sessionToken: string): Promise<void> {
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId || userId.startsWith("legacy:")) {
+    return;
+  }
+
+  const snapshot = await mailSourceService.listForUser(userId);
+  const nextStore = new Map<string, MailSourceProfile>();
+  for (const source of snapshot.sources as MailSourceProfileView[]) {
+    const profile: MailSourceProfile = {
+      id: source.id,
+      name: source.name,
+      provider: source.provider,
+      ...(source.connectionType ? { connectionType: source.connectionType } : {}),
+      ...(cleanOptionalText(source.microsoftAccountId) ? { microsoftAccountId: source.microsoftAccountId } : {}),
+      emailHint: source.emailHint,
+      ...(cleanOptionalText(source.mailboxUserId) ? { mailboxUserId: source.mailboxUserId } : {}),
+      ...(cleanOptionalText(source.connectedAccountId) ? { connectedAccountId: source.connectedAccountId } : {}),
+      enabled: source.enabled,
+      createdAt: source.createdAt,
+      updatedAt: source.updatedAt,
+    };
+    nextStore.set(source.id, profile);
+    const scopeKey = sourceScopedSessionKey(sessionToken, source.id);
+    if (source.routingStatus) {
+      sourceRoutingStatusBySession.set(scopeKey, source.routingStatus);
+    } else {
+      sourceRoutingStatusBySession.delete(scopeKey);
+    }
+  }
+
+  mailSourcesBySession.set(sessionToken, nextStore);
+  if (snapshot.activeSourceId) {
+    activeMailSourceBySession.set(sessionToken, snapshot.activeSourceId);
+  } else {
+    activeMailSourceBySession.delete(sessionToken);
+  }
+  enforceMapLimit(mailSourcesBySession, maxMailSourceSessionEntries);
+  enforceMapLimit(sourceRoutingStatusBySession, maxMailSourceRoutingSessionEntries);
+}
+
+function buildTenantContextForRequest(
+  reply: FastifyReply,
+  sessionToken: string | null,
+  requestedSourceId?: string
+): TenantContext | null {
+  const sourceId = requireResolvedSourceId(reply, sessionToken, requestedSourceId);
+  if (!sourceId || !sessionToken) {
+    return null;
+  }
+
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId) {
+    reply.status(401);
+    return null;
+  }
+
+  const sourceContext = buildMailSourceContext(sessionToken, sourceId);
+  return {
+    ...sourceContext,
+    userId,
+    sessionToken,
+    sourceId,
+    ...(legacyApiKeySessions.has(sessionToken) ? { isLegacySession: true } : {}),
   };
 }
 
@@ -3243,10 +3303,19 @@ async function verifySourceRoutingForSession(
       };
       sourceRoutingStatusBySession.set(sourceScopedSessionKey(sessionToken, sourceId), missingStatus);
       enforceMapLimit(sourceRoutingStatusBySession, maxMailSourceRoutingSessionEntries);
+      const userId = getUserIdForSessionToken(sessionToken);
+      if (userId && !userId.startsWith("legacy:")) {
+        await mailSourceService.saveRoutingStatus(userId, sourceId, missingStatus);
+        await hydrateMailSourcesForSession(sessionToken);
+      }
       return missingStatus;
     }
 
-    const verification = await verifyMicrosoftMailboxAccess(sessionToken, accountId);
+    const verification = await verifyMicrosoftMailboxAccess(
+      sessionToken,
+      accountId,
+      getUserIdForSessionToken(sessionToken) ?? undefined
+    );
     const routingStatus: MailSourceRoutingStatus = {
       verifiedAt: new Date().toISOString(),
       routingVerified: verification.ok,
@@ -3271,6 +3340,11 @@ async function verifySourceRoutingForSession(
     };
     sourceRoutingStatusBySession.set(sourceScopedSessionKey(sessionToken, sourceId), routingStatus);
     enforceMapLimit(sourceRoutingStatusBySession, maxMailSourceRoutingSessionEntries);
+    const userId = getUserIdForSessionToken(sessionToken);
+    if (userId && !userId.startsWith("legacy:")) {
+      await mailSourceService.saveRoutingStatus(userId, sourceId, routingStatus);
+      await hydrateMailSourcesForSession(sessionToken);
+    }
     return routingStatus;
   }
 
@@ -3414,6 +3488,11 @@ async function verifySourceRoutingForSession(
   }
   sourceRoutingStatusBySession.set(sourceScopedSessionKey(sessionToken, sourceId), status);
   enforceMapLimit(sourceRoutingStatusBySession, maxMailSourceRoutingSessionEntries);
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (userId && !userId.startsWith("legacy:")) {
+    await mailSourceService.saveRoutingStatus(userId, sourceId, status);
+    await hydrateMailSourcesForSession(sessionToken);
+  }
   return status;
 }
 
@@ -4030,6 +4109,9 @@ server.addHook("onRequest", async (request, reply) => {
     pathname === "/api/auth/me" ||
     pathname === "/api/auth/logout" ||
     pathname === "/api/auth/session" ||
+    pathname === "/api/live" ||
+    pathname === "/api/ready" ||
+    pathname === "/api/health" ||
     pathname === "/api/mail/connections/outlook/direct/start" ||
     pathname === "/api/mail/connections/outlook/direct/callback"
   ) {
@@ -4048,6 +4130,30 @@ server.addHook("onRequest", async (request, reply) => {
     return reply.status(401).send({
       ok: false,
       error: "Unauthorized",
+    });
+  }
+});
+
+server.addHook("preHandler", async (request, reply) => {
+  const pathname = request.url.split("?")[0];
+  if (!pathname.startsWith("/api/mail") && !pathname.startsWith("/api/agent")) {
+    return;
+  }
+
+  const sessionToken = getSessionTokenFromRequest(request);
+  if (!sessionToken) {
+    return;
+  }
+
+  try {
+    await hydrateMailSourcesForSession(sessionToken);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    server.log.warn({ message, pathname }, "Failed to hydrate tenant mail sources");
+    return reply.status(503).send({
+      ok: false,
+      error: "Mail source store unavailable",
+      errorCode: "MAIL_SOURCE_STORE_UNAVAILABLE",
     });
   }
 });
@@ -4088,16 +4194,6 @@ const invokeSchema = z.object({
   sessionKey: z.string().min(1).optional(),
 });
 
-const querySchema = z.object({
-  message: z.string().min(1),
-  user: z.string().min(1).optional(),
-  sessionKey: z.string().min(1).optional(),
-  sourceId: z.string().trim().min(3).max(80).optional(),
-  horizonDays: z.number().int().min(1).max(30).optional(),
-  tz: z.string().trim().min(1).max(80).optional(),
-  requestedSkillIds: z.array(z.string().trim().min(1)).max(8).optional(),
-});
-
 const sourceIdSchema = z
   .string()
   .trim()
@@ -4109,6 +4205,12 @@ const sourceIdOptionalSchema = sourceIdSchema.optional();
 const sourceOnlyQuerySchema = z.object({
   sourceId: sourceIdOptionalSchema,
 });
+const querySchema = z.object({
+  message: z.string().trim().min(1).max(8000),
+  sourceId: sourceIdOptionalSchema,
+  threadId: z.string().trim().min(1).max(256).optional(),
+});
+const agentChatSchema = querySchema;
 
 const mailQuestionSchema = z.object({
   question: z.string().min(1).max(300),
@@ -4235,6 +4337,7 @@ const sourceLabelSchema = z.string().trim().min(1).max(80);
 const mailSourceCreateSchema = z.object({
   label: sourceLabelSchema,
   emailHint: z.string().trim().max(120).optional(),
+  connectionType: z.enum(["composio", "microsoft"]).default("composio"),
   mailboxUserId: z
     .string()
     .trim()
@@ -4242,7 +4345,8 @@ const mailSourceCreateSchema = z.object({
     .max(160)
     .refine((value) => isValidMailboxUserId(value), {
       message: "Invalid mailboxUserId",
-    }),
+    })
+    .optional(),
   connectedAccountId: z
     .string()
     .trim()
@@ -4250,7 +4354,9 @@ const mailSourceCreateSchema = z.object({
     .max(120)
     .refine((value) => isValidConnectedAccountId(value), {
       message: "Invalid connectedAccountId",
-    }),
+    })
+    .optional(),
+  microsoftAccountId: z.string().trim().min(1).max(160).optional(),
   provider: sourceProviderSchema.default("outlook"),
 });
 
@@ -4272,6 +4378,7 @@ const mailSourceUpdateSchema = z.object({
     .refine((value) => value === undefined || isValidConnectedAccountId(value), {
       message: "Invalid connectedAccountId",
     }),
+  microsoftAccountId: z.string().trim().max(160).optional(),
   enabled: z.boolean().optional(),
 });
 
@@ -4601,21 +4708,43 @@ async function runCalendarSyncWithDedupe(
   }
 }
 
-server.get("/live", async () => {
+async function livePayload() {
   return {
     ok: true,
     service: "mail-agent-bff",
+    runtime: env.agentRuntime,
   };
-});
+}
+
+server.get("/live", async () => livePayload());
+server.get("/api/live", async () => livePayload());
+
+async function checkPrismaReady() {
+  try {
+    const prisma = (await getPrismaClient(server.log)) as any;
+    if (!prisma?.$queryRawUnsafe) {
+      return { ok: false, error: "Prisma client unavailable" };
+    }
+    await prisma.$queryRawUnsafe("SELECT 1");
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: env.NODE_ENV === "production" ? "Prisma readiness check failed" : error instanceof Error ? error.message : String(error),
+    };
+  }
+}
 
 async function readinessProbe() {
   const startedAt = Date.now();
 
-  if (!env.openClawGatewayBearer) {
-    const siliconFlowConfigured = env.siliconFlowApiKey.length > 0;
-    const composioConfigured = env.composioApiKey.length > 0 && env.composioMcpUrl.length > 0;
-    const microsoftConfigured = isMicrosoftDirectAuthConfigured();
-    const ready = siliconFlowConfigured && (composioConfigured || microsoftConfigured);
+  if (env.agentRuntime !== "openclaw") {
+    const prisma = await checkPrismaReady();
+    const llmConfigured =
+      env.llmProviderBaseUrl.length > 0 && env.llmProviderApiKey.length > 0 && env.llmProviderModel.length > 0;
+    const microsoftConfigured = isMicrosoftDirectAuthConfigured() && env.appEncryptionKey.length > 0;
+    const redisConfigured = !env.redisAuthSessionsEnabled || redisAuthSessionStore.enabled;
+    const ready = prisma.ok && llmConfigured && microsoftConfigured && redisConfigured;
 
     return {
       statusCode: ready ? 200 : 503,
@@ -4624,10 +4753,11 @@ async function readinessProbe() {
         service: "mail-agent-bff",
         latencyMs: Date.now() - startedAt,
         runtime: {
-          mode: "direct",
-          siliconFlow: { ok: siliconFlowConfigured },
-          composio: { ok: composioConfigured },
+          mode: env.agentRuntime,
+          prisma,
+          llm: { ok: llmConfigured, model: env.llmProviderModel },
           microsoft: { ok: microsoftConfigured },
+          redis: { ok: redisConfigured, enabled: redisAuthSessionStore.enabled },
         },
       },
     };
@@ -4678,7 +4808,17 @@ server.get("/ready", async (_request, reply) => {
   return reply.status(result.statusCode).send(result.payload);
 });
 
+server.get("/api/ready", async (_request, reply) => {
+  const result = await readinessProbe();
+  return reply.status(result.statusCode).send(result.payload);
+});
+
 server.get("/health", async (_request, reply) => {
+  const result = await readinessProbe();
+  return reply.status(result.statusCode).send(result.payload);
+});
+
+server.get("/api/health", async (_request, reply) => {
   const result = await readinessProbe();
   return reply.status(result.statusCode).send(result.payload);
 });
@@ -5429,68 +5569,52 @@ server.post("/api/mail/sources", async (request, reply) => {
     };
   }
 
-  const store = getMailSourceStoreBySession(sessionToken, true);
-  if (store.size >= maxMailSourcesPerSession) {
-    reply.status(409);
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId || userId.startsWith("legacy:")) {
+    reply.status(401);
     return {
       ok: false,
-      error: "Mail source limit reached",
+      error: "Unauthorized",
+      errorCode: "UNAUTHORIZED",
     };
   }
 
-  const nowIso = new Date().toISOString();
-  const baseLabel = parsed.data.label.trim();
-  const normalizedMailboxUserId = cleanOptionalText(parsed.data.mailboxUserId);
-  const normalizedConnectedAccountId = cleanOptionalText(parsed.data.connectedAccountId);
-  if (!normalizedMailboxUserId || !normalizedConnectedAccountId) {
-    reply.status(400);
+  try {
+    const result = await mailSourceService.createForUser(userId, {
+      label: parsed.data.label,
+      provider: parsed.data.provider,
+      connectionType: parsed.data.connectionType,
+      emailHint: parsed.data.emailHint,
+      mailboxUserId: parsed.data.mailboxUserId,
+      connectedAccountId: parsed.data.connectedAccountId,
+      microsoftAccountId: parsed.data.microsoftAccountId,
+    });
+    await hydrateMailSourcesForSession(sessionToken);
+
+    return {
+      ok: true,
+      result: {
+        source: result.source,
+        activeSourceId: result.activeSourceId,
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    reply.status(
+      message === "MAIL_SOURCE_CONNECTION_REQUIRED"
+        ? 400
+        : message === "COMPOSIO_ACCOUNT_OWNERSHIP_REQUIRED"
+          ? 412
+          : message === "MICROSOFT_ACCOUNT_NOT_FOUND"
+            ? 404
+            : 502
+    );
     return {
       ok: false,
-      error: "mailboxUserId and connectedAccountId are required",
+      error: message,
+      errorCode: message,
     };
   }
-
-  const baseSlug = baseLabel
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 24) || "source";
-  let id = `${baseSlug}_${randomBytes(3).toString("hex")}`;
-  while (store.has(id) || id === defaultMailSourceId) {
-    id = `${baseSlug}_${randomBytes(3).toString("hex")}`;
-  }
-
-  const source: MailSourceProfile = {
-    id,
-    name: baseLabel,
-    provider: parsed.data.provider,
-    emailHint: parsed.data.emailHint?.trim() ?? normalizedMailboxUserId,
-    mailboxUserId: normalizedMailboxUserId,
-    connectedAccountId: normalizedConnectedAccountId,
-    enabled: true,
-    createdAt: nowIso,
-    updatedAt: nowIso,
-  };
-
-  setLruEntry(store, id, source);
-  enforceMapLimit(store, maxMailSourcesPerSession);
-  enforceMapLimit(mailSourcesBySession, maxMailSourceSessionEntries);
-  server.log.info(
-    {
-      sourceId: source.id,
-      mailboxUserId: source.mailboxUserId,
-      connectedAccountId: source.connectedAccountId,
-    },
-    "Mail source created in pending state; run /api/mail/sources/verify before activation"
-  );
-
-  return {
-    ok: true,
-    result: {
-      source: withRoutingStatus(sessionToken, source),
-      activeSourceId: activeMailSourceBySession.get(sessionToken) ?? defaultMailSourceId,
-    },
-  };
 });
 
 server.post("/api/mail/sources/update", async (request, reply) => {
@@ -5530,93 +5654,41 @@ server.post("/api/mail/sources/update", async (request, reply) => {
     };
   }
 
-  const store = getMailSourceStoreBySession(sessionToken, true);
-  const current = store.get(parsed.data.id);
-  if (!current) {
-    reply.status(404);
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId || userId.startsWith("legacy:")) {
+    reply.status(401);
     return {
       ok: false,
-      error: "Mail source not found",
+      error: "Unauthorized",
+      errorCode: "UNAUTHORIZED",
     };
   }
 
-  const nextMailboxUserId =
-    parsed.data.mailboxUserId !== undefined
-      ? cleanOptionalText(parsed.data.mailboxUserId)
-      : cleanOptionalText(current.mailboxUserId);
-  const nextConnectedAccountId =
-    parsed.data.connectedAccountId !== undefined
-      ? cleanOptionalText(parsed.data.connectedAccountId)
-      : cleanOptionalText(current.connectedAccountId);
-
-  if (parsed.data.mailboxUserId !== undefined && !nextMailboxUserId) {
-    reply.status(400);
+  try {
+    const result = await mailSourceService.updateForUser(userId, parsed.data);
+    await hydrateMailSourcesForSession(sessionToken);
     return {
-      ok: false,
-      error: "mailboxUserId cannot be empty",
-    };
-  }
-
-  if (parsed.data.connectedAccountId !== undefined && !nextConnectedAccountId) {
-    reply.status(400);
-    return {
-      ok: false,
-      error: "connectedAccountId cannot be empty",
-    };
-  }
-
-  if (Boolean(nextMailboxUserId) !== Boolean(nextConnectedAccountId)) {
-    reply.status(400);
-    return {
-      ok: false,
-      error: "mailboxUserId and connectedAccountId must be configured together",
-    };
-  }
-
-  const nextLabel = parsed.data.label ?? parsed.data.name ?? current.name;
-  const next: MailSourceProfile = {
-    ...current,
-    name: nextLabel,
-    emailHint: parsed.data.emailHint ?? current.emailHint,
-    ...(nextMailboxUserId ? { mailboxUserId: nextMailboxUserId } : {}),
-    ...(nextConnectedAccountId ? { connectedAccountId: nextConnectedAccountId } : {}),
-    enabled: parsed.data.enabled ?? current.enabled,
-    updatedAt: new Date().toISOString(),
-  };
-
-  store.set(next.id, next);
-  const currentMailbox = cleanOptionalText(current.mailboxUserId) ?? "";
-  const currentConnectedAccount = cleanOptionalText(current.connectedAccountId) ?? "";
-  const nextMailbox = cleanOptionalText(next.mailboxUserId) ?? "";
-  const nextConnectedAccount = cleanOptionalText(next.connectedAccountId) ?? "";
-  const routingContextChanged =
-    currentMailbox !== nextMailbox || currentConnectedAccount !== nextConnectedAccount;
-
-  if (routingContextChanged) {
-    sourceRoutingStatusBySession.delete(sourceScopedSessionKey(sessionToken, next.id));
-  }
-
-  if (routingContextChanged && next.connectedAccountId) {
-    server.log.info(
-      {
-        sourceId: next.id,
-        mailboxUserId: next.mailboxUserId,
-        connectedAccountId: next.connectedAccountId,
+      ok: true,
+      result: {
+        source: result.source,
+        activeSourceId: result.activeSourceId,
       },
-      "Mail source updated; routing status reset to pending until re-verified"
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    reply.status(
+      message === "MAIL_SOURCE_NOT_FOUND" || message === "MICROSOFT_ACCOUNT_NOT_FOUND"
+        ? 404
+        : message === "COMPOSIO_ACCOUNT_OWNERSHIP_REQUIRED"
+          ? 412
+          : 400
     );
+    return {
+      ok: false,
+      error: message,
+      errorCode: message,
+    };
   }
-  if (!next.enabled && activeMailSourceBySession.get(sessionToken) === next.id) {
-    activeMailSourceBySession.set(sessionToken, defaultMailSourceId);
-  }
-
-  return {
-    ok: true,
-    result: {
-      source: withRoutingStatus(sessionToken, next),
-      activeSourceId: activeMailSourceBySession.get(sessionToken) ?? defaultMailSourceId,
-    },
-  };
 });
 
 server.post("/api/mail/sources/delete", async (request, reply) => {
@@ -5656,35 +5728,41 @@ server.post("/api/mail/sources/delete", async (request, reply) => {
     };
   }
 
-  const store = getMailSourceStoreBySession(sessionToken, true);
-  const deleted = store.delete(parsed.data.id);
-  if (!deleted) {
-    reply.status(404);
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId || userId.startsWith("legacy:")) {
+    reply.status(401);
     return {
       ok: false,
-      error: "Mail source not found",
+      error: "Unauthorized",
+      errorCode: "UNAUTHORIZED",
     };
   }
 
-  if (activeMailSourceBySession.get(sessionToken) === parsed.data.id) {
-    activeMailSourceBySession.set(sessionToken, defaultMailSourceId);
+  try {
+    const result = await mailSourceService.deleteForUser(userId, parsed.data.id);
+    clearSessionScopedMapEntries(sourceRoutingStatusBySession, sessionToken);
+    customPriorityRulesBySession.delete(sourceScopedSessionKey(sessionToken, parsed.data.id));
+    notificationPrefsBySession.delete(sourceScopedSessionKey(sessionToken, parsed.data.id));
+    notificationStateBySession.delete(sourceScopedSessionKey(sessionToken, parsed.data.id));
+    notificationPollLocksBySession.delete(sourceScopedSessionKey(sessionToken, parsed.data.id));
+    await hydrateMailSourcesForSession(sessionToken);
+    return {
+      ok: true,
+      result: {
+        id: result.id,
+        deleted: true,
+        activeSourceId: result.activeSourceId,
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    reply.status(message === "MAIL_SOURCE_NOT_FOUND" ? 404 : 502);
+    return {
+      ok: false,
+      error: message,
+      errorCode: message,
+    };
   }
-
-  const scopePrefix = sourceScopedSessionKey(sessionToken, `${parsed.data.id}`);
-  sourceRoutingStatusBySession.delete(scopePrefix);
-  customPriorityRulesBySession.delete(scopePrefix);
-  notificationPrefsBySession.delete(scopePrefix);
-  notificationStateBySession.delete(scopePrefix);
-  notificationPollLocksBySession.delete(scopePrefix);
-
-  return {
-    ok: true,
-    result: {
-      id: parsed.data.id,
-      deleted: true,
-      activeSourceId: activeMailSourceBySession.get(sessionToken) ?? defaultMailSourceId,
-    },
-  };
 });
 
 server.post("/api/mail/sources/select", async (request, reply) => {
@@ -5724,8 +5802,18 @@ server.post("/api/mail/sources/select", async (request, reply) => {
     };
   }
 
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId || userId.startsWith("legacy:")) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+      errorCode: "UNAUTHORIZED",
+    };
+  }
+
   const resolved = resolveSourceIdForSession(sessionToken, parsed.data.id);
-  if (!resolved.ok) {
+  if (!resolved.ok || !resolved.sourceId) {
     reply.status(404);
     return {
       ok: false,
@@ -5747,7 +5835,19 @@ server.post("/api/mail/sources/select", async (request, reply) => {
     };
   }
 
-  activeMailSourceBySession.set(sessionToken, resolved.sourceId);
+  try {
+    await mailSourceService.selectForUser(userId, resolved.sourceId);
+    await hydrateMailSourcesForSession(sessionToken);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    reply.status(message === "MAIL_SOURCE_NOT_FOUND" ? 404 : 502);
+    return {
+      ok: false,
+      error: message,
+      errorCode: message,
+    };
+  }
+
   return {
     ok: true,
     result: {
@@ -6544,66 +6644,46 @@ server.post("/api/mail/sources/auto-connect/outlook", async (request, reply) => 
       (mailboxUserId !== "me" ? mailboxUserId : "") ??
       "";
 
-    const store = getMailSourceStoreBySession(sessionToken, true);
+    const userId = getUserIdForSessionToken(sessionToken);
+    if (!userId || userId.startsWith("legacy:")) {
+      throw new UnauthorizedSessionError();
+    }
+    const beforeSources = getMailSourcesSnapshotBySession(sessionToken).sources;
     const existingSource =
-      [...store.values()].find(
+      beforeSources.find(
         (source) =>
           source.provider === "outlook" &&
+          source.connectionType !== "microsoft" &&
           cleanOptionalText(source.connectedAccountId) === connectedAccountId
       ) ?? null;
-    const nowIso = new Date().toISOString();
-
-    let source: MailSourceProfile;
     const created = !existingSource;
-    if (existingSource) {
-      const routingContextChanged =
-        cleanOptionalText(existingSource.mailboxUserId) !== mailboxUserId ||
-        cleanOptionalText(existingSource.connectedAccountId) !== connectedAccountId;
-      if (routingContextChanged) {
-        sourceRoutingStatusBySession.delete(sourceScopedSessionKey(sessionToken, existingSource.id));
-      }
+    const sourceResult = existingSource
+      ? await mailSourceService.updateForUser(userId, {
+          id: existingSource.id,
+          label: explicitLabel ? sourceLabel : existingSource.name,
+          emailHint: emailHint || existingSource.emailHint || mailboxUserId,
+          mailboxUserId,
+          connectedAccountId,
+          trustedConnectedAccountId: true,
+          enabled: true,
+        })
+      : await mailSourceService.createForUser(userId, {
+          label: sourceLabel,
+          provider: "outlook",
+          connectionType: "composio",
+          emailHint: emailHint || mailboxUserId,
+          mailboxUserId,
+          connectedAccountId,
+          trustedConnectedAccountId: true,
+        });
+    await hydrateMailSourcesForSession(sessionToken);
 
-      source = {
-        ...existingSource,
-        name: explicitLabel ? sourceLabel : existingSource.name,
-        emailHint: emailHint || existingSource.emailHint || mailboxUserId,
-        mailboxUserId,
-        connectedAccountId,
-        enabled: true,
-        updatedAt: nowIso,
-      };
-      setLruEntry(store, source.id, source);
-    } else {
-      if (store.size >= maxMailSourcesPerSession) {
-        reply.status(409);
-        return {
-          ok: false,
-          error: "Mail source limit reached",
-        };
-      }
-
-      const sourceId = buildMailSourceId(store, sourceLabel);
-      source = {
-        id: sourceId,
-        name: sourceLabel,
-        provider: "outlook",
-        emailHint: emailHint || mailboxUserId,
-        mailboxUserId,
-        connectedAccountId,
-        enabled: true,
-        createdAt: nowIso,
-        updatedAt: nowIso,
-      };
-      setLruEntry(store, source.id, source);
-      enforceMapLimit(store, maxMailSourcesPerSession);
-      enforceMapLimit(mailSourcesBySession, maxMailSourceSessionEntries);
-    }
-
-    const routingStatus = await verifySourceRoutingForSession(sessionToken, source.id);
+    const routingStatus = await verifySourceRoutingForSession(sessionToken, sourceResult.source.id);
     const ready = routingStatus.routingVerified && !routingStatus.failFast;
     const autoSelect = parsed.data.autoSelect ?? true;
-    if (ready && autoSelect && source.enabled) {
-      activeMailSourceBySession.set(sessionToken, source.id);
+    if (ready && autoSelect) {
+      await mailSourceService.selectForUser(userId, sourceResult.source.id);
+      await hydrateMailSourcesForSession(sessionToken);
     }
 
     return {
@@ -6611,8 +6691,10 @@ server.post("/api/mail/sources/auto-connect/outlook", async (request, reply) => 
       result: {
         phase: ready ? "ready" : "verification_failed",
         connection,
-        source: withRoutingStatus(sessionToken, source),
-        activeSourceId: activeMailSourceBySession.get(sessionToken) ?? defaultMailSourceId,
+        source:
+          getMailSourcesSnapshotBySession(sessionToken).sources.find((item) => item.id === sourceResult.source.id) ??
+          sourceResult.source,
+        activeSourceId: getMailSourcesSnapshotBySession(sessionToken).activeSourceId,
         ready,
         routingStatus,
         message: ready
@@ -7843,13 +7925,17 @@ server.post("/api/mail/query", async (request, reply) => {
     return routingGuard.payload;
   }
   try {
-    const sourceContext = buildMailSourceContext(sessionToken, sourceId);
+    const tenant = buildTenantContextForRequest(reply, sessionToken, sourceId);
+    if (!tenant) {
+      return {
+        ok: false,
+        error: "Unauthorized or source not found",
+      };
+    }
+
     const result = await agentRuntime.query({
-      userId: runtimeUserIdForSession(sessionToken),
-      sessionToken,
-      question,
-      sourceId,
-      sourceContext,
+      tenant,
+      message: question,
       timeZone: parsed.data.tz,
       limit,
       horizonDays,
@@ -7861,9 +7947,7 @@ server.post("/api/mail/query", async (request, reply) => {
       result: {
         answer: result.answer,
         references: result.references,
-        usedSkills: result.usedSkills,
-        memoryHits: result.memoryHits,
-        generatedAt: result.generatedAt,
+        generatedAt: new Date().toISOString(),
       },
     };
   } catch (error) {
@@ -8479,6 +8563,1177 @@ server.post("/api/gateway/tools/invoke", async (request, reply) => {
   }
 });
 
+function normalizeKbScore(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 5;
+  }
+  if (value >= 0 && value <= 1) {
+    return Math.max(1, Math.min(10, Math.round(value * 10)));
+  }
+  return Math.max(1, Math.min(10, Math.round(value)));
+}
+
+function kbQuadrantFromScores(importanceScore: number, urgencyScore: number): string {
+  const importance = normalizeKbScore(importanceScore);
+  const urgency = normalizeKbScore(urgencyScore);
+  if (importance >= 6 && urgency >= 6) return "urgent_important";
+  if (importance >= 6) return "not_urgent_important";
+  if (urgency >= 6) return "urgent_not_important";
+  return "not_urgent_not_important";
+}
+
+function parseKbKeyInfo(raw: string | null | undefined): string[] {
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.map(String).filter(Boolean);
+    }
+    if (parsed && typeof parsed === "object") {
+      return Object.entries(parsed).map(([key, value]) => `${key}: ${String(value)}`);
+    }
+  } catch {
+    return [raw].filter(Boolean);
+  }
+
+  return [];
+}
+
+function kbIsoDate(value: unknown): string {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  return value ? String(value) : "";
+}
+
+type MailKbJobLog = {
+  timestamp: string;
+  level: "info" | "warn" | "error";
+  message: string;
+};
+
+const mailKbJobLocks = new Set<string>();
+const mailKbJobLogs = new Map<string, MailKbJobLog[]>();
+const maxMailKbJobLogs = 200;
+
+function addMailKbJobLog(jobId: string, level: MailKbJobLog["level"], message: string) {
+  const logs = mailKbJobLogs.get(jobId) ?? [];
+  logs.push({ timestamp: new Date().toISOString(), level, message });
+  if (logs.length > maxMailKbJobLogs) {
+    logs.splice(0, logs.length - maxMailKbJobLogs);
+  }
+  mailKbJobLogs.set(jobId, logs);
+}
+
+function mailKbJobPhase(status: string): string {
+  if (status === "queued") return "idle";
+  if (status === "running") return "persist";
+  if (status === "completed") return "done";
+  if (status === "failed") return "error";
+  return "idle";
+}
+
+function mailKbJobMessage(row: any): string {
+  if (row.status === "queued") return "Waiting for the single-node worker";
+  if (row.status === "running") return "Reading, scoring, and persisting the current mailbox snapshot";
+  if (row.status === "completed") return "Knowledge base job completed";
+  if (row.status === "failed") return row.error ?? "Knowledge base job failed";
+  return row.status;
+}
+
+function toMailKbJobDto(row: any) {
+  const total = Number(row.totalMails ?? 0);
+  const processed = Number(row.processedMails ?? 0);
+  return {
+    id: row.id,
+    jobId: row.id,
+    sourceId: row.sourceId,
+    status: row.status,
+    error: row.error ?? null,
+    createdAt: kbIsoDate(row.createdAt),
+    startedAt: kbIsoDate(row.startedAt),
+    finishedAt: kbIsoDate(row.finishedAt),
+    progress: {
+      phase: mailKbJobPhase(row.status),
+      message: mailKbJobMessage(row),
+      total,
+      processed,
+      percent: Number(row.progress ?? 0),
+    },
+    counts: {
+      mails: total,
+      processedMails: processed,
+      events: Number(row.totalEvents ?? 0),
+      persons: Number(row.totalPersons ?? 0),
+    },
+    logs: mailKbJobLogs.get(row.id) ?? [],
+  };
+}
+
+function stableKbId(prefix: string, userId: string, sourceId: string, raw: string): string {
+  const hash = createHash("sha256").update(`${userId}:${sourceId}:${raw}`).digest("hex").slice(0, 32);
+  return `${prefix}_${hash}`;
+}
+
+function safeKbDate(raw: string | undefined, fallback = new Date()): Date {
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? fallback : parsed;
+}
+
+function truncateKbText(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength - 1)}…`;
+}
+
+function subjectKeywords(subject: string): string[] {
+  return subject
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff\s_-]+/g, " ")
+    .split(/\s+/)
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 2)
+    .slice(0, 12);
+}
+
+async function persistMailKbJobSnapshot(prisma: any, jobId: string, tenant: TenantContext) {
+  const sourceContext: MailSourceContext = {
+    userId: tenant.userId,
+    sourceId: tenant.sourceId,
+    sessionToken: tenant.sessionToken,
+    ...(tenant.connectionType ? { connectionType: tenant.connectionType } : {}),
+    ...(tenant.microsoftAccountId ? { microsoftAccountId: tenant.microsoftAccountId } : {}),
+    ...(tenant.mailboxUserId ? { mailboxUserId: tenant.mailboxUserId } : {}),
+    ...(tenant.connectedAccountId ? { connectedAccountId: tenant.connectedAccountId } : {}),
+  };
+  const priorityRules = getPriorityRulesSnapshotBySession(tenant.sessionToken, tenant.sourceId);
+  const now = new Date();
+
+  addMailKbJobLog(jobId, "info", "Fetching current inbox for KB ingestion");
+  await prisma.mailKbJob.update({
+    where: { id: jobId },
+    data: { status: "running", progress: 10, startedAt: now, error: null },
+  });
+
+  const triage = await triageInbox(60, priorityRules, sourceContext);
+  const items = triage.allItems.slice(0, 60);
+  const senderGroups = new Map<
+    string,
+    { email: string; name: string; count: number; importanceTotal: number; lastSeenAt: Date }
+  >();
+
+  for (const item of items) {
+    const email = (item.fromAddress || "unknown@local.invalid").trim().toLowerCase();
+    const receivedAt = safeKbDate(item.receivedDateTime, now);
+    const current = senderGroups.get(email) ?? {
+      email,
+      name: item.fromName || email,
+      count: 0,
+      importanceTotal: 0,
+      lastSeenAt: receivedAt,
+    };
+    current.count += 1;
+    current.importanceTotal += normalizeKbScore(item.score.importance);
+    if (receivedAt > current.lastSeenAt) {
+      current.lastSeenAt = receivedAt;
+    }
+    senderGroups.set(email, current);
+  }
+
+  const senderIdsByEmail = new Map<string, string>();
+  for (const sender of senderGroups.values()) {
+    const senderId = stableKbId("sender", tenant.userId, tenant.sourceId, sender.email);
+    senderIdsByEmail.set(sender.email, senderId);
+    await prisma.senderProfile.upsert({
+      where: {
+        userId_sourceId_email: {
+          userId: tenant.userId,
+          sourceId: tenant.sourceId,
+          email: sender.email,
+        },
+      },
+      create: {
+        id: senderId,
+        userId: tenant.userId,
+        sourceId: tenant.sourceId,
+        email: sender.email,
+        displayName: sender.name,
+        importance: sender.importanceTotal / Math.max(1, sender.count),
+        summaryText: `Recent mailbox contact with ${sender.count} messages in the latest KB job.`,
+        summary: `Recent mailbox contact with ${sender.count} messages in the latest KB job.`,
+        keyInfo: JSON.stringify(["mailbox_contact"]),
+        totalMailCount: sender.count,
+        lastMailAt: sender.lastSeenAt,
+        lastSeenAt: sender.lastSeenAt,
+      },
+      update: {
+        displayName: sender.name,
+        importance: sender.importanceTotal / Math.max(1, sender.count),
+        summaryText: `Recent mailbox contact with ${sender.count} messages in the latest KB job.`,
+        summary: `Recent mailbox contact with ${sender.count} messages in the latest KB job.`,
+        keyInfo: JSON.stringify(["mailbox_contact"]),
+        totalMailCount: sender.count,
+        lastMailAt: sender.lastSeenAt,
+        lastSeenAt: sender.lastSeenAt,
+      },
+    });
+  }
+
+  await prisma.mailKbJob.update({
+    where: { id: jobId },
+    data: { totalMails: items.length, totalPersons: senderGroups.size, progress: 25 },
+  });
+  addMailKbJobLog(jobId, "info", `Persisting ${items.length} mail summaries and ${senderGroups.size} sender profiles`);
+
+  let processed = 0;
+  for (const item of items) {
+    const senderEmail = (item.fromAddress || "unknown@local.invalid").trim().toLowerCase();
+    const senderId = senderIdsByEmail.get(senderEmail) ?? null;
+    const mailId = stableKbId("mail", tenant.userId, tenant.sourceId, item.id);
+    const processedAt = safeKbDate(item.receivedDateTime, now);
+    const summaryText = truncateKbText(item.bodyPreview || item.subject || "(no preview)", 1200);
+    const importanceScore = normalizeKbScore(item.score.importance);
+    const urgencyScore = normalizeKbScore(item.score.urgency);
+
+    await prisma.mailSummary.upsert({
+      where: {
+        userId_sourceId_externalMsgId: {
+          userId: tenant.userId,
+          sourceId: tenant.sourceId,
+          externalMsgId: item.id,
+        },
+      },
+      create: {
+        id: mailId,
+        userId: tenant.userId,
+        sourceId: tenant.sourceId,
+        externalMsgId: item.id,
+        subject: item.subject || "(no subject)",
+        summaryText,
+        importanceScore,
+        urgencyScore,
+        horizon: item.quadrant,
+        webLink: item.webLink || null,
+        senderId,
+        processedAt,
+      },
+      update: {
+        subject: item.subject || "(no subject)",
+        summaryText,
+        importanceScore,
+        urgencyScore,
+        horizon: item.quadrant,
+        webLink: item.webLink || null,
+        senderId,
+        processedAt,
+      },
+    });
+
+    await prisma.mailScoreIndex.upsert({
+      where: { mailId },
+      create: {
+        mailId,
+        importanceScore,
+        urgencyScore,
+        quadrant: item.quadrant,
+        reasoning: item.reasons.join("; "),
+      },
+      update: {
+        importanceScore,
+        urgencyScore,
+        quadrant: item.quadrant,
+        reasoning: item.reasons.join("; "),
+      },
+    });
+
+    await prisma.subjectIndex.upsert({
+      where: { mailId },
+      create: { mailId, subject: item.subject || "(no subject)", keywords: subjectKeywords(item.subject) },
+      update: { subject: item.subject || "(no subject)", keywords: subjectKeywords(item.subject) },
+    });
+
+    processed += 1;
+    if (processed === items.length || processed % 5 === 0) {
+      await prisma.mailKbJob.update({
+        where: { id: jobId },
+        data: {
+          processedMails: processed,
+          progress: 25 + Math.round((processed / Math.max(1, items.length)) * 45),
+        },
+      });
+    }
+  }
+
+  addMailKbJobLog(jobId, "info", "Extracting date-bound mail events");
+  let eventCount = 0;
+  try {
+    const insights = await buildMailInsights(60, 14, "Asia/Shanghai", priorityRules, sourceContext);
+    const uniqueEvents = new Map<string, any>();
+    for (const insight of [...insights.tomorrowDdl, ...insights.upcoming]) {
+      uniqueEvents.set(`${insight.messageId}:${insight.type}:${insight.dueAt}`, insight);
+    }
+
+    for (const insight of uniqueEvents.values()) {
+      const eventId = stableKbId("event", tenant.userId, tenant.sourceId, `${insight.messageId}:${insight.type}:${insight.dueAt}`);
+      const startAt = safeKbDate(insight.dueAt, now);
+      await prisma.mailEvent.upsert({
+        where: { id: eventId },
+        create: {
+          id: eventId,
+          userId: tenant.userId,
+          sourceId: tenant.sourceId,
+          type: insight.type,
+          title: insight.subject || insight.type,
+          summaryText: truncateKbText(insight.evidence || insight.subject || insight.type, 1200),
+          keyInfo: JSON.stringify([insight.dueDateLabel, ...insight.reasons].filter(Boolean)),
+          relatedMailCount: 1,
+          firstMailAt: safeKbDate(insight.receivedDateTime, now),
+          lastMailAt: safeKbDate(insight.receivedDateTime, now),
+          startAt,
+          confidence: insight.confidence,
+          evidence: insight.evidence,
+        },
+        update: {
+          type: insight.type,
+          title: insight.subject || insight.type,
+          summaryText: truncateKbText(insight.evidence || insight.subject || insight.type, 1200),
+          keyInfo: JSON.stringify([insight.dueDateLabel, ...insight.reasons].filter(Boolean)),
+          relatedMailCount: 1,
+          firstMailAt: safeKbDate(insight.receivedDateTime, now),
+          lastMailAt: safeKbDate(insight.receivedDateTime, now),
+          startAt,
+          confidence: insight.confidence,
+          evidence: insight.evidence,
+        },
+      });
+      await prisma.mailSummary.updateMany({
+        where: {
+          userId: tenant.userId,
+          sourceId: tenant.sourceId,
+          externalMsgId: insight.messageId,
+        },
+        data: { eventId },
+      });
+      eventCount += 1;
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    addMailKbJobLog(jobId, "warn", `Event extraction skipped: ${message}`);
+  }
+
+  await prisma.mailKbJob.update({
+    where: { id: jobId },
+    data: {
+      status: "completed",
+      progress: 100,
+      processedMails: processed,
+      totalEvents: eventCount,
+      totalPersons: senderGroups.size,
+      finishedAt: new Date(),
+    },
+  });
+  addMailKbJobLog(jobId, "info", "Knowledge base job completed");
+}
+
+async function runMailKbJob(jobId: string, tenant: TenantContext) {
+  const lockKey = `${tenant.userId}:${tenant.sourceId}`;
+  const prisma = (await getPrismaClient(server.log)) as any;
+  if (!prisma?.mailKbJob?.update) {
+    addMailKbJobLog(jobId, "error", "Knowledge base job store unavailable");
+    return;
+  }
+
+  if (mailKbJobLocks.has(lockKey)) {
+    await prisma.mailKbJob.update({
+      where: { id: jobId },
+      data: {
+        status: "failed",
+        error: "Another knowledge base job is already running for this source.",
+        finishedAt: new Date(),
+      },
+    });
+    addMailKbJobLog(jobId, "error", "Duplicate job rejected by source lock");
+    return;
+  }
+
+  mailKbJobLocks.add(lockKey);
+  try {
+    await persistMailKbJobSnapshot(prisma, jobId, tenant);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    server.log.warn({ jobId, sourceId: tenant.sourceId, message }, "Mail KB job failed");
+    addMailKbJobLog(jobId, "error", message);
+    await prisma.mailKbJob.update({
+      where: { id: jobId },
+      data: {
+        status: "failed",
+        error: message,
+        finishedAt: new Date(),
+      },
+    });
+  } finally {
+    mailKbJobLocks.delete(lockKey);
+  }
+}
+
+function toKbMailDto(row: any) {
+  return {
+    mailId: row.id,
+    rawId: row.externalMsgId,
+    subject: row.subject,
+    personId: row.senderId ?? "",
+    eventId: row.eventId ?? null,
+    importanceScore: normalizeKbScore(row.importanceScore),
+    urgencyScore: normalizeKbScore(row.urgencyScore),
+    quadrant: row.scoreRecord?.quadrant ?? kbQuadrantFromScores(row.importanceScore, row.urgencyScore),
+    summary: row.summaryText,
+    receivedAt: kbIsoDate(row.processedAt),
+    processedAt: kbIsoDate(row.processedAt),
+    ...(row.webLink ? { webLink: row.webLink } : {}),
+  };
+}
+
+function toKbEventDto(row: any) {
+  return {
+    eventId: row.id,
+    name: row.title,
+    summary: row.summaryText,
+    keyInfo: parseKbKeyInfo(row.keyInfo),
+    relatedMailIds: Array.isArray(row.summaries) ? row.summaries.map((item: any) => item.id) : [],
+    lastUpdated: kbIsoDate(row.updatedAt),
+    tags: row.type ? [row.type] : [],
+  };
+}
+
+function toKbPersonDto(row: any) {
+  return {
+    personId: row.id,
+    email: row.email,
+    name: row.displayName ?? row.email,
+    profile: row.summary ?? row.summaryText ?? "",
+    role: parseKbKeyInfo(row.keyInfo)[0] ?? "",
+    importance: normalizeKbScore(row.importance ?? 5),
+    recentInteractions: row.totalMailCount ?? 0,
+    lastUpdated: kbIsoDate(row.lastSeenAt ?? row.updatedAt),
+  };
+}
+
+const kbListQuerySchema = z.object({
+  sourceId: sourceIdOptionalSchema,
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  pageSize: z.coerce.number().int().min(1).max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+const kbJobParamSchema = z.object({
+  jobId: z.string().min(1).max(200),
+});
+
+async function resolveKbTenant(request: FastifyRequest, reply: FastifyReply) {
+  const query = kbListQuerySchema.safeParse(request.query ?? {});
+  if (!query.success) {
+    reply.status(400);
+    return { ok: false as const, payload: { ok: false, error: "Invalid query", details: query.error.issues } };
+  }
+
+  const sessionToken = getSessionTokenFromRequest(request);
+  const tenant = buildTenantContextForRequest(reply, sessionToken, query.data.sourceId);
+  if (!tenant || tenant.isLegacySession || tenant.userId.startsWith("legacy:")) {
+    return {
+      ok: false as const,
+      payload: {
+        ok: false,
+        error: "Unauthorized or source not found",
+        errorCode: sessionToken ? "MAIL_SOURCE_CONNECTION_REQUIRED" : "UNAUTHORIZED",
+      },
+    };
+  }
+
+  const routingGuard = requireSourceRoutingReady(reply, sessionToken ?? "", tenant.sourceId);
+  if (!routingGuard.ok) {
+    return {
+      ok: false as const,
+      payload: routingGuard.payload,
+    };
+  }
+
+  return { ok: true as const, tenant, query: query.data };
+}
+
+async function resolveMailKbJobForRequest(request: FastifyRequest, reply: FastifyReply) {
+  const parsed = kbJobParamSchema.safeParse(request.params);
+  if (!parsed.success) {
+    reply.status(400);
+    return { ok: false as const, payload: { ok: false, error: "Invalid job id", details: parsed.error.issues } };
+  }
+
+  const sessionToken = getSessionTokenFromRequest(request);
+  if (sessionToken) {
+    await hydrateAuthSessionFromRedisIfNeeded(sessionToken, Date.now());
+  }
+  const userId = sessionToken ? getUserIdForSessionToken(sessionToken) : null;
+  if (!sessionToken || !userId || userId.startsWith("legacy:")) {
+    reply.status(401);
+    return { ok: false as const, payload: { ok: false, error: "Unauthorized", errorCode: "UNAUTHORIZED" } };
+  }
+
+  const prisma = (await getPrismaClient(server.log)) as any;
+  if (!prisma?.mailKbJob?.findFirst) {
+    reply.status(503);
+    return {
+      ok: false as const,
+      payload: { ok: false, error: "Knowledge base job store unavailable", errorCode: "KB_JOB_STORE_UNAVAILABLE" },
+    };
+  }
+
+  const job = await prisma.mailKbJob.findFirst({
+    where: { id: parsed.data.jobId, userId },
+  });
+  if (!job) {
+    reply.status(404);
+    return { ok: false as const, payload: { ok: false, error: "Job not found", errorCode: "KB_JOB_NOT_FOUND" } };
+  }
+
+  return { ok: true as const, prisma, job };
+}
+
+server.get("/api/mail-kb/stats", async (request, reply) => {
+  const resolved = await resolveKbTenant(request, reply);
+  if (!resolved.ok) {
+    return resolved.payload;
+  }
+
+  const prisma = (await getPrismaClient(server.log)) as any;
+  if (!prisma?.mailSummary?.count) {
+    reply.status(503);
+    return { ok: false, error: "Knowledge base store unavailable", errorCode: "KB_STORE_UNAVAILABLE" };
+  }
+
+  const where = { userId: resolved.tenant.userId, sourceId: resolved.tenant.sourceId };
+  const [totalMails, totalEvents, totalPersons, newest, oldest, scoreRows] = await Promise.all([
+    prisma.mailSummary.count({ where }),
+    prisma.mailEvent.count({ where }),
+    prisma.senderProfile.count({ where }),
+    prisma.mailSummary.findFirst({ where, orderBy: { processedAt: "desc" }, select: { processedAt: true } }),
+    prisma.mailSummary.findFirst({ where, orderBy: { processedAt: "asc" }, select: { processedAt: true } }),
+    prisma.mailSummary.findMany({
+      where,
+      select: {
+        importanceScore: true,
+        urgencyScore: true,
+        scoreRecord: { select: { quadrant: true } },
+      },
+      take: 5000,
+    }),
+  ]);
+  const quadrantDistribution = {
+    urgent_important: 0,
+    not_urgent_important: 0,
+    urgent_not_important: 0,
+    not_urgent_not_important: 0,
+  };
+  for (const row of scoreRows) {
+    const quadrant = row.scoreRecord?.quadrant ?? kbQuadrantFromScores(row.importanceScore, row.urgencyScore);
+    if (quadrant in quadrantDistribution) {
+      quadrantDistribution[quadrant as keyof typeof quadrantDistribution] += 1;
+    }
+  }
+  const stats = {
+    totalMails,
+    totalEvents,
+    totalPersons,
+    processedAt: new Date().toISOString(),
+    dateRange: {
+      start: oldest?.processedAt ? oldest.processedAt.toISOString() : "",
+      end: newest?.processedAt ? newest.processedAt.toISOString() : "",
+    },
+    quadrantDistribution,
+  };
+
+  return { ok: true, stats, result: stats };
+});
+
+server.get("/api/mail-kb/mails", async (request, reply) => {
+  const resolved = await resolveKbTenant(request, reply);
+  if (!resolved.ok) {
+    return resolved.payload;
+  }
+
+  const prisma = (await getPrismaClient(server.log)) as any;
+  if (!prisma?.mailSummary?.findMany) {
+    reply.status(503);
+    return { ok: false, error: "Knowledge base store unavailable", errorCode: "KB_STORE_UNAVAILABLE" };
+  }
+
+  const limit = resolved.query.pageSize ?? resolved.query.limit ?? 50;
+  const offset = resolved.query.offset ?? 0;
+  const where = { userId: resolved.tenant.userId, sourceId: resolved.tenant.sourceId };
+  const [rows, total] = await Promise.all([
+    prisma.mailSummary.findMany({
+      where,
+      orderBy: { processedAt: "desc" },
+      skip: offset,
+      take: limit,
+      include: { scoreRecord: true },
+    }),
+    prisma.mailSummary.count({ where }),
+  ]);
+  const mails = rows.map(toKbMailDto);
+
+  return { ok: true, mails, total, result: { mails, total, limit, offset } };
+});
+
+server.get("/api/mail-kb/events", async (request, reply) => {
+  const resolved = await resolveKbTenant(request, reply);
+  if (!resolved.ok) {
+    return resolved.payload;
+  }
+
+  const prisma = (await getPrismaClient(server.log)) as any;
+  if (!prisma?.mailEvent?.findMany) {
+    reply.status(503);
+    return { ok: false, error: "Knowledge base store unavailable", errorCode: "KB_STORE_UNAVAILABLE" };
+  }
+
+  const rows = await prisma.mailEvent.findMany({
+    where: { userId: resolved.tenant.userId, sourceId: resolved.tenant.sourceId },
+    orderBy: { updatedAt: "desc" },
+    include: { summaries: { select: { id: true } } },
+  });
+  const events = rows.map(toKbEventDto);
+
+  return { ok: true, events, result: { events } };
+});
+
+server.get("/api/mail-kb/persons", async (request, reply) => {
+  const resolved = await resolveKbTenant(request, reply);
+  if (!resolved.ok) {
+    return resolved.payload;
+  }
+
+  const prisma = (await getPrismaClient(server.log)) as any;
+  if (!prisma?.senderProfile?.findMany) {
+    reply.status(503);
+    return { ok: false, error: "Knowledge base store unavailable", errorCode: "KB_STORE_UNAVAILABLE" };
+  }
+
+  const rows = await prisma.senderProfile.findMany({
+    where: { userId: resolved.tenant.userId, sourceId: resolved.tenant.sourceId },
+    orderBy: [{ lastSeenAt: "desc" }, { updatedAt: "desc" }],
+  });
+  const persons = rows.map(toKbPersonDto);
+
+  return { ok: true, persons, result: { persons } };
+});
+
+server.get("/api/mail-kb/export", async (request, reply) => {
+  const resolved = await resolveKbTenant(request, reply);
+  if (!resolved.ok) {
+    return resolved.payload;
+  }
+
+  const prisma = (await getPrismaClient(server.log)) as any;
+  if (!prisma?.mailSummary?.findMany || !prisma?.mailEvent?.findMany || !prisma?.senderProfile?.findMany) {
+    reply.status(503);
+    return { ok: false, error: "Knowledge base store unavailable", errorCode: "KB_STORE_UNAVAILABLE" };
+  }
+
+  const where = { userId: resolved.tenant.userId, sourceId: resolved.tenant.sourceId };
+  const [mailRows, eventRows, personRows] = await Promise.all([
+    prisma.mailSummary.findMany({ where, orderBy: { processedAt: "desc" }, take: 200, include: { scoreRecord: true } }),
+    prisma.mailEvent.findMany({
+      where,
+      orderBy: { updatedAt: "desc" },
+      take: 200,
+      include: { summaries: { select: { id: true } } },
+    }),
+    prisma.senderProfile.findMany({ where, orderBy: { updatedAt: "desc" }, take: 200 }),
+  ]);
+  const mails = mailRows.map(toKbMailDto);
+  const events = eventRows.map(toKbEventDto);
+  const persons = personRows.map(toKbPersonDto);
+  reply.header("Content-Type", "application/json");
+  reply.header("Content-Disposition", `attachment; filename="mail-kb-${new Date().toISOString().slice(0, 10)}.json"`);
+  const exportedAt = new Date().toISOString();
+  const document = {
+    sourceId: resolved.tenant.sourceId,
+    exportedAt,
+    mails,
+    events,
+    persons,
+  };
+  return {
+    ok: true,
+    ...document,
+    result: document,
+  };
+});
+
+server.post("/api/mail/knowledge-base/trigger", async (request, reply) => {
+  const resolved = await resolveKbTenant(request, reply);
+  if (!resolved.ok) {
+    return resolved.payload;
+  }
+
+  const prisma = (await getPrismaClient(server.log)) as any;
+  if (!prisma?.mailKbJob?.create) {
+    reply.status(503);
+    return { ok: false, error: "Knowledge base job store unavailable", errorCode: "KB_JOB_STORE_UNAVAILABLE" };
+  }
+
+  const lockKey = `${resolved.tenant.userId}:${resolved.tenant.sourceId}`;
+  if (mailKbJobLocks.has(lockKey)) {
+    reply.status(409);
+    return {
+      ok: false,
+      error: "A knowledge base job is already running for this source.",
+      errorCode: "KB_JOB_ALREADY_RUNNING",
+    };
+  }
+
+  const existing = await prisma.mailKbJob.findFirst({
+    where: {
+      userId: resolved.tenant.userId,
+      sourceId: resolved.tenant.sourceId,
+      status: { in: ["queued", "running"] },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  if (existing) {
+    const staleCutoff = Date.now() - 15 * 60 * 1000;
+    const lastHeartbeatAt =
+      existing.updatedAt instanceof Date
+        ? existing.updatedAt.getTime()
+        : existing.startedAt instanceof Date
+          ? existing.startedAt.getTime()
+          : existing.createdAt instanceof Date
+            ? existing.createdAt.getTime()
+            : Date.now();
+    if (lastHeartbeatAt < staleCutoff) {
+      await prisma.mailKbJob.update({
+        where: { id: existing.id },
+        data: {
+          status: "failed",
+          error: "Previous in-process KB worker stopped before completion. Job was marked stale and can be retried.",
+          finishedAt: new Date(),
+        },
+      });
+      addMailKbJobLog(existing.id, "warn", "Stale KB job was marked failed before retry");
+    } else {
+    return {
+      ok: true,
+      jobId: existing.id,
+      result: {
+        sourceId: existing.sourceId,
+        status: existing.status,
+      },
+    };
+    }
+  }
+
+  const job = await prisma.mailKbJob.create({
+    data: {
+      userId: resolved.tenant.userId,
+      sourceId: resolved.tenant.sourceId,
+      status: "queued",
+      progress: 0,
+    },
+  });
+  addMailKbJobLog(job.id, "info", "Knowledge base job queued");
+  void runMailKbJob(job.id, resolved.tenant);
+
+  return {
+    ok: true,
+    jobId: job.id,
+    result: {
+      sourceId: resolved.tenant.sourceId,
+      status: "queued",
+    },
+  };
+});
+
+server.get("/api/mail/knowledge-base/jobs/:jobId", async (request, reply) => {
+  const resolved = await resolveMailKbJobForRequest(request, reply);
+  if (!resolved.ok) {
+    return resolved.payload;
+  }
+
+  const job = toMailKbJobDto(resolved.job);
+  return { ok: true, job, result: { job } };
+});
+
+server.get("/api/mail/knowledge-base/jobs/:jobId/stream", async (request, reply) => {
+  const resolved = await resolveMailKbJobForRequest(request, reply);
+  if (!resolved.ok) {
+    return resolved.payload;
+  }
+
+  reply.hijack();
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+
+  let closed = false;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  const raw = reply.raw;
+  const jobId = resolved.job.id;
+  let sentLogCount = 0;
+
+  const closeStream = () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+    raw.end();
+  };
+
+  const writeEvent = (eventName: string, payload: unknown) => {
+    if (closed) {
+      return;
+    }
+    try {
+      raw.write(`event: ${eventName}\n`);
+      raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+    } catch {
+      closeStream();
+    }
+  };
+
+  request.raw.on("close", closeStream);
+  request.raw.on("aborted", closeStream);
+  writeEvent("connected", { jobId });
+
+  const tick = async () => {
+    if (closed) {
+      return;
+    }
+    const latest = await resolved.prisma.mailKbJob.findFirst({
+      where: { id: jobId, userId: resolved.job.userId },
+    });
+    if (!latest) {
+      writeEvent("error", { error: "Job not found", code: "KB_JOB_NOT_FOUND" });
+      closeStream();
+      return;
+    }
+    const dto = toMailKbJobDto(latest);
+    const logs = dto.logs.slice(sentLogCount);
+    sentLogCount = dto.logs.length;
+    writeEvent("progress", dto.progress);
+    if (logs.length > 0) {
+      writeEvent("logs", { logs });
+    }
+    writeEvent("status", { status: dto.status, error: dto.error, progress: dto.progress });
+    if (dto.status === "completed") {
+      writeEvent("final", { job: dto });
+      closeStream();
+    } else if (dto.status === "failed") {
+      writeEvent("error", { error: dto.error ?? "Knowledge base job failed", code: "KB_JOB_FAILED" });
+      closeStream();
+    }
+  };
+
+  await tick();
+  if (!closed) {
+    pollTimer = setInterval(() => {
+      void tick().catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        writeEvent("error", { error: message, code: "KB_JOB_STREAM_FAILED" });
+        closeStream();
+      });
+    }, 1000);
+  }
+});
+
+server.get("/api/agent/skills", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  const parsed = sourceOnlyQuerySchema.safeParse(request.query);
+
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid query",
+      details: parsed.error.issues,
+    };
+  }
+
+  const tenant = buildTenantContextForRequest(reply, sessionToken, parsed.data.sourceId);
+  if (!tenant) {
+    return {
+      ok: false,
+      error: "Unauthorized or source not found",
+    };
+  }
+
+  return {
+    ok: true,
+    skills: await agentRuntime.listSkills(tenant),
+  };
+});
+
+server.get("/api/agent/memory/recent", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  const parsed = agentMemoryQuerySchema.safeParse(request.query);
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid query",
+      details: parsed.error.issues,
+    };
+  }
+
+  const tenant = buildTenantContextForRequest(reply, sessionToken, parsed.data.sourceId);
+  if (!tenant || tenant.isLegacySession || tenant.userId.startsWith("legacy:")) {
+    return {
+      ok: false,
+      error: "Unauthorized or source not found",
+    };
+  }
+
+  const prisma = (await getPrismaClient(server.log)) as any;
+  if (!prisma?.agentMemory?.findMany) {
+    reply.status(503);
+    return {
+      ok: false,
+      error: "Agent memory store unavailable",
+      errorCode: "MEMORY_STORE_UNAVAILABLE",
+    };
+  }
+
+  const rows = await prisma.agentMemory.findMany({
+    where: {
+      userId: tenant.userId,
+      sourceId: tenant.sourceId,
+    },
+    orderBy: { updatedAt: "desc" },
+    take: parsed.data.limit ?? 10,
+  });
+
+  return {
+    ok: true,
+    result: {
+      sourceId: tenant.sourceId,
+      memory: rows.map((row: any) => ({
+        id: row.id,
+        key: row.key,
+        value: row.value,
+        kind: row.kind ?? "fact",
+        tags: Array.isArray(row.tags) ? row.tags : [],
+        updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt),
+      })),
+    },
+  };
+});
+
+server.post("/api/agent/memory", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  const parsed = agentRememberSchema.safeParse(request.body);
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid payload",
+      details: parsed.error.issues,
+    };
+  }
+
+  const tenant = buildTenantContextForRequest(reply, sessionToken, parsed.data.sourceId);
+  if (!tenant || tenant.isLegacySession || tenant.userId.startsWith("legacy:")) {
+    return {
+      ok: false,
+      error: "Unauthorized or source not found",
+    };
+  }
+
+  const prisma = (await getPrismaClient(server.log)) as any;
+  if (!prisma?.agentMemory?.create) {
+    reply.status(503);
+    return {
+      ok: false,
+      error: "Agent memory store unavailable",
+      errorCode: "MEMORY_STORE_UNAVAILABLE",
+    };
+  }
+
+  const note = parsed.data.note.trim().slice(0, 1200);
+  const tags = Array.from(new Set(parsed.data.tags ?? [])).slice(0, 12);
+  const created = await prisma.agentMemory.create({
+    data: {
+      userId: tenant.userId,
+      sourceId: tenant.sourceId,
+      key: `manual:${randomUUID()}`,
+      value: note,
+      kind: parsed.data.kind ?? "fact",
+      tags,
+    },
+  });
+
+  return {
+    ok: true,
+    result: {
+      sourceId: tenant.sourceId,
+      memory: {
+        id: created.id,
+        key: created.key,
+        value: created.value,
+        kind: created.kind,
+        tags: created.tags,
+        updatedAt:
+          created.updatedAt instanceof Date ? created.updatedAt.toISOString() : String(created.updatedAt),
+      },
+    },
+  };
+});
+
+function writeAgentSseError(
+  reply: FastifyReply,
+  event: {
+    error: string;
+    code: string;
+    status?: number;
+    sourceId?: string;
+    retryable?: boolean;
+    routingStatus?: MailSourceRoutingStatus;
+  }
+): void {
+  reply.hijack();
+  const raw = reply.raw;
+  if (raw.destroyed) {
+    return;
+  }
+
+  raw.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  raw.write("event: error\n");
+  raw.write(`data: ${JSON.stringify({ type: "error", ...event })}\n\n`);
+  raw.end();
+}
+
+server.post("/api/agent/chat", async (request, reply) => {
+  const parsed = agentChatSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid payload",
+      details: parsed.error.issues,
+    };
+  }
+
+  const sessionToken = getSessionTokenFromRequest(request);
+  const tenant = buildTenantContextForRequest(reply, sessionToken, parsed.data.sourceId);
+  if (!tenant) {
+    writeAgentSseError(reply, {
+      error: "Unauthorized or source not found",
+      code: sessionToken ? "MAIL_SOURCE_CONNECTION_REQUIRED" : "UNAUTHORIZED",
+      status: sessionToken ? 412 : 401,
+      retryable: Boolean(sessionToken),
+      ...(parsed.data.sourceId ? { sourceId: parsed.data.sourceId } : {}),
+    });
+    return;
+  }
+  const routingGuard = getSourceRoutingReady(sessionToken ?? "", tenant.sourceId);
+  if (!routingGuard.ok) {
+    writeAgentSseError(reply, {
+      error: routingGuard.payload.error,
+      code: routingGuard.payload.errorCode,
+      status: routingGuard.payload.status,
+      sourceId: routingGuard.payload.sourceId,
+      retryable: routingGuard.payload.retryable,
+      routingStatus: routingGuard.payload.routingStatus,
+    });
+    return;
+  }
+
+  reply.hijack();
+  const raw = reply.raw;
+  let completed = false;
+  let timedOut = false;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, env.AGENT_TIMEOUT_MS);
+
+  const writeEvent = (event: { type: string; [key: string]: unknown }) => {
+    if (raw.destroyed) {
+      return;
+    }
+    raw.write(`event: ${event.type}\n`);
+    raw.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+
+  request.raw.on("close", () => {
+    if (!completed) {
+      controller.abort();
+    }
+  });
+
+  try {
+    raw.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+
+    for await (const event of agentRuntime.stream({
+      tenant,
+      message: parsed.data.message,
+      threadId: parsed.data.threadId,
+      abortSignal: controller.signal,
+    })) {
+      writeEvent(event);
+    }
+  } catch (error) {
+    const message = timedOut
+      ? `Agent request timed out after ${env.AGENT_TIMEOUT_MS}ms`
+      : error instanceof Error
+        ? error.message
+        : String(error);
+    server.log.warn(
+      {
+        userId: tenant.userId,
+        sourceId: tenant.sourceId,
+        timedOut,
+        message,
+      },
+      "Agent chat stream failed"
+    );
+    writeEvent({
+      type: "error",
+      error: message,
+      code: timedOut ? "AGENT_TIMEOUT" : "AGENT_ERROR",
+    });
+  } finally {
+    completed = true;
+    clearTimeout(timeout);
+    if (!raw.destroyed) {
+      raw.end();
+    }
+  }
+});
+
 server.post("/api/agent/query", async (request, reply) => {
   const parsed = querySchema.safeParse(request.body);
 
@@ -8492,40 +9747,103 @@ server.post("/api/agent/query", async (request, reply) => {
   }
 
   const sessionToken = getSessionTokenFromRequest(request);
-  if (!sessionToken) {
-    reply.status(401);
+  const tenant = buildTenantContextForRequest(reply, sessionToken, parsed.data.sourceId);
+  if (!tenant) {
     return {
       ok: false,
-      error: "Unauthorized",
+      error: "Unauthorized or source not found",
     };
   }
-
-  const requestedSourceId =
-    parsed.data.sourceId && parsed.data.sourceId.trim().length > 0 ? parsed.data.sourceId.trim() : undefined;
-  let sourceId: string | undefined;
-  if (requestedSourceId) {
-    const resolvedSource = resolveSourceIdForSession(sessionToken, requestedSourceId);
-    if (!resolvedSource.ok) {
-      reply.status(404);
-      return {
-        ok: false,
-        error: "Mail source not found or disabled",
-      };
-    }
-    sourceId = resolvedSource.sourceId;
+  const routingGuard = requireSourceRoutingReady(reply, sessionToken ?? "", tenant.sourceId);
+  if (!routingGuard.ok) {
+    return routingGuard.payload;
   }
+
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, env.AGENT_TIMEOUT_MS);
 
   try {
     const result = await agentRuntime.query({
-      userId: runtimeUserIdForSession(sessionToken),
-      sessionToken,
-      question: parsed.data.message,
-      ...(sourceId ? { sourceId } : {}),
-      ...(sourceId ? { sourceContext: buildMailSourceContext(sessionToken, sourceId) } : {}),
-      ...(parsed.data.tz ? { timeZone: parsed.data.tz } : {}),
-      ...(parsed.data.horizonDays ? { horizonDays: parsed.data.horizonDays } : {}),
-      ...(parsed.data.requestedSkillIds ? { requestedSkillIds: parsed.data.requestedSkillIds } : {}),
-      ...(sourceId ? { priorityRules: getPriorityRulesSnapshotBySession(sessionToken, sourceId) } : {}),
+      tenant,
+      message: parsed.data.message,
+      threadId: parsed.data.threadId,
+      abortSignal: controller.signal,
+    });
+    return { ok: true, result };
+  } catch (error) {
+    if (error instanceof GatewayHttpError) {
+      server.log.warn(gatewayErrorLogContext(error), "Gateway agent query failed");
+
+      const hint =
+        error.status === 404
+          ? "Gateway /v1/responses may not be enabled. Enable gateway.http.endpoints.responses.enabled=true in openclaw.json when AGENT_RUNTIME=openclaw."
+          : undefined;
+
+      reply.status(error.status);
+      return {
+        ok: false,
+        error: error.message,
+        hint,
+      };
+    }
+
+    if (timedOut) {
+      reply.status(504);
+      return {
+        ok: false,
+        error: `Agent request timed out after ${env.AGENT_TIMEOUT_MS}ms`,
+      };
+    }
+
+    server.log.warn(
+      {
+        userId: tenant.userId,
+        sourceId: tenant.sourceId,
+        message: error instanceof Error ? error.message : String(error),
+      },
+      "Agent query failed"
+    );
+    reply.status(502);
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Agent query failed",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+});
+
+server.post("/api/agent/query-openclaw-legacy", async (request, reply) => {
+  const parsed = agentChatSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid payload",
+      details: parsed.error.issues,
+    };
+  }
+
+  const sessionToken = getSessionTokenFromRequest(request);
+  const tenant = buildTenantContextForRequest(reply, sessionToken, parsed.data.sourceId);
+  if (!tenant) {
+    return {
+      ok: false,
+      error: "Unauthorized or source not found",
+    };
+  }
+
+  try {
+    const result = await queryAgent({
+      message: parsed.data.message,
+      user: `${tenant.userId}:${tenant.sourceId}`,
+      sessionKey: `${tenant.sessionToken}${sourceScopeSeparator}${tenant.sourceId}`,
+      timeoutMs: env.AGENT_TIMEOUT_MS,
     });
     return { ok: true, result };
   } catch (error) {
@@ -8547,131 +9865,6 @@ server.post("/api/agent/query", async (request, reply) => {
 
     throw error;
   }
-});
-
-server.get("/api/agent/skills", async (request, reply) => {
-  const sessionToken = getSessionTokenFromRequest(request);
-  if (!sessionToken) {
-    reply.status(401);
-    return {
-      ok: false,
-      error: "Unauthorized",
-    };
-  }
-
-  const skills = await agentRuntime.listSkills();
-  return {
-    ok: true,
-    result: {
-      skills,
-    },
-  };
-});
-
-server.get("/api/agent/memory/recent", async (request, reply) => {
-  const sessionToken = getSessionTokenFromRequest(request);
-  if (!sessionToken) {
-    reply.status(401);
-    return {
-      ok: false,
-      error: "Unauthorized",
-    };
-  }
-
-  const parsed = agentMemoryQuerySchema.safeParse(request.query);
-  if (!parsed.success) {
-    reply.status(400);
-    return {
-      ok: false,
-      error: "Invalid query parameters",
-      details: parsed.error.issues,
-    };
-  }
-
-  const requestedSourceId =
-    parsed.data.sourceId && parsed.data.sourceId.trim().length > 0 ? parsed.data.sourceId.trim() : undefined;
-  let sourceId: string | undefined;
-  if (requestedSourceId) {
-    const resolvedSource = resolveSourceIdForSession(sessionToken, requestedSourceId);
-    if (!resolvedSource.ok) {
-      reply.status(404);
-      return {
-        ok: false,
-        error: "Mail source not found or disabled",
-      };
-    }
-    sourceId = resolvedSource.sourceId;
-  }
-  const memory = await agentRuntime.recentMemory(
-    {
-      userId: runtimeUserIdForSession(sessionToken),
-      ...(sourceId ? { sourceId } : {}),
-    },
-    parsed.data.limit ?? 8
-  );
-
-  return {
-    ok: true,
-    result: {
-      sourceId,
-      memory,
-    },
-  };
-});
-
-server.post("/api/agent/memory", async (request, reply) => {
-  const sessionToken = getSessionTokenFromRequest(request);
-  if (!sessionToken) {
-    reply.status(401);
-    return {
-      ok: false,
-      error: "Unauthorized",
-    };
-  }
-
-  const parsed = agentRememberSchema.safeParse(request.body);
-  if (!parsed.success) {
-    reply.status(400);
-    return {
-      ok: false,
-      error: "Invalid payload",
-      details: parsed.error.issues,
-    };
-  }
-
-  const requestedSourceId =
-    parsed.data.sourceId && parsed.data.sourceId.trim().length > 0 ? parsed.data.sourceId.trim() : undefined;
-  let sourceId: string | undefined;
-  if (requestedSourceId) {
-    const resolvedSource = resolveSourceIdForSession(sessionToken, requestedSourceId);
-    if (!resolvedSource.ok) {
-      reply.status(404);
-      return {
-        ok: false,
-        error: "Mail source not found or disabled",
-      };
-    }
-    sourceId = resolvedSource.sourceId;
-  }
-  const record = await agentRuntime.remember(
-    {
-      userId: runtimeUserIdForSession(sessionToken),
-      ...(sourceId ? { sourceId } : {}),
-    },
-    {
-      note: parsed.data.note,
-      kind: parsed.data.kind,
-      tags: parsed.data.tags,
-    }
-  );
-
-  return {
-    ok: true,
-    result: {
-      sourceId,
-      record,
-    },
-  };
 });
 
 server.addHook("onClose", async () => {

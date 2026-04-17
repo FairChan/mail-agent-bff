@@ -10,6 +10,9 @@
   "scripts": {
     "dev:bff": "npm --workspace apps/bff run dev",
     "dev:web": "npm --workspace apps/webui run dev",
+    "db:ensure-local": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/ensure-local-postgres.ps1",
+    "db:migrate:deploy": "npm run db:ensure-local && cd apps/bff && npx prisma migrate deploy --schema prisma/schema.prisma",
+    "db:migrate:status": "npm run db:ensure-local && cd apps/bff && npx prisma migrate status --schema prisma/schema.prisma",
     "build": "npm run build --workspaces --if-present",
     "check": "npm run check --workspaces --if-present",
     "check:standard": "node scripts/harness-check-standard.mjs",
