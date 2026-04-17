@@ -4079,3 +4079,20 @@ cp .env.example .env
 - Audit-driven fixes: gated fallback behind explicit config and pruned empty in-memory stores.
 - Recheck audit result: no Critical, High, Medium, or Low findings.
 - Final audit status: Critical 0, High 0, Medium 0, Low 0.
+
+### 2026-04-17T16:22:18+08:00
+
+- Scope: Test whether the configured SiliconFlow API can perform normal chat Q&A.
+- Task type: `Non-code`
+- Main updates:
+- Directly tested the configured OpenAI-compatible SiliconFlow `/chat/completions` endpoint from `apps/bff/.env`.
+- Confirmed model `Pro/zai-org/GLM-5.1` returned a valid answer to a simple arithmetic Chinese prompt.
+- Tested the project internal `LlmGatewayService.generateText` path against the same provider and model.
+- Validation completed:
+- Direct SiliconFlow request returned HTTP 200 with answer `5。我已正常响应。`.
+- Direct request latency was about 7.3 seconds.
+- Internal LLM Gateway request returned `42，Gateway正常`.
+- Internal Gateway request latency was about 7.9 seconds.
+- BFF `/health` continued to report `llm.ok=true` with model `Pro/zai-org/GLM-5.1`.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
