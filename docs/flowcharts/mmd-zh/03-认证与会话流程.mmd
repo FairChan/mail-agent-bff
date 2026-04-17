@@ -1,0 +1,18 @@
+flowchart TD
+  Browser["浏览器打开应用"] --> SessionCheck["检查当前登录会话"]
+  SessionCheck --> HasCookie{"是否存在有效会话标记"}
+  HasCookie -- "否" --> LoginScreen["显示登录或注册界面"]
+  HasCookie -- "是" --> UserView["返回已认证用户快照"]
+  LoginScreen --> LoginPost["提交登录请求"]
+  LoginPost --> RateLimit["按访问来源做登录限流"]
+  RateLimit --> Legacy{"是否为旧版密钥登录"}
+  Legacy -- "是" --> KeyCompare["使用恒定时间比较密钥"]
+  Legacy -- "否" --> PasswordAuth["标准化邮箱并校验密码哈希"]
+  PasswordAuth --> AuthOk{"凭据是否有效"}
+  KeyCompare --> AuthOk
+  AuthOk -- "否" --> AuthError["返回认证失败"]
+  AuthOk -- "是" --> CreateSession["生成会话令牌与有效期"]
+  CreateSession --> Cookie["设置安全会话标记"]
+  Cookie --> AuthenticatedUI["渲染已登录控制台"]
+  AuthenticatedUI --> Logout["提交退出登录请求"]
+  Logout --> Clear["清理内存和会话存储，并清除会话标记"]

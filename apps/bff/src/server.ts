@@ -13,6 +13,7 @@ import {
   consumeMicrosoftDirectAuthState,
   getMicrosoftAccountView,
   isMicrosoftDirectAuthConfigured,
+  MicrosoftDirectAuthSessionInactiveError,
   verifyMicrosoftMailboxAccess,
 } from "./microsoft-graph.js";
 import { getPrismaClient, isPrismaUniqueConstraintError } from "./persistence.js";
@@ -649,6 +650,44 @@ async function createAuthUserRecord(input: {
   };
 }
 
+async function seedLocalAdminUser() {
+  if (!env.localAdminEnabled) {
+    return;
+  }
+
+  const email = normalizeAuthEmail(env.localAdminEmail);
+  if (!email || !isEmailFormat(email)) {
+    throw new Error("LOCAL_ADMIN_ENABLED=true requires LOCAL_ADMIN_EMAIL to be a valid email address.");
+  }
+  if (env.localAdminPassword.length < 8 || env.localAdminPassword.length > 1024) {
+    throw new Error("LOCAL_ADMIN_ENABLED=true requires LOCAL_ADMIN_PASSWORD to be 8-1024 characters.");
+  }
+
+  const existing = await getAuthUserByEmail(email);
+  if (existing) {
+    server.log.info({ email }, "Local admin user already exists");
+    return;
+  }
+
+  const { passwordSalt, passwordHash } = await createPasswordRecord(env.localAdminPassword);
+  const created = await createAuthUserRecord({
+    email,
+    displayName: env.localAdminDisplayName,
+    locale: defaultAiSummaryLocale,
+    passwordSalt,
+    passwordHash,
+  });
+  if (!created.user && created.duplicated) {
+    server.log.info({ email }, "Local admin user already exists");
+    return;
+  }
+  if (!created.user) {
+    throw new Error("Failed to seed local admin user.");
+  }
+
+  server.log.info({ email }, "Local admin user seeded");
+}
+
 function refreshAuthSessionUserViewsByUser(userId: string, user: AuthUserRecord | null) {
   for (const [token, mappedUserId] of authSessionUserByToken.entries()) {
     if (mappedUserId !== userId) {
@@ -1099,6 +1138,28 @@ function touchSessionIfActive(sessionToken: string, now: number): boolean {
   enforceSessionEntryLimit();
   persistAuthSessionToRedis(sessionToken);
   return true;
+}
+
+async function touchAuthSessionForRequest(
+  sessionToken: string,
+  request: {
+    headers: Record<string, string | string[] | undefined>;
+  },
+  reply?: {
+    header(name: string, value: string): unknown;
+  }
+): Promise<boolean> {
+  const now = Date.now();
+  await hydrateAuthSessionFromRedisIfNeeded(sessionToken, now);
+  if (await isAuthSessionRevokedInRedis(sessionToken)) {
+    clearSessionState(sessionToken);
+    if (reply) {
+      reply.header("Set-Cookie", clearSessionCookie(shouldUseSecureCookie(request)));
+    }
+    return false;
+  }
+
+  return touchSessionIfActive(sessionToken, now);
 }
 
 function isSessionActiveWithoutTouch(sessionToken: string, now: number): boolean {
@@ -3821,12 +3882,13 @@ server.addHook("onRequest", async (request, reply) => {
     pathname === "/api/auth/register" ||
     pathname === "/api/auth/me" ||
     pathname === "/api/auth/logout" ||
-    pathname === "/api/auth/session"
+    pathname === "/api/auth/session" ||
+    pathname === "/api/mail/connections/outlook/direct/start" ||
+    pathname === "/api/mail/connections/outlook/direct/callback"
   ) {
     return;
   }
 
-  const now = Date.now();
   const token = getSessionToken(request.headers.cookie);
   if (!token) {
     return reply.status(401).send({
@@ -3835,16 +3897,7 @@ server.addHook("onRequest", async (request, reply) => {
     });
   }
 
-  await hydrateAuthSessionFromRedisIfNeeded(token, now);
-  if (await isAuthSessionRevokedInRedis(token)) {
-    clearSessionState(token);
-    reply.header("Set-Cookie", clearSessionCookie(shouldUseSecureCookie(request)));
-    return reply.status(401).send({
-      ok: false,
-      error: "Unauthorized",
-    });
-  }
-  if (!touchSessionIfActive(token, now)) {
+  if (!(await touchAuthSessionForRequest(token, request, reply))) {
     return reply.status(401).send({
       ok: false,
       error: "Unauthorized",
@@ -5442,6 +5495,29 @@ server.get("/api/mail/connections/outlook/direct/start", async (request, reply) 
       );
 
   const sessionToken = getSessionTokenFromRequest(request);
+  const now = Date.now();
+  if (
+    isBatchRouteRateLimited(
+      scopedRouteKey("mail_outlook_direct_start", sessionToken),
+      request.ip,
+      now,
+      mailConnectionRateLimitPerMin
+    )
+  ) {
+    reply.header("Retry-After", "60");
+    return htmlReply({
+      ok: false,
+      title: "请求过于频繁",
+      heading: "Microsoft 登录请求过于频繁",
+      message: "请稍等一分钟后再重新尝试连接 Outlook。",
+      payload: {
+        attemptId,
+        error: "MICROSOFT_OAUTH_RATE_LIMITED",
+        retryAfterSec: 60,
+      },
+    });
+  }
+
   if (!sessionToken) {
     return htmlReply({
       ok: false,
@@ -5468,7 +5544,7 @@ server.get("/api/mail/connections/outlook/direct/start", async (request, reply) 
     });
   }
 
-  if (!touchSessionIfActive(sessionToken, Date.now())) {
+  if (!(await touchAuthSessionForRequest(sessionToken, request, reply))) {
     return htmlReply({
       ok: false,
       title: "会话已过期",
@@ -5569,8 +5645,9 @@ server.get("/api/mail/connections/outlook/direct/callback", async (request, repl
     const completed = await completeMicrosoftDirectAuth({
       state: parsed.data.state,
       code: parsed.data.code,
+      ensureSessionActive: (sessionToken) => touchAuthSessionForRequest(sessionToken, request),
     });
-    if (!touchSessionIfActive(completed.sessionToken, Date.now())) {
+    if (!(await touchAuthSessionForRequest(completed.sessionToken, request))) {
       return htmlReply({
         ok: false,
         appOrigin: completed.appOrigin,
@@ -5611,6 +5688,20 @@ server.get("/api/mail/connections/outlook/direct/callback", async (request, repl
       },
     });
   } catch (error) {
+    if (error instanceof MicrosoftDirectAuthSessionInactiveError) {
+      return htmlReply({
+        ok: false,
+        appOrigin: error.appOrigin,
+        title: "会话已过期",
+        heading: "登录成功，但会话已失效",
+        message: "Microsoft 已完成授权，但当前站点登录会话已过期，请回到主页面重新登录。",
+        payload: {
+          attemptId: error.attemptId,
+          error: "UNAUTHORIZED",
+        },
+      });
+    }
+
     const message = error instanceof Error ? error.message : String(error);
     server.log.warn({ message }, "Microsoft direct auth callback failed");
     return htmlReply({
@@ -8232,6 +8323,8 @@ server.setErrorHandler((error, _request, reply) => {
     error: safeMessage,
   });
 });
+
+await seedLocalAdminUser();
 
 await server.listen({
   host: env.HOST,

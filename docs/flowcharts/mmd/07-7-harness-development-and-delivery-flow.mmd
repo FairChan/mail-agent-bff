@@ -1,0 +1,17 @@
+flowchart TD
+  Change["Edit code or docs"] --> Semantic["npm run harness:semantic"]
+  Semantic --> Verify{"Changed source files"}
+  Verify -- "Yes" --> Typecheck["npm run check --workspaces --if-present"]
+  Verify -- "No" --> Summary["Append summary.md entry"]
+  Typecheck --> Smoke{"Web e2e affected"}
+  Smoke -- "Yes" --> Playwright["npm run harness:smoke"]
+  Smoke -- "No" --> AuditGate["Code task audit gate"]
+  Playwright --> AuditGate
+  AuditGate --> CodeTask{"Task type Code"}
+  CodeTask -- "Yes" --> SubAudit["Independent sub-agent audit"]
+  SubAudit --> FixHigh["Fix Critical and High findings"]
+  FixHigh --> Revalidate["Rerun relevant validation"]
+  CodeTask -- "No" --> AuditNA["Audit N/A, no code changes"]
+  Revalidate --> Summary
+  AuditNA --> Summary
+  Summary --> Final["Final delivery"]

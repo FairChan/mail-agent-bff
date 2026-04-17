@@ -138,6 +138,20 @@ export class MicrosoftGraphHttpError extends Error {
   }
 }
 
+export class MicrosoftDirectAuthSessionInactiveError extends Error {
+  sessionToken: string;
+  appOrigin: string;
+  attemptId: string;
+
+  constructor(input: { sessionToken: string; appOrigin: string; attemptId: string }) {
+    super("Local session expired before Microsoft authorization could be completed");
+    this.name = "MicrosoftDirectAuthSessionInactiveError";
+    this.sessionToken = input.sessionToken;
+    this.appOrigin = input.appOrigin;
+    this.attemptId = input.attemptId;
+  }
+}
+
 function enforceMapLimit<K, V>(map: Map<K, V>, limit: number): void {
   while (map.size > limit) {
     const oldestKey = map.keys().next().value as K | undefined;
@@ -450,10 +464,15 @@ export function beginMicrosoftDirectAuth(input: {
 export async function completeMicrosoftDirectAuth(input: {
   state: string;
   code: string;
+  ensureSessionActive?: (sessionToken: string) => boolean | Promise<boolean>;
 }): Promise<{ sessionToken: string; appOrigin: string; attemptId: string; account: MicrosoftAccountView }> {
   const authState = takeMicrosoftAuthState(input.state);
   if (!authState) {
     throw new Error("Microsoft authorization state expired");
+  }
+
+  if (input.ensureSessionActive && !(await input.ensureSessionActive(authState.sessionToken))) {
+    throw new MicrosoftDirectAuthSessionInactiveError(authState);
   }
 
   const token = await requestMicrosoftToken({
@@ -466,6 +485,10 @@ export async function completeMicrosoftDirectAuth(input: {
   });
 
   const profile = await fetchMicrosoftProfileByToken(token.access_token);
+  if (input.ensureSessionActive && !(await input.ensureSessionActive(authState.sessionToken))) {
+    throw new MicrosoftDirectAuthSessionInactiveError(authState);
+  }
+
   const mailboxUserIdHint = mailboxUserIdHintFromProfile(profile);
   const nowIso = new Date().toISOString();
   const record: MicrosoftAccountRecord = {

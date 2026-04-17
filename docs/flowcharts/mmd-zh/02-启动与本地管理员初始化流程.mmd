@@ -1,0 +1,16 @@
+flowchart TD
+  Start["启动后端中间层"] --> LoadEnv["读取环境变量并校验配置"]
+  LoadEnv --> Config["构建运行配置：代理、工具白名单、会话、本地管理员"]
+  Config --> Fastify["创建服务实例并启用日志和代理策略"]
+  Fastify --> CORS["注册跨域策略"]
+  CORS --> Stores["初始化认证存储和会话存储"]
+  Stores --> SeedCheck{"是否启用本地管理员"}
+  SeedCheck -- "否" --> Listen["监听主机与端口"]
+  SeedCheck -- "是" --> ValidateAdmin["校验管理员邮箱和密码长度"]
+  ValidateAdmin --> Existing{"用户是否已存在"}
+  Existing -- "是" --> LogExists["仅记录邮箱，跳过创建"]
+  Existing -- "否" --> Hash["生成安全密码哈希"]
+  Hash --> CreateUser["创建认证用户记录，写入昵称和语言区域"]
+  CreateUser --> LogSeeded["仅记录已初始化的邮箱"]
+  LogExists --> Listen
+  LogSeeded --> Listen

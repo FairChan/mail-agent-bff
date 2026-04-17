@@ -1,0 +1,11 @@
+flowchart TD
+  UserQuestion["用户提出邮件问题"] --> MailQuery["提交邮件问答请求"]
+  MailQuery --> SourceResolve["解析可选邮件源和路由上下文"]
+  SourceResolve --> Runtime["进入智能体运行时"]
+  Runtime --> ContextLoad["加载相关技能和记忆"]
+  ContextLoad --> ToolLoop["模型工具调用循环"]
+  ToolLoop --> ToolList["工具：列出近期邮件、搜索邮件、读取详情、获取洞察、回忆记忆、写入记忆"]
+  ToolList --> Grounding["用工具结果约束回答"]
+  Grounding --> FinalAnswer["返回答案和引用"]
+  FinalAnswer --> AfterResponse["响应后写入脱敏交互记忆"]
+  Runtime --> OnError["错误时写入脱敏事故记忆"]

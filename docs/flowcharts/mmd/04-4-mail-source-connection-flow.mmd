@@ -1,0 +1,20 @@
+flowchart TD
+  Settings["Settings page"] --> FetchSources["GET /api/mail/sources"]
+  FetchSources --> SourceList["Show default and custom sources"]
+  Settings --> DirectStart["Click Microsoft Outlook direct login"]
+  DirectStart --> StartRoute["GET /api/mail/connections/outlook/direct/start"]
+  StartRoute --> MicrosoftConfigured{"Microsoft direct auth configured"}
+  MicrosoftConfigured -- "No, current out-of-scope state" --> ConfigNeeded["Return popup page explaining missing Microsoft OAuth config"]
+  MicrosoftConfigured -- "Yes, after Azure config" --> Redirect["Redirect popup to Microsoft authorize URL"]
+  Redirect --> Callback["GET /api/mail/connections/outlook/direct/callback"]
+  Callback --> CompleteAuth["Exchange code, store Microsoft account in current session"]
+  CompleteAuth --> UpsertSource["Create or reuse Microsoft source"]
+  UpsertSource --> VerifySource["Verify mailbox access"]
+  VerifySource --> Ready{"Verified and no fail-fast"}
+  Ready -- "Yes" --> Activate["Set active source id"]
+  Ready -- "No" --> Pending["Show source as pending verification"]
+
+  Settings --> ManualSource["Manual Composio source entry"]
+  ManualSource --> CreateSource["POST /api/mail/sources with label, mailboxUserId, connectedAccountId"]
+  CreateSource --> ManualVerify["POST /api/mail/sources/verify"]
+  ManualVerify --> Ready

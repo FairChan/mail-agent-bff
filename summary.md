@@ -3689,3 +3689,242 @@ cp .env.example .env
 - Emphasized that no Azure compute/resource-group spending is needed for this setup; only identity/app registration is required.
 - Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
 - Audit: N/A (no code changes).
+
+### 2026-04-17T00:17:53+08:00
+
+- Scope: Answer whether using the existing Default Directory can solve Microsoft app registration without creating a new tenant.
+- Task type: `Non-code`
+- Main updates:
+- Clarified that an existing Azure/Entra Default Directory can be used for App Registration if it permits `App registrations -> New registration`.
+- Explained that the screenshot is from the new-tenant creation path and is not required for the Outlook OAuth setup unless no usable directory exists.
+- Provided a decision checklist: switch to Default Directory, attempt app registration there, avoid B2C/Workforce tenant creation unless registration is unavailable, and use the same redirect URI and Graph delegated permissions as before.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
+
+### 2026-04-16T22:00:33+08:00
+
+- Scope: Deploy the local BFF/WebUI and provide a directly usable local Admin login.
+- Task type: `Code`
+- Main updates:
+- Added local Admin seed support in `apps/bff/src/config.ts` and `apps/bff/src/server.ts`, controlled by `LOCAL_ADMIN_*` environment variables and logging only the seeded email.
+- Configured the local ignored `apps/bff/.env` for a local Admin account, so the account is recreated on BFF restart while the app remains in local memory-auth mode. The password is intentionally redacted from this log.
+- Restarted the BFF and kept the WebUI running locally: BFF at `http://127.0.0.1:8787`, WebUI at `http://127.0.0.1:5173/`.
+- Verified Admin login through both API and headless browser; the WebUI loads with title `Mery Mail Agent` after login.
+- Validation completed:
+- `npm run check` passed.
+- `npm run build` passed.
+- `npm run harness:semantic -- apps/bff/src/config.ts apps/bff/src/server.ts` passed with one existing zod-safe-parse warning in `apps/bff/src/server.ts`.
+- Browser login check with Playwright passed for the local Admin account; the password is intentionally redacted from this log.
+- `npm run harness:smoke` passed (`10/10`).
+- `npm run check:standard` passed, including another smoke run (`10/10`).
+- Final local reachability check passed: `GET /live` returned `200`, and `GET http://127.0.0.1:5173/` returned `200`.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit evidence location: `.harness/audit/2026-04-16-local-deploy-audit.md`.
+- Independent reviewer: sub-agent / `gpt-5.4-mini`.
+- Final audit status after validation: `Critical=0`, `High=0`, `Medium=1`, `Low=1`.
+- Remaining deferred items (`Medium/Low`) with rationale:
+- `Medium`: the app still has no true RBAC/admin role field; this is a local Admin-named account, not a role-backed admin subsystem. Owner: `Codex`. Target: `2026-04-17`. Rationale: the current request needed direct local access, and there are no admin-only surfaces to authorize yet.
+- `Low`: `/ready` remains `503` because external Outlook/Microsoft/Composio readiness is incomplete. Owner: `fairchan` for Microsoft/Azure app credentials, then `Codex` for restart/verification. Target: when credentials are available. Rationale: local login/WebUI access is healthy and does not require external mailbox readiness.
+- Final fixes after audit:
+- No `Critical` or `High` fixes were required.
+- Re-ran relevant validation after the audit and confirmed the local deployment and Admin login remain working.
+
+### 2026-04-16T23:07:00+08:00
+
+- Scope: Generate a detailed current flowchart from recent local-admin changes and current code, excluding the in-progress Azure/Microsoft configuration.
+- Task type: `Non-code`
+- Main updates:
+- Added `docs/current-flowchart.md` with Mermaid flowcharts covering overall runtime, BFF startup/local admin seed, auth/session, mail-source connection, mail triage/insights/detail/calendar sync, agent QA/memory, and Harness delivery flow.
+- Checked flow smoothness outside the excluded Azure/Microsoft setup and documented the main gaps: knowledge-base route registration/response-shape mismatch, missing knowledge-base job endpoints, inconsistent timezone parameter wiring, split WebUI API-base handling, local admin not being RBAC, and WebUI dev server not currently running.
+- Redacted previously logged local Admin password values from `summary.md`, `SUMMARY.md`, and `.harness/audit/2026-04-16-local-deploy-audit.md` while preserving the validation facts.
+- Validation completed:
+- `npm run harness:semantic` passed with 8 existing zod-safe-parse warnings.
+- `npm run check --workspaces --if-present` passed.
+- `GET http://127.0.0.1:8787/health` was reachable and correctly returned not-ready because Composio/Microsoft direct auth are not configured.
+- `GET http://127.0.0.1:5173/` failed because the WebUI dev server is not currently running.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
+- Final fixes after audit:
+- Not applicable.
+
+### 2026-04-16T23:25:56+08:00
+
+- Scope: Re-export Chinese flowchart PNGs at higher clarity.
+- Task type: `Non-code`
+- Main updates:
+- Rendered the 7 Chinese Mermaid flowcharts again with Mermaid CLI scale factor `4`.
+- Saved the high-resolution PNG files under `docs/flowcharts/png-zh-hd/`, leaving the previous normal-resolution `docs/flowcharts/png-zh/` files intact.
+- Validation completed:
+- Verified all 7 high-resolution PNG files exist and have valid PNG metadata via `file`.
+- `npm run harness:semantic` passed with 8 existing zod-safe-parse warnings.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
+- Final fixes after audit:
+- Not applicable.
+
+### 2026-04-16T23:22:03+08:00
+
+- Scope: Translate all visible flowchart text to Chinese and export the Chinese flowcharts as PNG.
+- Task type: `Non-code`
+- Main updates:
+- Created 7 Chinese Mermaid source files under `docs/flowcharts/mmd-zh/`.
+- Replaced visible English labels with Chinese labels, including technical labels such as session marker, cache session, local agent gateway, third-party connection service, and Microsoft mailbox.
+- Rendered the translated diagrams to 7 PNG files under `docs/flowcharts/png-zh/`.
+- Validation completed:
+- Verified all visible Mermaid labels in `docs/flowcharts/mmd-zh/` contain no ASCII letters.
+- Verified all 7 Chinese PNG files exist and have valid PNG metadata via `file`.
+- `npm run harness:semantic` passed with 8 existing zod-safe-parse warnings.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
+- Final fixes after audit:
+- Not applicable.
+
+### 2026-04-16T23:15:48+08:00
+
+- Scope: Export all Mermaid flowcharts from `docs/current-flowchart.md` to PNG files.
+- Task type: `Non-code`
+- Main updates:
+- Extracted 7 Mermaid blocks into `docs/flowcharts/mmd/`.
+- Rendered all 7 flowcharts as PNG files under `docs/flowcharts/png/` using Mermaid CLI.
+- Verified every PNG exists and has valid PNG metadata via `file`.
+- Validation completed:
+- `npm run harness:semantic` passed with 8 existing zod-safe-parse warnings.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
+- Final fixes after audit:
+- Not applicable.
+
+### 2026-04-16T23:05:52+08:00
+
+- Scope: Provide the complete detailed flowchart directly in chat for the current mail-agent workflow, excluding the in-progress Azure/Microsoft configuration.
+- Task type: `Non-code`
+- Main updates:
+- Prepared a full Mermaid flowchart covering user entry, WebUI providers, auth/session, local admin seed, mail source setup, mail ingestion, triage, insights, detail, calendar sync, agent QA, knowledge base, verification, and known gaps.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
+- Final fixes after audit:
+- Not applicable.
+
+### 2026-04-17T00:21:12+08:00
+
+- Scope: Answer whether Microsoft redirect URI can be changed from `127.0.0.1` to `localhost` because the portal only allows `https://` or `http://localhost`.
+- Task type: `Non-code`
+- Main updates:
+- Confirmed that `http://localhost:8787/api/mail/connections/outlook/direct/callback` is the correct local redirect URI shape for Microsoft app registration.
+- Clarified that the Azure app redirect URI and `MICROSOFT_REDIRECT_URI` in local BFF `.env` must match exactly, including host, port, path, and scheme.
+- Noted the small local networking caveat that `localhost` must reach the BFF listener, and the fix is to align `HOST` if callback connection fails.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
+
+### 2026-04-17T00:49:47+08:00
+
+- Scope: Configure the local BFF with Microsoft Outlook direct-auth Azure app credentials and verify readiness.
+- Task type: `Non-code`
+- Main updates:
+- Updated local `apps/bff/.env` with the provided Microsoft client ID and client secret without repeating the secret in the task summary.
+- Changed `MICROSOFT_REDIRECT_URI` to `http://localhost:8787/api/mail/connections/outlook/direct/callback` to match Azure's allowed local redirect URI format.
+- Restarted the BFF process so the new environment values were loaded.
+- Restarted the WebUI dev server for local browser verification.
+- Validation completed:
+- `GET http://127.0.0.1:8787/health` returned `ok=true` with `microsoft.ok=true`, `siliconFlow.ok=true`, and `composio.ok=false`.
+- `GET http://localhost:8787/health` also returned `ok=true` with `microsoft.ok=true`, confirming the localhost callback host is reachable.
+- `GET http://127.0.0.1:5173` returned the WebUI HTML successfully.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
+
+### 2026-04-17T10:57:13+08:00
+
+- Scope: Diagnose Microsoft popup error `unauthorized_client: The client does not exist or is not enabled for consumers` after clicking Outlook login.
+- Task type: `Non-code`
+- Main updates:
+- Rechecked local BFF Microsoft configuration and confirmed `/health` returns `ok=true` with `microsoft.ok=true` for both `127.0.0.1` and `localhost`.
+- Identified the failure as a Microsoft Entra App Registration sign-in audience issue, not a local BFF/WebUI runtime failure.
+- Prepared the fix path: set the app's supported account type/sign-in audience to include personal Microsoft accounts (`AzureADandPersonalMicrosoftAccount`) or create a new app registration with that audience, then update local client ID/secret if the app changes.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
+
+### 2026-04-17T11:03:09+08:00
+
+- Scope: Inspect the provided Microsoft App Registration manifest and fix the remaining Outlook OAuth login error.
+- Task type: `Non-code`
+- Main updates:
+- Determined that `signInAudience` was already correctly set to `AzureADandPersonalMicrosoftAccount`.
+- Identified the true mismatch: the local BFF had been configured with the manifest `passwordCredentials[0].keyId` as `MICROSOFT_CLIENT_ID`, but Microsoft OAuth requires the application `appId` as the client ID.
+- Updated local `apps/bff/.env` so `MICROSOFT_CLIENT_ID` uses the manifest `appId`.
+- Restarted the BFF process to load the corrected client ID.
+- Validation completed:
+- `GET http://127.0.0.1:8787/health` returned `ok=true` with `microsoft.ok=true`.
+- `GET http://localhost:8787/health` returned `ok=true` with `microsoft.ok=true`.
+- Authenticated `GET /api/mail/connections/outlook/direct/start?...` returned a Microsoft authorize redirect whose `client_id` is the manifest `appId`, confirming the local OAuth start URL now uses the correct application ID.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
+
+### 2026-04-17T11:10:18+08:00
+
+- Scope: Provide the local URL for accessing the running WebUI and confirm runtime availability.
+- Task type: `Non-code`
+- Main updates:
+- Confirmed the WebUI dev server is listening on `127.0.0.1:5173` and returns the HTML shell.
+- Confirmed the BFF health endpoint is available on `127.0.0.1:8787` with `ok=true`, `siliconFlow.ok=true`, and `microsoft.ok=true`.
+- Provided the local browser URL for the user to open and continue Outlook login testing.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
+
+### 2026-04-17T11:11:30+08:00
+
+- Scope: Provide a working local administrator account for direct WebUI login.
+- Task type: `Non-code`
+- Main updates:
+- Verified the seeded local admin account can authenticate successfully against `POST /api/auth/login`.
+- Provided the local-only admin email and password for the user to log into the running WebUI.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes).
+
+### 2026-04-17T11:20:42+08:00
+
+- Scope: Fix Outlook direct-auth callback returning raw JSON `{"ok":false,"error":"Unauthorized"}` after Microsoft authorization.
+- Task type: `Code`
+- Main updates:
+- Identified the root cause: the global BFF `/api/*` auth hook required the browser session cookie before the OAuth callback route could validate Microsoft `state`; Microsoft redirects to `localhost:8787`, while the WebUI session cookie was established under `127.0.0.1`, so the callback was intercepted as unauthorized.
+- Updated `apps/bff/src/server.ts` to allow the Outlook direct-auth start/callback routes past the global auth hook while keeping route-level checks.
+- Added `touchAuthSessionForRequest()` so global auth, Outlook direct-auth start, and callback session validation all share Redis hydration/revocation behavior.
+- Added route-level rate limiting to `/api/mail/connections/outlook/direct/start`.
+- Updated `apps/bff/src/microsoft-graph.ts` so `completeMicrosoftDirectAuth()` verifies the originating local session before token exchange and again before persisting Microsoft tokens.
+- Added `MicrosoftDirectAuthSessionInactiveError` so callback failures still post the correct popup `attemptId` back to the WebUI.
+- Restarted the BFF with the rebuilt `dist` output; WebUI remains available on `http://127.0.0.1:5173`.
+- Validation completed:
+- `npm --workspace apps/bff run check` passed.
+- `npm --workspace apps/bff run build` passed.
+- `npm run harness:semantic -- apps/bff/src/server.ts apps/bff/src/microsoft-graph.ts` passed with one existing zod-safe-parse warning.
+- `GET http://127.0.0.1:8787/health` returned `ok=true` with `microsoft.ok=true`.
+- Unauthenticated `GET http://localhost:8787/api/mail/connections/outlook/direct/callback?code=bogus&state=bogus` returned `200 text/html`, proving the callback is no longer intercepted as raw `401` JSON.
+- Unauthenticated direct-auth start returned a friendly popup HTML error.
+- Authenticated direct-auth start returned `302` to Microsoft authorize URL with the correct client ID and localhost redirect URI.
+- `npm run harness:smoke` passed (`10/10`).
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit evidence location: `.harness/audit/2026-04-17-outlook-callback-auth-audit.md`.
+- Independent reviewer: `Nietzsche` (`019d996f-dcab-7903-b578-34438345f90d`), model metadata unavailable in returned tool payload.
+- Initial audit status: `Critical=0`, `High=0`, `Medium=2`, `Low=1`.
+- Audit-driven fixes:
+- Fixed `Medium`: token exchange/persistence now checks the originating local session before exchanging and before persisting tokens.
+- Fixed `Medium`: direct-auth start/callback now reuse Redis hydration/revocation semantics instead of only local in-memory `touchSessionIfActive`.
+- Fixed `Low`: direct-auth start now has per-session/per-IP rate limiting.
+- Final audit status after fixes and rerun validation: `Critical=0`, `High=0`, `Medium=0`, `Low=0`.
+
+### 2026-04-17T11:16:55+08:00
+
+- Scope: Independently audit the OAuth callback `Unauthorized` bugfix that whitelisted Microsoft direct-auth start/callback routes in the global auth hook.
+- Task type: `Code`
+- Main updates:
+- Reviewed `apps/bff/src/server.ts` global `onRequest` auth hook behavior for `/api/mail/connections/outlook/direct/start` and `/api/mail/connections/outlook/direct/callback`.
+- Reviewed the related Microsoft OAuth state/PKCE flow in `apps/bff/src/microsoft-graph.ts`.
+- Confirmed the specific black-page JSON failure is addressed because the callback route no longer depends on the global cookie-based auth hook.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit performed inline in this session as independent review; no code files were modified.
+- Critical: none.
+- High: none.
+- Medium: callback can exchange/store Microsoft tokens before re-checking whether the original local session is still active; fix recommended before production.
+- Medium: direct-auth start/callback bypass global Redis hydration/revocation checks; acceptable for current local unblock but should be centralized before production/multi-instance deployment.
+- Low: direct-auth start has no route-specific rate limit; map bounds reduce blast radius, but adding per-IP/per-session throttling would be cleaner.
+- Final fixes after audit:
+- No fixes applied because the requested task was audit-only and explicitly asked not to edit files.
