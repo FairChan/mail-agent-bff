@@ -36,6 +36,7 @@ const envSchema = z.object({
   AGENT_MEMORY_MAX_ENTRIES: z.coerce.number().int().min(20).max(2000).default(200),
   DATABASE_URL: z.string().optional(),
   PRISMA_AUTH_ENABLED: z.string().default("false"),
+  MAIL_SOURCE_MEMORY_FALLBACK_ENABLED: z.string().default("false"),
   ENABLE_EMAIL_PERSISTENCE: z.string().default("false"),
   NODE_ENV: z.string().default("development"),
   SMTP_ENABLED: z.string().default("false"),
@@ -171,6 +172,7 @@ export const env = {
     .map((item) => item.trim())
     .filter((item) => item.length > 0),
   redisAuthSessionsEnabled: parseBooleanFlag(parsed.data.REDIS_AUTH_SESSIONS_ENABLED),
+  mailSourceMemoryFallbackEnabled: parseBooleanFlag(parsed.data.MAIL_SOURCE_MEMORY_FALLBACK_ENABLED),
   localAdminEnabled: parseBooleanFlag(parsed.data.LOCAL_ADMIN_ENABLED),
   localAdminEmail: parsed.data.LOCAL_ADMIN_EMAIL.trim(),
   localAdminPassword: parsed.data.LOCAL_ADMIN_PASSWORD,

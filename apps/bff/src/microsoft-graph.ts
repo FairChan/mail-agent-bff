@@ -342,7 +342,14 @@ export async function persistMicrosoftAccountForUser(input: {
   }
 
   const prisma = (await getPrismaClient(input.logger)) as any;
-  if (!prisma?.microsoftAccount?.upsert) {
+  if (!prisma) {
+    if (!env.mailSourceMemoryFallbackEnabled) {
+      throw new Error("MICROSOFT_ACCOUNT_STORE_UNAVAILABLE");
+    }
+    return accountViewFromRecord(record);
+  }
+
+  if (!prisma.microsoftAccount?.upsert) {
     throw new Error("MICROSOFT_ACCOUNT_STORE_UNAVAILABLE");
   }
 

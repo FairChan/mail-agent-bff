@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { FastifyBaseLogger } from "fastify";
+import { env } from "./config.js";
 import { getPrismaClient } from "./persistence.js";
 
 export type DbMailSourceConnectionType = "composio" | "microsoft";
@@ -69,6 +70,31 @@ export type MailSourceUpdateInput = {
 };
 
 type PrismaLike = any;
+type MemoryMailSourceRow = {
+  id: string;
+  externalId: string;
+  userId: string;
+  label: string;
+  provider: DbMailSourceProvider;
+  connectionType: DbMailSourceConnectionType;
+  emailHint: string;
+  mailboxUserId: string | null;
+  connectedAccountId: string | null;
+  microsoftAccountId: string | null;
+  connectionTrustedAt: Date | null;
+  connectionTrustSource: string | null;
+  connectionTrustDetailsJson: string | null;
+  routingVerifiedAt: Date | null;
+  routingStatusJson: string | null;
+  enabled: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+const memoryMailSourcesByUser = new Map<string, Map<string, MemoryMailSourceRow>>();
+const memoryActiveMailSourceByUser = new Map<string, string>();
+const maxMemoryMailSourceUsers = 5000;
+const maxMemoryMailSourcesPerUser = 20;
 
 function cleanOptionalText(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -104,6 +130,16 @@ function parseRoutingStatus(raw: string | null | undefined): DbMailSourceRouting
   }
 
   return undefined;
+}
+
+function enforceMapLimit<K, V>(map: Map<K, V>, limit: number): void {
+  while (map.size > limit) {
+    const oldestKey = map.keys().next().value as K | undefined;
+    if (oldestKey === undefined) {
+      break;
+    }
+    map.delete(oldestKey);
+  }
 }
 
 function sourceNeedsConnection(row: any): boolean {
@@ -151,9 +187,16 @@ function profileFromRow(row: any): DbMailSourceProfileView {
   };
 }
 
-async function prismaOrThrow(logger: FastifyBaseLogger): Promise<PrismaLike> {
+async function prismaOrNull(logger: FastifyBaseLogger): Promise<PrismaLike | null> {
   const prisma = (await getPrismaClient(logger)) as PrismaLike;
-  if (!prisma?.mailSource || !prisma?.user) {
+  if (!prisma) {
+    if (!env.mailSourceMemoryFallbackEnabled) {
+      throw new Error("MAIL_SOURCE_STORE_UNAVAILABLE");
+    }
+    return null;
+  }
+
+  if (!prisma.mailSource || !prisma.user) {
     throw new Error("MAIL_SOURCE_STORE_UNAVAILABLE");
   }
 
@@ -179,6 +222,10 @@ async function uniqueExternalIdForUser(prisma: PrismaLike, userId: string, label
 }
 
 async function requireOwnedMicrosoftAccount(prisma: PrismaLike, userId: string, accountId: string): Promise<void> {
+  if (!prisma?.microsoftAccount?.findFirst) {
+    throw new Error("MICROSOFT_ACCOUNT_STORE_UNAVAILABLE");
+  }
+
   const account = await prisma.microsoftAccount.findFirst({
     where: { userId, accountId },
     select: { accountId: true },
@@ -227,11 +274,126 @@ async function resolveActiveSourceId(prisma: PrismaLike, userId: string): Promis
   return fallbackId;
 }
 
+function getMemorySourceStore(userId: string, createIfMissing: boolean): Map<string, MemoryMailSourceRow> {
+  const existing = memoryMailSourcesByUser.get(userId);
+  if (existing) {
+    return existing;
+  }
+
+  if (!createIfMissing) {
+    return new Map<string, MemoryMailSourceRow>();
+  }
+
+  const created = new Map<string, MemoryMailSourceRow>();
+  memoryMailSourcesByUser.set(userId, created);
+  enforceMapLimit(memoryMailSourcesByUser, maxMemoryMailSourceUsers);
+  return created;
+}
+
+function uniqueMemoryExternalIdForUser(userId: string, label: string): string {
+  const store = getMemorySourceStore(userId, false);
+  let externalId = externalIdFromLabel(label);
+  while ([...store.values()].some((row) => row.externalId === externalId)) {
+    externalId = externalIdFromLabel(label);
+  }
+  return externalId;
+}
+
+function uniqueMemorySourceId(store: Map<string, MemoryMailSourceRow>, label: string): string {
+  const base =
+    label
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 24) || "source";
+  let id = `mem_${base}_${randomBytes(3).toString("hex")}`;
+  while (store.has(id)) {
+    id = `mem_${base}_${randomBytes(3).toString("hex")}`;
+  }
+  return id;
+}
+
+function resolveMemoryActiveSourceId(userId: string): string | null {
+  const store = getMemorySourceStore(userId, false);
+  const selected = cleanOptionalText(memoryActiveMailSourceByUser.get(userId));
+  if (selected && store.get(selected)?.enabled) {
+    return selected;
+  }
+
+  const fallback =
+    [...store.values()]
+      .filter((row) => row.enabled)
+      .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime())[0]?.id ?? null;
+  if (fallback) {
+    memoryActiveMailSourceByUser.set(userId, fallback);
+  } else {
+    memoryActiveMailSourceByUser.delete(userId);
+  }
+  return fallback;
+}
+
+function memorySnapshotForUser(userId: string): DbMailSourceSnapshot {
+  const store = getMemorySourceStore(userId, false);
+  return {
+    sources: [...store.values()]
+      .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime())
+      .map(profileFromRow),
+    activeSourceId: resolveMemoryActiveSourceId(userId),
+  };
+}
+
+function pruneEmptyMemorySourceStore(userId: string): void {
+  const store = memoryMailSourcesByUser.get(userId);
+  if (store && store.size === 0) {
+    memoryMailSourcesByUser.delete(userId);
+    memoryActiveMailSourceByUser.delete(userId);
+  }
+}
+
+function validateMemorySourceInput(input: {
+  connectionType: DbMailSourceConnectionType;
+  mailboxUserId?: string;
+  connectedAccountId?: string;
+  microsoftAccountId?: string;
+  trustedConnectedAccountId?: boolean;
+}): {
+  mailboxUserId?: string;
+  connectedAccountId?: string;
+  microsoftAccountId?: string;
+} {
+  const mailboxUserId = cleanOptionalText(input.mailboxUserId);
+  const connectedAccountId = cleanOptionalText(input.connectedAccountId);
+  const microsoftAccountId = cleanOptionalText(input.microsoftAccountId);
+
+  if (input.connectionType === "composio") {
+    if (!mailboxUserId || !connectedAccountId) {
+      throw new Error("MAIL_SOURCE_CONNECTION_REQUIRED");
+    }
+    if (!input.trustedConnectedAccountId) {
+      throw new Error("COMPOSIO_ACCOUNT_OWNERSHIP_REQUIRED");
+    }
+  }
+
+  if (input.connectionType === "microsoft" && !microsoftAccountId) {
+    throw new Error("MAIL_SOURCE_CONNECTION_REQUIRED");
+  }
+
+  return {
+    ...(mailboxUserId ? { mailboxUserId } : {}),
+    ...(connectedAccountId ? { connectedAccountId } : {}),
+    ...(microsoftAccountId ? { microsoftAccountId } : {}),
+  };
+}
+
 export class MailSourceService {
   constructor(private readonly logger: FastifyBaseLogger) {}
 
   async listForUser(userId: string): Promise<DbMailSourceSnapshot> {
-    const prisma = await prismaOrThrow(this.logger);
+    const prisma = await prismaOrNull(this.logger);
+    if (!prisma) {
+      return memorySnapshotForUser(userId);
+    }
+
     const [rows, activeSourceId] = await Promise.all([
       prisma.mailSource.findMany({
         where: { userId },
@@ -247,7 +409,17 @@ export class MailSourceService {
   }
 
   async resolveForUser(userId: string, requestedSourceId?: string): Promise<DbMailSourceProfileView | null> {
-    const prisma = await prismaOrThrow(this.logger);
+    const prisma = await prismaOrNull(this.logger);
+    if (!prisma) {
+      const sourceId = cleanOptionalText(requestedSourceId) ?? resolveMemoryActiveSourceId(userId);
+      if (!sourceId) {
+        return null;
+      }
+
+      const row = getMemorySourceStore(userId, false).get(sourceId);
+      return row?.enabled ? profileFromRow(row) : null;
+    }
+
     const sourceId = cleanOptionalText(requestedSourceId) ?? (await resolveActiveSourceId(prisma, userId));
     if (!sourceId) {
       return null;
@@ -260,7 +432,12 @@ export class MailSourceService {
   }
 
   async getOwnedSource(userId: string, sourceId: string): Promise<DbMailSourceProfileView | null> {
-    const prisma = await prismaOrThrow(this.logger);
+    const prisma = await prismaOrNull(this.logger);
+    if (!prisma) {
+      const row = getMemorySourceStore(userId, false).get(sourceId);
+      return row ? profileFromRow(row) : null;
+    }
+
     const row = await prisma.mailSource.findFirst({
       where: { id: sourceId, userId },
     });
@@ -268,7 +445,7 @@ export class MailSourceService {
   }
 
   async createForUser(userId: string, input: MailSourceCreateInput): Promise<DbMailSourceSnapshot & { source: DbMailSourceProfileView }> {
-    const prisma = await prismaOrThrow(this.logger);
+    const prisma = await prismaOrNull(this.logger);
     const label = input.label.trim();
     const connectionType = input.connectionType;
     const mailboxUserId = cleanOptionalText(input.mailboxUserId);
@@ -288,7 +465,56 @@ export class MailSourceService {
       if (!microsoftAccountId) {
         throw new Error("MAIL_SOURCE_CONNECTION_REQUIRED");
       }
-      await requireOwnedMicrosoftAccount(prisma, userId, microsoftAccountId);
+      if (prisma) {
+        await requireOwnedMicrosoftAccount(prisma, userId, microsoftAccountId);
+      }
+    }
+
+    if (!prisma) {
+      const normalized = validateMemorySourceInput({
+        connectionType,
+        mailboxUserId,
+        connectedAccountId,
+        microsoftAccountId,
+        trustedConnectedAccountId: input.trustedConnectedAccountId,
+      });
+      const store = getMemorySourceStore(userId, true);
+      const now = new Date();
+      const row: MemoryMailSourceRow = {
+        id: uniqueMemorySourceId(store, label),
+        externalId: uniqueMemoryExternalIdForUser(userId, label),
+        userId,
+        label,
+        provider: input.provider,
+        connectionType,
+        emailHint: cleanOptionalText(input.emailHint) ?? normalized.mailboxUserId ?? normalized.microsoftAccountId ?? "",
+        mailboxUserId: normalized.mailboxUserId ?? null,
+        connectedAccountId: connectionType === "composio" ? normalized.connectedAccountId ?? null : null,
+        microsoftAccountId: connectionType === "microsoft" ? normalized.microsoftAccountId ?? null : null,
+        connectionTrustedAt: now,
+        connectionTrustSource: connectionType === "microsoft" ? "microsoft_direct_session" : "composio_server_verified",
+        connectionTrustDetailsJson: JSON.stringify({
+          reason:
+            connectionType === "microsoft"
+              ? "Owned Microsoft account verified in the current OAuth session"
+              : "Composio connected account ownership verified by server flow",
+        }),
+        routingVerifiedAt: null,
+        routingStatusJson: null,
+        enabled: true,
+        createdAt: now,
+        updatedAt: now,
+      };
+      store.set(row.id, row);
+      enforceMapLimit(store, maxMemoryMailSourcesPerUser);
+      if (!resolveMemoryActiveSourceId(userId)) {
+        memoryActiveMailSourceByUser.set(userId, row.id);
+      }
+
+      return {
+        ...memorySnapshotForUser(userId),
+        source: profileFromRow(row),
+      };
     }
 
     const externalId = await uniqueExternalIdForUser(prisma, userId, label);
@@ -329,7 +555,60 @@ export class MailSourceService {
   }
 
   async updateForUser(userId: string, input: MailSourceUpdateInput): Promise<DbMailSourceSnapshot & { source: DbMailSourceProfileView }> {
-    const prisma = await prismaOrThrow(this.logger);
+    const prisma = await prismaOrNull(this.logger);
+    if (!prisma) {
+      const store = getMemorySourceStore(userId, false);
+      const current = store.get(input.id);
+      if (!current) {
+        throw new Error("MAIL_SOURCE_NOT_FOUND");
+      }
+
+      const connectionType = isConnectionType(current.connectionType) ? current.connectionType : "composio";
+      const nextMailboxUserId =
+        input.mailboxUserId !== undefined ? cleanOptionalText(input.mailboxUserId) : cleanOptionalText(current.mailboxUserId ?? undefined);
+      const nextConnectedAccountId =
+        input.connectedAccountId !== undefined
+          ? cleanOptionalText(input.connectedAccountId)
+          : cleanOptionalText(current.connectedAccountId ?? undefined);
+      const nextMicrosoftAccountId =
+        input.microsoftAccountId !== undefined
+          ? cleanOptionalText(input.microsoftAccountId)
+          : cleanOptionalText(current.microsoftAccountId ?? undefined);
+      validateMemorySourceInput({
+        connectionType,
+        mailboxUserId: nextMailboxUserId,
+        connectedAccountId: nextConnectedAccountId,
+        microsoftAccountId: nextMicrosoftAccountId,
+        trustedConnectedAccountId: input.trustedConnectedAccountId || nextConnectedAccountId === cleanOptionalText(current.connectedAccountId ?? undefined),
+      });
+
+      const routingContextChanged =
+        nextMailboxUserId !== cleanOptionalText(current.mailboxUserId ?? undefined) ||
+        nextConnectedAccountId !== cleanOptionalText(current.connectedAccountId ?? undefined) ||
+        nextMicrosoftAccountId !== cleanOptionalText(current.microsoftAccountId ?? undefined);
+      const updated: MemoryMailSourceRow = {
+        ...current,
+        label: input.label ?? input.name ?? current.label,
+        emailHint: input.emailHint ?? current.emailHint,
+        mailboxUserId: nextMailboxUserId ?? null,
+        connectedAccountId: connectionType === "composio" ? nextConnectedAccountId ?? null : null,
+        microsoftAccountId: connectionType === "microsoft" ? nextMicrosoftAccountId ?? null : null,
+        enabled: input.enabled ?? current.enabled,
+        ...(routingContextChanged ? { routingVerifiedAt: null, routingStatusJson: null } : {}),
+        updatedAt: new Date(),
+      };
+      store.set(updated.id, updated);
+      if (!updated.enabled && resolveMemoryActiveSourceId(userId) === updated.id) {
+        memoryActiveMailSourceByUser.delete(userId);
+        resolveMemoryActiveSourceId(userId);
+      }
+
+      return {
+        ...memorySnapshotForUser(userId),
+        source: profileFromRow(updated),
+      };
+    }
+
     const current = await prisma.mailSource.findFirst({
       where: { id: input.id, userId },
     });
@@ -419,7 +698,25 @@ export class MailSourceService {
   }
 
   async deleteForUser(userId: string, sourceId: string): Promise<DbMailSourceSnapshot & { deleted: true; id: string }> {
-    const prisma = await prismaOrThrow(this.logger);
+    const prisma = await prismaOrNull(this.logger);
+    if (!prisma) {
+      const store = getMemorySourceStore(userId, false);
+      if (!store.has(sourceId)) {
+        throw new Error("MAIL_SOURCE_NOT_FOUND");
+      }
+      store.delete(sourceId);
+      if (memoryActiveMailSourceByUser.get(userId) === sourceId) {
+        memoryActiveMailSourceByUser.delete(userId);
+        resolveMemoryActiveSourceId(userId);
+      }
+      pruneEmptyMemorySourceStore(userId);
+      return {
+        ...memorySnapshotForUser(userId),
+        id: sourceId,
+        deleted: true,
+      };
+    }
+
     const current = await prisma.mailSource.findFirst({
       where: { id: sourceId, userId },
       select: { id: true },
@@ -439,7 +736,16 @@ export class MailSourceService {
   }
 
   async selectForUser(userId: string, sourceId: string): Promise<DbMailSourceSnapshot> {
-    const prisma = await prismaOrThrow(this.logger);
+    const prisma = await prismaOrNull(this.logger);
+    if (!prisma) {
+      const current = getMemorySourceStore(userId, false).get(sourceId);
+      if (!current?.enabled) {
+        throw new Error("MAIL_SOURCE_NOT_FOUND");
+      }
+      memoryActiveMailSourceByUser.set(userId, current.id);
+      return memorySnapshotForUser(userId);
+    }
+
     const current = await prisma.mailSource.findFirst({
       where: { id: sourceId, userId, enabled: true },
       select: { id: true },
@@ -453,7 +759,18 @@ export class MailSourceService {
   }
 
   async saveRoutingStatus(userId: string, sourceId: string, routingStatus: DbMailSourceRoutingStatus): Promise<void> {
-    const prisma = await prismaOrThrow(this.logger);
+    const prisma = await prismaOrNull(this.logger);
+    if (!prisma) {
+      const current = getMemorySourceStore(userId, false).get(sourceId);
+      if (!current) {
+        return;
+      }
+      current.routingVerifiedAt = new Date(routingStatus.verifiedAt);
+      current.routingStatusJson = JSON.stringify(routingStatus);
+      current.updatedAt = new Date();
+      return;
+    }
+
     await prisma.mailSource.updateMany({
       where: { id: sourceId, userId },
       data: {
@@ -471,7 +788,71 @@ export class MailSourceService {
     displayName?: string;
     mailboxUserIdHint?: string;
   }): Promise<DbMailSourceSnapshot & { source: DbMailSourceProfileView }> {
-    const prisma = await prismaOrThrow(this.logger);
+    const prisma = await prismaOrNull(this.logger);
+    if (!prisma) {
+      const mailboxUserId = cleanOptionalText(input.mailboxUserIdHint) ?? "me";
+      const label =
+        cleanOptionalText(input.label) ??
+        (cleanOptionalText(input.email)
+          ? `Outlook ${cleanOptionalText(input.email)}`
+          : `Outlook ${cleanOptionalText(input.displayName) ?? input.accountId.slice(0, 8)}`);
+      const store = getMemorySourceStore(input.userId, true);
+      const existing = [...store.values()].find(
+        (row) =>
+          row.provider === "outlook" &&
+          row.connectionType === "microsoft" &&
+          row.microsoftAccountId === input.accountId
+      );
+      const now = new Date();
+      const row: MemoryMailSourceRow = existing
+        ? {
+            ...existing,
+            label,
+            emailHint: cleanOptionalText(input.email) ?? mailboxUserId,
+            mailboxUserId,
+            connectedAccountId: null,
+            microsoftAccountId: input.accountId,
+            connectionTrustedAt: now,
+            connectionTrustSource: "microsoft_direct_session",
+            connectionTrustDetailsJson: JSON.stringify({
+              reason: "Microsoft direct OAuth account reconnected in the current session",
+            }),
+            routingVerifiedAt: null,
+            routingStatusJson: null,
+            enabled: true,
+            updatedAt: now,
+          }
+        : {
+            id: uniqueMemorySourceId(store, label),
+            externalId: uniqueMemoryExternalIdForUser(input.userId, label),
+            userId: input.userId,
+            label,
+            provider: "outlook",
+            connectionType: "microsoft",
+            emailHint: cleanOptionalText(input.email) ?? mailboxUserId,
+            mailboxUserId,
+            connectedAccountId: null,
+            microsoftAccountId: input.accountId,
+            connectionTrustedAt: now,
+            connectionTrustSource: "microsoft_direct_session",
+            connectionTrustDetailsJson: JSON.stringify({
+              reason: "Microsoft direct OAuth account connected in the current session",
+            }),
+            routingVerifiedAt: null,
+            routingStatusJson: null,
+            enabled: true,
+            createdAt: now,
+            updatedAt: now,
+          };
+      store.set(row.id, row);
+      enforceMapLimit(store, maxMemoryMailSourcesPerUser);
+      memoryActiveMailSourceByUser.set(input.userId, row.id);
+      return {
+        ...memorySnapshotForUser(input.userId),
+        source: profileFromRow(row),
+      };
+    }
+
     const account = await prisma.microsoftAccount.findFirst({
       where: { userId: input.userId, accountId: input.accountId },
     });

@@ -4049,3 +4049,33 @@ cp .env.example .env
 - Audit evidence agent: `Gauss` (`019d99ec-bd62-7cf2-b41e-28dbbb083d28`), Codex sub-agent, `gpt-5.4-mini`, explorer role.
 - Audit result: no Critical, High, Medium, or Low findings.
 - Final audit status: Critical 0, High 0, Medium 0, Low 0.
+
+### 2026-04-17T13:52:14+08:00
+
+- Scope: Fix Outlook direct auth link returning `MAIL_SOURCE_STORE_UNAVAILABLE` when local Prisma is disabled.
+- Task type: `Code`
+- Main updates:
+- Added an explicit `MAIL_SOURCE_MEMORY_FALLBACK_ENABLED` configuration flag, defaulting to `false`.
+- Added a local/dev in-memory mail source fallback for Prisma-disabled environments, keyed by user id and guarded by the explicit flag.
+- Updated Microsoft direct account persistence so it can no-op into the current OAuth session only when the same explicit fallback flag is enabled.
+- Updated local ignored `apps/bff/.env` with `MAIL_SOURCE_MEMORY_FALLBACK_ENABLED=true` so this machine can complete Outlook direct auth without Prisma.
+- Updated `apps/bff/.env.example` with `MAIL_SOURCE_MEMORY_FALLBACK_ENABLED=false` to keep production/default behavior fail-closed.
+- Added cleanup for empty in-memory mail source stores after deletes.
+- Validation completed:
+- `npm --workspace apps/bff run check` passed.
+- `npm --workspace apps/bff run build` passed.
+- `git diff --check` passed.
+- `npm run harness:semantic` passed with existing warnings.
+- `npm run harness:smoke` passed with 3/3 tests.
+- Restarted local BFF from `dist/server.js`.
+- Local admin login succeeded.
+- Outlook direct start returned `302` to `login.microsoftonline.com` instead of `MAIL_SOURCE_STORE_UNAVAILABLE`.
+- Service-level fallback disabled check returned `MAIL_SOURCE_STORE_UNAVAILABLE`, confirming default fail-closed behavior.
+- Service-level fallback enabled check created a `microsoft` mail source with an active source id.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit evidence location: `.harness/audit/2026-04-17-outlook-memory-fallback-audit.md`.
+- Audit evidence agent: `Hooke` (`019d99f9-e8e2-7842-b376-2fdf721c83e4`), Codex sub-agent, `gpt-5.4-mini`, explorer role.
+- Initial audit: Critical 0, High 1, Medium 0, Low 1.
+- Audit-driven fixes: gated fallback behind explicit config and pruned empty in-memory stores.
+- Recheck audit result: no Critical, High, Medium, or Low findings.
+- Final audit status: Critical 0, High 0, Medium 0, Low 0.
