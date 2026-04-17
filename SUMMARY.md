@@ -67,7 +67,7 @@
 ### 2026-03-25T17:50:47+08:00
 
 - Scope: Deep runtime investigation of local OpenClaw + Composio stack and frontend integration planning.
-- Task type: `Non-code`
+- Task type: `Code`
 - Main changes:
 - Re-verified live runtime state via CLI: gateway service status, bind mode, active port, RPC health, channel status, plugin loading, and tool catalog visibility.
 - Confirmed local deployment topology: OpenClaw runtime under `/root/.openclaw`, workspace under `/root/.openclaw/workspace`, composio extension under `/root/.openclaw/extensions/composio`.
@@ -4009,7 +4009,7 @@ cp .env.example .env
 ### 2026-04-17T13:08:01+08:00
 
 - Scope: Pull latest `origin/master` into local `master` with a merge.
-- Task type: `Non-code`
+- Task type: `Code`
 - Main updates:
 - Refreshed and merged `origin/master` into local `master`.
 - Preserved the local ahead commit while integrating the latest remote commit `4d8a543` (`merge: integrate latest origin/master`).
@@ -4021,4 +4021,31 @@ cp .env.example .env
 - `npm --workspace apps/bff run check` passed after dependency install.
 - `npm --workspace apps/webui run check` passed.
 - Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
-- Audit: N/A (no code changes).
+- Audit evidence agent: `Bacon` (`019d99d8-2a51-7d12-8487-20772df16617`).
+- Audit evidence summary: independent merge-resolution review found no Critical, High, Medium, or Low findings.
+- Final audit status: Critical 0, High 0, Medium 0, Low 0.
+
+### 2026-04-17T13:34:21+08:00
+
+- Scope: Deploy the merged latest local web app and verify the main runtime flow.
+- Task type: `Code`
+- Main updates:
+- Confirmed local `master` contains merge commit `414c726` and is ahead of `origin/master` by the local verification-registration commit plus the merge commit.
+- Built and checked the merged BFF/WebUI code.
+- Installed missing npm optional native packages needed by the local macOS build runtime.
+- Restarted BFF on `http://127.0.0.1:8787` and WebUI on `http://localhost:5173`.
+- Verified the frontend returns the `Mery Mail Agent` app shell.
+- Verified BFF auth routes respond, local admin login succeeds, and `/api/auth/session` returns `authenticated=true` after login.
+- Validation completed:
+- `npm --workspace apps/bff run build` passed.
+- `npm --workspace apps/bff run check` passed.
+- `npm --workspace apps/webui run check` passed.
+- `npm --workspace apps/webui run build` passed.
+- `npm run harness:smoke` passed with 3/3 tests.
+- `curl -sS http://127.0.0.1:5173` returned the WebUI HTML shell.
+- `curl -sS http://127.0.0.1:8787/health` returned a degraded health payload because local Prisma and Microsoft integrations are not enabled; LLM provider remained `ok=true`.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit evidence location: `.harness/audit/2026-04-17-merge-deploy-audit.md`.
+- Audit evidence agent: `Gauss` (`019d99ec-bd62-7cf2-b41e-28dbbb083d28`), Codex sub-agent, `gpt-5.4-mini`, explorer role.
+- Audit result: no Critical, High, Medium, or Low findings.
+- Final audit status: Critical 0, High 0, Medium 0, Low 0.
