@@ -1,0 +1,56 @@
+flowchart TD
+  User["User in browser"] --> WebUI["WebUI React Vite app"]
+  WebUI --> Providers["Context providers: Auth, Mail, App, Theme"]
+  Providers --> AuthUI{"Authenticated"}
+  AuthUI -- "No" --> Login["Login or register screen"]
+  Login --> AuthApi["BFF auth APIs"]
+  AuthUI -- "Yes" --> Main["Dashboard shell"]
+
+  Main --> Settings["Settings: account, Outlook source, locale"]
+  Main --> Inbox["Inbox: triage and upcoming items"]
+  Main --> AllMail["All mail list and detail"]
+  Main --> Calendar["Calendar sync view"]
+  Main --> Stats["Stats view"]
+  Main --> KB["Knowledge base view"]
+
+  WebUI --> BFF["Fastify BFF"]
+  AuthApi --> BFF
+  BFF --> Guard["API session guard for /api/*"]
+  Guard --> Session["HttpOnly bff_session cookie and user/session maps"]
+  Session --> AuthStore{"Auth store"}
+  AuthStore -- "Prisma enabled" --> Prisma["Prisma user table"]
+  AuthStore -- "Prisma disabled" --> MemoryAuth["In-memory users and sessions"]
+  Session --> Redis{"Redis sessions optional"}
+  Redis -- "enabled" --> RedisStore["Redis session store"]
+  Redis -- "disabled" --> MemorySession["In-memory session state"]
+
+  BFF --> Readiness["/live and /ready health probes"]
+  Readiness --> DirectMode{"Gateway bearer configured"}
+  DirectMode -- "No" --> DirectDeps["Direct mode dependencies: SiliconFlow plus Composio or Microsoft"]
+  DirectMode -- "Yes" --> OpenClaw["OpenClaw Gateway session_status"]
+
+  BFF --> MailRoutes["Mail APIs"]
+  MailRoutes --> SourceGuard["Resolve source and require ready routing"]
+  SourceGuard --> Provider{"Source connection type"}
+  Provider -- "microsoft" --> Graph["Microsoft Graph direct client"]
+  Provider -- "composio" --> Composio["Composio MCP or OpenClaw tool bridge"]
+  Provider -- "legacy gateway" --> OpenClaw
+
+  MailRoutes --> MailLogic["mail.ts triage, insights, inbox, detail, calendar"]
+  MailLogic --> AISummary["AI summary cache and batch summarization"]
+  AISummary --> AgentModel{"Model path"}
+  AgentModel -- "Gateway configured" --> OpenClawResponses["OpenClaw /v1/responses"]
+  AgentModel -- "Gateway missing" --> SiliconFlow["SiliconFlow chat completion"]
+
+  MailRoutes --> AgentRuntime["Agent runtime for mail QA"]
+  AgentRuntime --> Skills["Local skill registry"]
+  AgentRuntime --> Memory["File memory store"]
+  AgentRuntime --> Hooks["Hook engine: after_response and on_error"]
+  AgentRuntime --> SiliconFlow
+
+  KB --> KBApi["/api/mail-kb/* and /api/mail/knowledge-base/*"]
+  KBApi -.-> MissingKB["Current gap: routes exist in module but are not registered in server.ts"]
+
+  MailLogic --> Response["JSON result envelope"]
+  Response --> Providers
+  Providers --> UIState["React state and rendered views"]

@@ -1,0 +1,30 @@
+flowchart TD
+  ActiveSource["activeSourceId exists"] --> LoadInbox["InboxView useEffect"]
+  LoadInbox --> TriageReq["GET /api/mail/triage"]
+  LoadInbox --> InsightsReq["GET /api/mail/insights"]
+  TriageReq --> SourceReady1["Resolve source and require routing ready"]
+  InsightsReq --> SourceReady2["Resolve source and require routing ready"]
+
+  SourceReady1 --> Triage["triageInbox"]
+  SourceReady2 --> Insights["buildMailInsights"]
+  Triage --> ProviderFetch["Fetch Outlook inbox messages"]
+  Insights --> ProviderFetch
+  ProviderFetch --> Rules["Apply custom priority rules"]
+  Rules --> Classification["Four-quadrant classification"]
+  Classification --> SummaryBatch["AI summary enrichment with cache"]
+  SummaryBatch --> TriageResponse["Return triage result"]
+  SummaryBatch --> InsightsResponse["Return insight timeline and digest"]
+
+  TriageResponse --> InboxUI["Priority queue and quadrant cards"]
+  InsightsResponse --> UpcomingUI["Upcoming schedule and DDL list"]
+  InboxUI --> Prefetch["Prefetch top mail bodies"]
+  Prefetch --> DetailReq["GET /api/mail/message"]
+  DetailReq --> DetailUI["Mail detail page or modal"]
+
+  UpcomingUI --> CalendarSync["POST /api/mail/calendar/sync"]
+  CalendarSync --> Dedupe["Dedupe by messageId, type, dueAt"]
+  Dedupe --> CalendarProvider{"Provider"}
+  CalendarProvider -- "microsoft" --> GraphCalendar["Create Microsoft Graph event"]
+  CalendarProvider -- "composio" --> ComposioCalendar["Create Outlook event through Composio"]
+  GraphCalendar --> SyncResult["Synced status"]
+  ComposioCalendar --> SyncResult

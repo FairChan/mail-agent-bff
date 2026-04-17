@@ -1,0 +1,35 @@
+# Local Deploy Audit
+- Auditor: sub-agent / gpt-5.4-mini
+- Timestamp: 2026-04-16T21:58:51+08:00
+- Scope
+  - Verified the local BFF at `http://127.0.0.1:8787`
+  - Verified the local WebUI at `http://127.0.0.1:5173`
+  - Verified the local admin login credentials for `admin@true-sight.local` (password redacted)
+  - Verified the local admin seed is enabled in `apps/bff/.env` for this deployment
+  - Reviewed visible validation evidence in `summary.md` and current git status
+- Checks performed
+  - `git status --short`
+  - `curl` to `GET http://127.0.0.1:8787/api/auth/session`
+  - `curl` to `GET http://127.0.0.1:8787/ready`
+  - `curl` to `GET http://127.0.0.1:5173/`
+  - `curl` to `POST http://127.0.0.1:8787/api/auth/login` with the provided admin credentials
+  - Follow-up `GET /api/auth/session` and `GET /api/auth/me` using a temporary cookie jar that was deleted after the check
+  - Reviewed auth and deployment-related source in `apps/bff/src/config.ts`, `apps/bff/src/server.ts`, `apps/bff/src/routes/auth.ts`, `apps/bff/src/routes/health.ts`, `apps/bff/src/types/auth.ts`, and `apps/webui/src/contexts/AuthContext.tsx`
+  - Reviewed `apps/bff/.env` for local admin seed configuration
+  - Searched the seeding path and logger usage for password exposure; only the email is logged and the password is only consumed for hashing
+- Findings by severity
+  - Critical: none
+  - High: none
+  - Medium: The deployment provides a seeded local admin account, but there is no true role-based admin implementation in the reviewed auth surface. The auth user payload only carries `id`, `email`, `displayName`, and `locale`, and the reviewed routes do not enforce an `admin` role or any equivalent authorization boundary. In practice this is a named local account, not an RBAC-backed admin subsystem.
+  - Low: The BFF readiness probe is still `503` (`composio=false`, `microsoft=false`). The service is reachable and the login flow works, but the environment is not fully ready by its own health contract.
+- Final status: Critical=0, High=0, Medium=1, Low=1
+- Changed files reviewed
+  - `/Users/fairchan/Desktop/mail-agent-bff/apps/bff/.env`
+  - `/Users/fairchan/Desktop/mail-agent-bff/apps/bff/src/config.ts`
+  - `/Users/fairchan/Desktop/mail-agent-bff/apps/bff/src/server.ts`
+  - `/Users/fairchan/Desktop/mail-agent-bff/apps/bff/src/routes/auth.ts`
+  - `/Users/fairchan/Desktop/mail-agent-bff/apps/bff/src/routes/health.ts`
+  - `/Users/fairchan/Desktop/mail-agent-bff/apps/bff/src/types/auth.ts`
+  - `/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/contexts/AuthContext.tsx`
+  - `/Users/fairchan/Desktop/mail-agent-bff/summary.md`
+  - `/Users/fairchan/Desktop/mail-agent-bff/apps/webui/playwright-report/index.html`

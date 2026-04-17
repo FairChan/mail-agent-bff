@@ -1,0 +1,30 @@
+flowchart TD
+  ActiveSource["存在当前激活邮件源"] --> LoadInbox["收件箱视图自动加载"]
+  LoadInbox --> TriageReq["请求邮件分拣"]
+  LoadInbox --> InsightsReq["请求邮件洞察"]
+  TriageReq --> SourceReady1["解析邮件源并要求路由就绪"]
+  InsightsReq --> SourceReady2["解析邮件源并要求路由就绪"]
+
+  SourceReady1 --> Triage["执行邮件分拣"]
+  SourceReady2 --> Insights["构建邮件洞察"]
+  Triage --> ProviderFetch["拉取微软邮箱收件箱邮件"]
+  Insights --> ProviderFetch
+  ProviderFetch --> Rules["应用自定义优先级规则"]
+  Rules --> Classification["四象限分类"]
+  Classification --> SummaryBatch["生成智能摘要并使用缓存"]
+  SummaryBatch --> TriageResponse["返回分拣结果"]
+  SummaryBatch --> InsightsResponse["返回时间线和摘要统计"]
+
+  TriageResponse --> InboxUI["展示优先队列和四象限卡片"]
+  InsightsResponse --> UpcomingUI["展示近期日程和截止事项"]
+  InboxUI --> Prefetch["预加载高优先级邮件正文"]
+  Prefetch --> DetailReq["请求单封邮件详情"]
+  DetailReq --> DetailUI["展示邮件详情页面或弹窗"]
+
+  UpcomingUI --> CalendarSync["同步到日历"]
+  CalendarSync --> Dedupe["按邮件、类型、时间去重"]
+  Dedupe --> CalendarProvider{"日历写入提供方"}
+  CalendarProvider -- "微软直连" --> GraphCalendar["通过微软图谱创建日历事件"]
+  CalendarProvider -- "第三方连接服务" --> ComposioCalendar["通过第三方连接服务创建微软邮箱日历事件"]
+  GraphCalendar --> SyncResult["返回同步状态"]
+  ComposioCalendar --> SyncResult

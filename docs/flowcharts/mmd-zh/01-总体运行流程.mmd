@@ -1,0 +1,56 @@
+flowchart TD
+  User["浏览器中的用户"] --> WebUI["网页前端应用"]
+  WebUI --> Providers["全局状态提供器：认证、邮件、应用、主题"]
+  Providers --> AuthUI{"是否已认证"}
+  AuthUI -- "否" --> Login["显示登录或注册页面"]
+  Login --> AuthApi["后端认证接口"]
+  AuthUI -- "是" --> Main["主控制台界面"]
+
+  Main --> Settings["设置：账户、邮件源、语言区域"]
+  Main --> Inbox["收件箱：邮件分拣和近期事项"]
+  Main --> AllMail["全部邮件列表和详情"]
+  Main --> Calendar["日历同步视图"]
+  Main --> Stats["统计视图"]
+  Main --> KB["知识库视图"]
+
+  WebUI --> BFF["后端中间层"]
+  AuthApi --> BFF
+  BFF --> Guard["接口会话守卫"]
+  Guard --> Session["安全会话标记与用户会话映射"]
+  Session --> AuthStore{"认证存储"}
+  AuthStore -- "启用数据库访问层" --> Prisma["用户数据表"]
+  AuthStore -- "未启用数据库访问层" --> MemoryAuth["内存用户与会话"]
+  Session --> Redis{"是否启用缓存会话"}
+  Redis -- "启用" --> RedisStore["缓存会话存储"]
+  Redis -- "未启用" --> MemorySession["内存会话状态"]
+
+  BFF --> Readiness["存活与就绪探针"]
+  Readiness --> DirectMode{"是否配置网关密钥"}
+  DirectMode -- "否" --> DirectDeps["直连模式依赖：大模型服务加邮件服务"]
+  DirectMode -- "是" --> OpenClaw["本地智能体网关状态检查"]
+
+  BFF --> MailRoutes["邮件业务接口"]
+  MailRoutes --> SourceGuard["解析邮件源并要求路由就绪"]
+  SourceGuard --> Provider{"邮件源连接类型"}
+  Provider -- "微软直连" --> Graph["微软图谱直连客户端"]
+  Provider -- "第三方连接服务" --> Composio["第三方连接服务或本地智能体网关工具桥"]
+  Provider -- "旧网关" --> OpenClaw
+
+  MailRoutes --> MailLogic["邮件分拣、洞察、列表、详情、日历逻辑"]
+  MailLogic --> AISummary["智能摘要缓存与批量摘要"]
+  AISummary --> AgentModel{"模型调用路径"}
+  AgentModel -- "配置网关" --> OpenClawResponses["本地智能体网关模型响应接口"]
+  AgentModel -- "未配置网关" --> SiliconFlow["大模型服务对话补全"]
+
+  MailRoutes --> AgentRuntime["邮件问答运行时"]
+  AgentRuntime --> Skills["本地技能注册表"]
+  AgentRuntime --> Memory["文件记忆存储"]
+  AgentRuntime --> Hooks["钩子引擎：响应后与错误时"]
+  AgentRuntime --> SiliconFlow
+
+  KB --> KBApi["知识库接口与知识库任务接口"]
+  KBApi -.-> MissingKB["当前缺口：路由模块存在，但主服务未见注册"]
+
+  MailLogic --> Response["统一结果响应"]
+  Response --> Providers
+  Providers --> UIState["前端状态与界面渲染"]

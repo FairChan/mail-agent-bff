@@ -1,0 +1,16 @@
+flowchart TD
+  Start["Start BFF: tsx watch src/server.ts or node dist/server.js"] --> LoadEnv["Load dotenv and validate env schema"]
+  LoadEnv --> Config["Build env object: trustProxy, allowedTools, redis flags, local admin fields"]
+  Config --> Fastify["Create Fastify with logger and trustProxy"]
+  Fastify --> CORS["Register CORS with configured origins"]
+  CORS --> Stores["Initialize Prisma auth store and Redis session store"]
+  Stores --> SeedCheck{"LOCAL_ADMIN_ENABLED"}
+  SeedCheck -- "false" --> Listen["Listen on HOST and PORT"]
+  SeedCheck -- "true" --> ValidateAdmin["Validate LOCAL_ADMIN_EMAIL and LOCAL_ADMIN_PASSWORD"]
+  ValidateAdmin --> Existing{"User already exists"}
+  Existing -- "Yes" --> LogExists["Log email only, skip creation"]
+  Existing -- "No" --> Hash["Create Argon2 password hash"]
+  Hash --> CreateUser["Create auth user record with display name and locale"]
+  CreateUser --> LogSeeded["Log seeded email only"]
+  LogExists --> Listen
+  LogSeeded --> Listen

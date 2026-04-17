@@ -52,6 +52,10 @@ const envSchema = z.object({
   OAUTH_USER: z.string().default(""),
   SESSION_TTL_MS: z.coerce.number().int().min(60000).max(604800000).default(28800000),
   LOGIN_RATE_LIMIT_PER_MIN: z.coerce.number().int().min(1).max(1000).default(30),
+  LOCAL_ADMIN_ENABLED: z.string().default("false"),
+  LOCAL_ADMIN_EMAIL: z.string().default(""),
+  LOCAL_ADMIN_PASSWORD: z.string().default(""),
+  LOCAL_ADMIN_DISPLAY_NAME: z.string().default("Local Admin"),
   ALLOWED_TOOLS: z
     .string()
     .default(
@@ -167,6 +171,10 @@ export const env = {
     .map((item) => item.trim())
     .filter((item) => item.length > 0),
   redisAuthSessionsEnabled: parseBooleanFlag(parsed.data.REDIS_AUTH_SESSIONS_ENABLED),
+  localAdminEnabled: parseBooleanFlag(parsed.data.LOCAL_ADMIN_ENABLED),
+  localAdminEmail: parsed.data.LOCAL_ADMIN_EMAIL.trim(),
+  localAdminPassword: parsed.data.LOCAL_ADMIN_PASSWORD,
+  localAdminDisplayName: parsed.data.LOCAL_ADMIN_DISPLAY_NAME.trim() || "Local Admin",
   composioApiKey: parsed.data.COMPOSIO_API_KEY.trim(),
   composioMcpUrl: normalizeUrl(parsed.data.COMPOSIO_MCP_URL),
   siliconFlowApiKey: parsed.data.SILICONFLOW_API_KEY.trim(),

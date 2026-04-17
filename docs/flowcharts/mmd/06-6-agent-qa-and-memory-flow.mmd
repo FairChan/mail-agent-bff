@@ -1,0 +1,11 @@
+flowchart TD
+  UserQuestion["User asks a mail question"] --> MailQuery["POST /api/mail/query or /api/agent/query"]
+  MailQuery --> SourceResolve["Resolve optional sourceId and routing context"]
+  SourceResolve --> Runtime["agentRuntime.query"]
+  Runtime --> ContextLoad["Load relevant skills and memory"]
+  ContextLoad --> ToolLoop["Model tool loop"]
+  ToolLoop --> ToolList["list_recent_mail, search_mail, get_mail_detail, get_mail_insights, recall_memory, remember_note"]
+  ToolList --> Grounding["Tool results ground answer"]
+  Grounding --> FinalAnswer["Final answer with references"]
+  FinalAnswer --> AfterResponse["Hook after_response writes redacted interaction memory"]
+  Runtime --> OnError["Hook on_error writes redacted incident memory"]

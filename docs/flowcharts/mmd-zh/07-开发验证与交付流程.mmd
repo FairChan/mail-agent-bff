@@ -1,0 +1,17 @@
+flowchart TD
+  Change["修改代码或文档"] --> Semantic["运行语义检查"]
+  Semantic --> Verify{"是否改动源文件"}
+  Verify -- "是" --> Typecheck["运行工作区类型检查"]
+  Verify -- "否" --> Summary["追加任务总结记录"]
+  Typecheck --> Smoke{"是否影响浏览器端到端测试"}
+  Smoke -- "是" --> Playwright["运行浏览器冒烟测试"]
+  Smoke -- "否" --> AuditGate["进入代码任务审计门禁"]
+  Playwright --> AuditGate
+  AuditGate --> CodeTask{"是否为代码任务"}
+  CodeTask -- "是" --> SubAudit["独立审计"]
+  SubAudit --> FixHigh["修复严重和高危问题"]
+  FixHigh --> Revalidate["重新运行相关验证"]
+  CodeTask -- "否" --> AuditNA["标记无需审计"]
+  Revalidate --> Summary
+  AuditNA --> Summary
+  Summary --> Final["最终交付"]

@@ -1,0 +1,20 @@
+flowchart TD
+  Settings["设置页面"] --> FetchSources["获取邮件数据源列表"]
+  FetchSources --> SourceList["展示默认源和自定义源"]
+  Settings --> DirectStart["点击微软邮箱直连登录"]
+  DirectStart --> StartRoute["启动直连授权流程"]
+  StartRoute --> MicrosoftConfigured{"微软授权配置是否完整"}
+  MicrosoftConfigured -- "否，当前暂不纳入" --> ConfigNeeded["弹窗提示缺少微软授权配置"]
+  MicrosoftConfigured -- "是，云端身份配置完成后" --> Redirect["跳转到微软授权页面"]
+  Redirect --> Callback["接收授权回调"]
+  Callback --> CompleteAuth["交换授权码并保存当前会话的微软账户"]
+  CompleteAuth --> UpsertSource["创建或复用微软邮件源"]
+  UpsertSource --> VerifySource["验证邮箱访问权限"]
+  VerifySource --> Ready{"验证通过且无快速失败"}
+  Ready -- "是" --> Activate["设置为当前激活邮件源"]
+  Ready -- "否" --> Pending["显示为待验证邮件源"]
+
+  Settings --> ManualSource["手动维护第三方连接服务邮件源"]
+  ManualSource --> CreateSource["创建邮件源：名称、邮箱标识、连接账户标识"]
+  CreateSource --> ManualVerify["执行邮件源路由验证"]
+  ManualVerify --> Ready

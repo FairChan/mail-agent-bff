@@ -1,0 +1,18 @@
+flowchart TD
+  Browser["Browser opens app"] --> SessionCheck["GET /api/auth/session"]
+  SessionCheck --> HasCookie{"Valid bff_session cookie"}
+  HasCookie -- "No" --> LoginScreen["Show login/register"]
+  HasCookie -- "Yes" --> UserView["Return authenticated user snapshot"]
+  LoginScreen --> LoginPost["POST /api/auth/login"]
+  LoginPost --> RateLimit["Per-IP login rate limit"]
+  RateLimit --> Legacy{"Legacy apiKey payload"}
+  Legacy -- "Yes" --> KeyCompare["Constant-time BFF_API_KEY compare"]
+  Legacy -- "No" --> PasswordAuth["Normalize email and verify Argon2 password"]
+  PasswordAuth --> AuthOk{"Valid credentials"}
+  KeyCompare --> AuthOk
+  AuthOk -- "No" --> AuthError["401 invalid credentials"]
+  AuthOk -- "Yes" --> CreateSession["Create session token and TTL"]
+  CreateSession --> Cookie["Set HttpOnly bff_session cookie"]
+  Cookie --> AuthenticatedUI["Render authenticated dashboard"]
+  AuthenticatedUI --> Logout["POST /api/auth/logout"]
+  Logout --> Clear["Clear memory and Redis session state, clear cookie"]
