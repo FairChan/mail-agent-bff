@@ -3811,3 +3811,32 @@ cp .env.example .env
 - `deploy/docker/Dockerfile.bff` and `deploy/docker/Dockerfile.webui` now copy all declared workspace manifests needed by root `npm ci`.
 - `/api/mail/knowledge-base/trigger` now marks stale `queued/running` jobs failed after a 15-minute heartbeat timeout before recreating work.
 - Re-ran BFF/WebUI checks, builds, Prisma validate, npm audit, Docker Compose config, and WebUI Playwright smoke after the fix.
+
+### 2026-04-17T11:55:00+08:00
+
+- Scope: Fix pure code blockers discovered during local runtime verification while leaving env-only blockers unchanged.
+- Task type: `Code + Verification`
+- Main updates:
+- Fixed Redis startup fallback in `apps/bff/src/redis-session-store.ts`:
+  - Redis auth-session bootstrap now has a hard init deadline based on `REDIS_CONNECT_TIMEOUT_MS`.
+  - when Redis is unreachable, BFF logs a controlled fallback and continues with the in-memory session store instead of hanging before `listen()`.
+- Fixed health probe accessibility in `apps/bff/src/server.ts`:
+  - `/api/live`, `/api/ready`, and `/api/health` are now exempt from the auth-session on-request guard.
+  - this restores anonymous liveness/readiness probing behavior expected by deployment and local verification flows.
+- Fixed the stable Playwright selector failure in `apps/webui/e2e/auth.spec.ts`:
+  - replaced the ambiguous register-link lookup with deterministic auth-screen assertions.
+  - rewrote the auth E2E file into a clean, stable version using role-based and last-match-safe selectors.
+- Verification completed:
+- `npm.cmd --workspace apps/bff run check` passed.
+- `npm.cmd --workspace apps/bff run build` passed.
+- Default `apps/bff/.env` startup now reaches `Server listening at http://127.0.0.1:8787` even with Redis down on `127.0.0.1:6379`.
+- Anonymous `GET /api/live` now returns `200` without requiring a session cookie.
+- Anonymous `GET /api/ready` and `GET /api/health` now return readiness status instead of `401`; they still return `503` when Microsoft Direct env is not configured, which is expected and intentionally left as an env blocker.
+- `npx.cmd playwright test e2e/auth.spec.ts --workers=1 --reporter=line` passed (`6/6`) against a local WebUI dev server started with `VITE_BFF_BASE_URL=/api`.
+- `npx.cmd playwright test e2e/smoke.spec.ts --workers=1 --reporter=line` passed (`3/3`) against the same local WebUI dev server.
+- Deferred env-only blockers intentionally left unchanged:
+- `apps/webui/.env` still points `VITE_BFF_BASE_URL` to an external host instead of `/api`; local verification used a process-level override only.
+- readiness remains `503` until Microsoft Direct env values are configured.
+- Redis warnings still appear when `REDIS_AUTH_SESSIONS_ENABLED=true` and no Redis is running, but startup no longer blocks.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A for this batch because the changes were small and localized, matching the explicit instruction to avoid sub-agents for small modifications.

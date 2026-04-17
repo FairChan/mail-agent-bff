@@ -3900,7 +3900,10 @@ server.addHook("onRequest", async (request, reply) => {
     pathname === "/api/auth/register" ||
     pathname === "/api/auth/me" ||
     pathname === "/api/auth/logout" ||
-    pathname === "/api/auth/session"
+    pathname === "/api/auth/session" ||
+    pathname === "/api/live" ||
+    pathname === "/api/ready" ||
+    pathname === "/api/health"
   ) {
     return;
   }
