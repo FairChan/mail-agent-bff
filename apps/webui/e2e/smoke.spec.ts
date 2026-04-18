@@ -926,13 +926,25 @@ test.describe("webui smoke", () => {
     await expect(page.getByText("新邮件处理工作台")).toBeVisible({ timeout: 15000 });
     await page.getByRole("button", { name: "立即处理新邮件" }).click();
 
+    const workbench = page.locator("section").filter({ hasText: "日历候选" }).first();
     await expect(page.getByText("知识库新增")).toBeVisible();
     await expect(page.getByText("日历候选")).toBeVisible();
-    await expect(page.getByRole("link", { name: "Urgent lab deadline" })).toBeVisible();
+    await expect(workbench.getByRole("link", { name: "Urgent lab deadline" })).toBeVisible();
     await expect(page.getByText("日历确认")).toBeVisible();
     await expect(page.getByText(/自动写入日历 1 项/)).toBeVisible();
     await page.getByRole("button", { name: "全部写入日历" }).click();
     await expect(page.getByText("这些事项已经写入日历。")).toBeVisible();
+  });
+
+  test("opens the knowledge-base mail tab from the mails navigation entry", async ({ page }) => {
+    await mockAuthenticatedApp(page);
+
+    await page.goto("/");
+    const sidebar = page.getByRole("navigation", { name: "导航菜单" });
+    await sidebar.getByRole("button", { name: "邮件", exact: true }).click();
+
+    await expect(page.getByRole("heading", { name: "邮件知识库" })).toBeVisible();
+    await expect(page.getByText("暂无邮件数据，请先执行邮件总结任务")).toBeVisible();
   });
 
   test("renders urgent notifications and daily digest in the header center", async ({ page }) => {
@@ -944,22 +956,33 @@ test.describe("webui smoke", () => {
     );
     await page.getByRole("button", { name: "通知" }).click();
 
-    await expect(page.getByText("实时已连接")).toBeVisible();
-    await expect(page.getByRole("link", { name: "Urgent lab deadline" })).toBeVisible();
-    await expect(page.getByText("今天 3 封邮件，1 封紧急重要")).toBeVisible();
-    await expect(page.getByText("Project sync meeting · 4月18日 14:00")).toBeVisible();
+    const notificationCenter = page.locator('[role="region"][aria-label="通知中心"]');
+    await expect(notificationCenter.getByText("实时已连接")).toBeVisible();
+    await expect(notificationCenter.getByRole("link", { name: "Urgent lab deadline" })).toBeVisible();
+    await expect(notificationCenter.getByText("今天 3 封邮件，1 封紧急重要")).toBeVisible();
+    await expect(notificationCenter.getByText("Project sync meeting · 4月18日 14:00")).toBeVisible();
   });
 
   test("shows lower-left urgent toast after automatic mail processing", async ({ page }) => {
     await mockAuthenticatedApp(page, { autoProcessingEvent: true });
 
     await page.goto("/");
-    const toast = page.locator("section").filter({ hasText: "紧急重要邮件" });
+    const toast = page.locator("section").filter({ hasText: "自动预处理已完成" });
     await expect(toast).toBeVisible({ timeout: 15000 });
     await expect(toast.getByRole("link", { name: "New scholarship deadline" })).toBeVisible();
     await expect(toast.getByText("自动预处理已完成")).toBeVisible();
     await toast.getByRole("button", { name: "存为知识卡片" }).click();
     await expect(toast.getByRole("button", { name: "已存为知识卡片" })).toBeVisible();
+  });
+
+  test("shows lower-left urgent toast from realtime notification snapshots", async ({ page }) => {
+    await mockAuthenticatedApp(page);
+
+    await page.goto("/");
+    const toast = page.locator("section").filter({ hasText: "实时提醒" });
+    await expect(toast).toBeVisible({ timeout: 15000 });
+    await expect(toast.getByRole("link", { name: "Urgent lab deadline" })).toBeVisible();
+    await expect(toast.getByText("实时提醒")).toBeVisible();
   });
 
   test("falls back to automatic processing when realtime stream is unavailable", async ({ page }) => {

@@ -23,7 +23,7 @@ function formatReceivedAt(value: string) {
 }
 
 export function UrgentMailToast() {
-  const { activeSourceId, processingResult, saveKnowledgeCard } = useMail();
+  const { activeSourceId, notificationSnapshot, processingResult, saveKnowledgeCard } = useMail();
   const [items, setItems] = useState<UrgentToastItem[]>([]);
   const [savedKeys, setSavedKeys] = useState<Set<string>>(() => new Set());
   const [savingKeys, setSavingKeys] = useState<Set<string>>(() => new Set());
@@ -43,7 +43,7 @@ export function UrgentMailToast() {
     const now = new Date().toISOString();
     const nextItems: UrgentToastItem[] = [];
     for (const item of urgentItems) {
-      const key = `${sourceId}:${item.messageId}:${origin}`;
+      const key = `${sourceId}:${item.messageId}`;
       if (seenKeysRef.current.has(key)) {
         continue;
       }
@@ -61,6 +61,13 @@ export function UrgentMailToast() {
     }
     setItems((current) => [...nextItems, ...current].slice(0, 3));
   }, []);
+
+  useEffect(() => {
+    if (!notificationSnapshot || notificationSnapshot.sourceId !== activeSourceId) {
+      return;
+    }
+    enqueue(notificationSnapshot.sourceId, notificationSnapshot.urgent.newItems, "notification");
+  }, [activeSourceId, enqueue, notificationSnapshot]);
 
   useEffect(() => {
     if (!processingResult || processingResult.sourceId !== activeSourceId || processingResult.trigger === "manual") {
@@ -92,14 +99,19 @@ export function UrgentMailToast() {
   }
 
   return (
-    <div className="fixed bottom-4 left-4 z-50 flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-2" aria-live="polite">
+    <div
+      role="region"
+      aria-label="紧急邮件提醒"
+      className="pointer-events-none fixed bottom-4 left-4 z-50 flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-2"
+      aria-live="polite"
+    >
       {items.map((item) => {
         const isSaving = savingKeys.has(item.key);
         const isSaved = savedKeys.has(item.key);
         return (
           <section
             key={item.key}
-            className="rise-in rounded-lg border border-red-200 bg-white p-3 shadow-xl dark:border-red-900/60 dark:bg-zinc-950"
+            className="rise-in pointer-events-none rounded-lg border border-red-200 bg-white p-3 shadow-xl dark:border-red-900/60 dark:bg-zinc-950"
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -111,7 +123,7 @@ export function UrgentMailToast() {
                     href={item.webLink}
                     target="_blank"
                     rel="noreferrer"
-                    className="mt-1 block break-words text-sm font-semibold text-zinc-950 hover:underline dark:text-zinc-50"
+                    className="pointer-events-auto mt-1 block break-words text-sm font-semibold text-zinc-950 hover:underline dark:text-zinc-50"
                   >
                     {item.subject || "无主题邮件"}
                   </a>
@@ -124,7 +136,7 @@ export function UrgentMailToast() {
               <button
                 type="button"
                 onClick={() => dismiss(item.key)}
-                className="rounded-md px-2 py-1 text-xs text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                className="pointer-events-auto rounded-md px-2 py-1 text-xs text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
               >
                 关闭
               </button>
@@ -142,7 +154,7 @@ export function UrgentMailToast() {
                 type="button"
                 onClick={() => void handleSaveCard(item)}
                 disabled={isSaving || isSaved}
-                className="rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-700 transition hover:border-red-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-900 dark:text-red-300"
+                className="pointer-events-auto rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-700 transition hover:border-red-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-900 dark:text-red-300"
               >
                 {isSaved ? "已存为知识卡片" : isSaving ? "保存中" : "存为知识卡片"}
               </button>

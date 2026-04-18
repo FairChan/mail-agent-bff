@@ -4766,3 +4766,43 @@ cp .env.example .env
 - Confirmed that risky gateway tool invocation is additionally reduced by `ALLOWED_TOOLS` matching and an explicit denylist for high-risk Composio management/multi-execute entrypoints.
 - Concluded that future mobile file access should use a brokered capability model instead of raw paths: user-selected folders only, OS-scoped handles/bookmarks, app-side path canonicalization, traversal/symlink rejection, mode-limited file APIs, revocable permissions, and no broad storage entitlements.
 - Audit: `N/A (no code changes)`.
+
+## 2026-04-18T21:27:13+08:00
+
+- Scope: Drafted several additional project-plan-ready comparison lines modeled after the provided privacy/security table screenshot.
+- Task type: `Non-code`
+- Deliverable:
+- Prepared concise table-row style copy suitable for insertion into a project proposal, continuing the existing "mery.email vs other AI mailbox assistants" format.
+- Kept wording aligned with proposal usage by favoring defensible, product-level capability statements over highly specific unverifiable marketing claims.
+- Audit: `N/A (no code changes)`.
+
+## 2026-04-18T22:35:51+08:00
+
+- Scope: Checked whether Outlook-triggered new-mail preprocessing already fulfilled the urgent popup requirement, diagnosed why the left-bottom toast was not appearing, and fixed the gap.
+- Task type: `Code`
+- Findings:
+- Confirmed the broader new-mail preprocessing requirement is in place: Outlook-triggered runs still reuse the historical KB structure, preserve four-quadrant scoring/event/sender summaries, keep calendar drafting/sync, and remain agent-retrievable through the existing document outputs.
+- Found the missing-popup bug in the WebUI: `UrgentMailToast` only listened to `processingResult`, while many real urgent arrivals were coming through the realtime `notificationSnapshot` path, so connected Outlook users could receive fresh urgent items without seeing the left-bottom toast.
+- Fixed the toast to consume both realtime notification snapshots and automatic-processing results, dedupe by `sourceId + messageId`, and keep the per-item "存为知识卡片" action intact.
+- Fixed a UX regression introduced by the broader toast coverage: the fixed toast stack no longer blocks unrelated page clicks underneath it.
+- Added/updated smoke coverage so the UI now verifies three cases explicitly: header notification center, lower-left toast after automatic processing, and lower-left toast from realtime notification snapshots.
+- Validation passed after the final audit-driven fix: `npm --workspace apps/webui run check`, `npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts` (`17 passed`), and `git diff --check`.
+- Audit:
+- Round 1 independent sub-agent audit (`spawn_agent` explorer `Rawls`, model `gpt-5.4-mini`, `2026-04-18T22:33:00+08:00`) found one `Low` issue: the notification flyout had been mislabeled as a dialog.
+- Fixed that issue by changing the flyout to a labeled region and updating the smoke selector.
+- Round 2 independent sub-agent audit (`spawn_agent` explorer `Rawls`, model `gpt-5.4-mini`, `2026-04-18T22:35:51+08:00`) returned `No findings`.
+- Audit evidence: `.harness/audit/2026-04-18-urgent-toast-followup.md`
+
+## 2026-04-18T23:03:37+08:00
+
+- Scope: Replaced the navigation mail-history page with the knowledge-base mails page while keeping the main knowledge-base entry pointed at overview.
+- Task type: `Code`
+- Findings:
+- The navigation key `allmail` now opens `KnowledgeBaseView` on the `mails` tab instead of rendering the legacy `AllMailListView`, so the old mail-history slot now lands on the knowledge-base mail page.
+- `KnowledgeBaseView` now accepts an `initialTab`, and syncs its internal tab state when that entry point changes, which keeps `allmail -> mails` and `knowledgebase -> overview` consistent.
+- Shared navigation labels were updated from `邮件历史 / Mail History / メール履歴` to `邮件 / Mails / メール`.
+- Added smoke coverage for the new navigation path so the sidebar mail entry is verified to land on the knowledge-base mail tab.
+- Validation passed: `npm --workspace packages/shared-types run typecheck`, `npm --workspace apps/webui run check`, `npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts` (`18 passed`), and `git diff --check`.
+- Audit:
+- Round 1 independent sub-agent audit (`spawn_agent` explorer `Locke`, model `gpt-5.4-mini`, `2026-04-18T23:03:37+08:00`) returned `No findings`.
+- Audit evidence: `.harness/audit/2026-04-18-nav-mail-kb-audit.md`

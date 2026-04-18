@@ -1,7 +1,91 @@
 # 邮件总结正文库
 
-生成时间：2026-04-18T13:07:57.172Z
-邮件总数：58
+生成时间：2026-04-18T15:45:58.624Z
+邮件总数：64
+
+## MSG_121r6da | 40% off ends soon: Learn AI skills with Google
+- 原始ID：AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABkn6lWgAAAA==
+- 发件人ID：PER_007
+- 事件ID：EVT_007
+- 分数制：0-1 比例
+- 重要性：0.2/1
+- 紧急性：0.4/1
+- 象限：urgent_not_important
+- 接收时间：2026-04-18T15:44:55.000Z
+- 知识卡片：未保存
+- 知识标签：无
+
+Coursera继续推送限时6折促销活动，本期重点推荐Google的AI及数据分析课程，强调优惠即将结束，催促用户尽快购买学习。
+
+## MSG_o7skco | 紧急邮件
+- 原始ID：AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABkn6lWQAAAA==
+- 发件人ID：PER_010005
+- 事件ID：EVT_010008
+- 分数制：0-1 比例
+- 重要性：0.5/1
+- 紧急性：0.9/1
+- 象限：unprocessed
+- 接收时间：2026-04-18T14:55:17.000Z
+- 知识卡片：未保存
+- 知识标签：无
+
+发件人声称洪水尚未消退，紧急请求支援。内容极简且与此前家庭洪水提醒类似，真实性仍待确认，可能为恶作剧或钓鱼邮件。
+
+## MSG_1fq54wz | 紧急邮件
+- 原始ID：AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEJAAAAuwy7MzosG06pVDL2vfy8mAABkn7trAAAAA==
+- 发件人ID：PER_010005
+- 事件ID：EVT_010008
+- 分数制：0-1 比例
+- 重要性：0.5/1
+- 紧急性：0.9/1
+- 象限：unprocessed
+- 接收时间：2026-04-18T14:55:13.000Z
+- 知识卡片：未保存
+- 知识标签：无
+
+与上一封邮件内容完全相同的洪水求援信息，声称洪水未消并请求紧急支援，真实性存疑。
+
+## MSG_asqioo | 重要邮件！
+- 原始ID：AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABkn6lWAAAAA==
+- 发件人ID：PER_010004
+- 事件ID：EVT_010008
+- 分数制：0-1 比例
+- 重要性：0.6/1
+- 紧急性：0.9/1
+- 象限：urgent_important
+- 接收时间：2026-04-18T13:22:41.000Z
+- 知识卡片：未保存
+- 知识标签：无
+
+发件人发送紧急提醒，称家里发生洪水，内容极简，可能为真实紧急求救或垃圾/钓鱼邮件。
+
+## MSG_uby43z | \[FairChan/mail\-agent\-bff\] Run failed: CI \- master \(779cc63\)
+- 原始ID：AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABkn6lVwAAAA==
+- 发件人ID：PER_002
+- 事件ID：EVT_002
+- 分数制：0-1 比例
+- 重要性：0.8/1
+- 紧急性：0.7/1
+- 象限：urgent_important
+- 接收时间：2026-04-18T13:09:39.000Z
+- 知识卡片：未保存
+- 知识标签：无
+
+GitHub仓库mail\-agent\-bff的CI工作流再次失败，verify任务在46秒后失败并产生2个注解，CI异常问题持续。
+
+## MSG_gww2fz | \[FairChan/mail\-agent\-bff\] Run failed: \.github/workflows/codeql\.yml \- master \(779cc63\)
+- 原始ID：AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABkn6lVgAAAA==
+- 发件人ID：PER_002
+- 事件ID：EVT_002
+- 分数制：0-1 比例
+- 重要性：0.6/1
+- 紧急性：0.4/1
+- 象限：not_urgent_important
+- 接收时间：2026-04-18T13:08:41.000Z
+- 知识卡片：未保存
+- 知识标签：无
+
+GitHub仓库mail\-agent\-bff的CodeQL工作流再次运行失败，提示无作业被执行（No jobs were run），CI异常问题持续存在，需排查配置。
 
 ## MSG_2muhex | \[FairChan/mail\-agent\-bff\] Run failed: CI \- master \(5e0cda8\)
 - 原始ID：AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABkn6lVQAAAA==

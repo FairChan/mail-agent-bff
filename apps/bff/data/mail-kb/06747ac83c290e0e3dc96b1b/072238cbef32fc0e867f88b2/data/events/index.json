@@ -18,8 +18,8 @@
   },
   "EVT_002": {
     "eventId": "EVT_002",
-    "name": "[FairChan/mail-agent-bff] Run failed: .github/workflows/codeql.yml - master (bc350e9)",
-    "summary": "CodeQL工作流再次运行失败，CI异常问题仍在持续。",
+    "name": "[FairChan/mail-agent-bff] Run failed: CI - master (779cc63)",
+    "summary": "CI工作流再次失败，verify任务于46秒后失败并产生2个注解，项目CI异常问题仍在持续。",
     "keyInfo": [
       "repo: FairChan/mail-agent-bff",
       "branch: master",
@@ -29,9 +29,11 @@
       "MSG_noqj2c",
       "MSG_m4q6le",
       "MSG_kxrmhf",
-      "MSG_115lw76"
+      "MSG_115lw76",
+      "MSG_gww2fz",
+      "MSG_uby43z"
     ],
-    "lastUpdated": "2026-04-16T12:27:25.000Z",
+    "lastUpdated": "2026-04-18T13:09:39.000Z",
     "tags": [
       "urgent_important",
       "not_urgent_important"
@@ -188,16 +190,17 @@
   },
   "EVT_007": {
     "eventId": "EVT_007",
-    "name": "Ends soon: Save 40% off new courses and new skills",
-    "summary": "Coursera限时6折促销即将结束，继续催促用户购买新课程。",
+    "name": "40% off ends soon: Learn AI skills with Google",
+    "summary": "Coursera限时6折促销即将结束，本期重点推荐Google的AI及数据分析课程，继续催促用户购买。",
     "keyInfo": [
       "discount: 40% off",
       "content: new courses and skills"
     ],
     "relatedMailIds": [
-      "MSG_ycto5f"
+      "MSG_ycto5f",
+      "MSG_121r6da"
     ],
-    "lastUpdated": "2026-04-16T16:59:54.000Z",
+    "lastUpdated": "2026-04-18T15:44:55.000Z",
     "tags": [
       "urgent_not_important"
     ]
@@ -528,6 +531,26 @@
     "lastUpdated": "2026-04-05T09:10:10.000Z",
     "tags": [
       "not_urgent_not_important"
+    ]
+  },
+  "EVT_010008": {
+    "eventId": "EVT_010008",
+    "name": "紧急邮件",
+    "summary": "发件人连续发送两封相同洪水求援邮件，催促支援，事件真实性仍待确认。",
+    "keyInfo": [
+      "sender: fwbg9315@hotmail.com",
+      "event: 家里发洪水",
+      "risk: 疑似钓鱼或恶作剧"
+    ],
+    "relatedMailIds": [
+      "MSG_asqioo",
+      "MSG_o7skco",
+      "MSG_1fq54wz"
+    ],
+    "lastUpdated": "2026-04-18T14:55:13.000Z",
+    "tags": [
+      "urgent_important",
+      "unprocessed"
     ]
   }
 }

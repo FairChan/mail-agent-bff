@@ -674,7 +674,7 @@ export const viewLabelsByLocale: Record<AuthLocale, Record<ViewKey, { label: str
   zh: {
     tutorial: { label: "教程", short: "教程" },
     inbox: { label: "收件箱", short: "主页" },
-    allmail: { label: "邮件历史", short: "历史" },
+    allmail: { label: "邮件", short: "邮件" },
     agent: { label: "Agent Window", short: "Agent" },
     stats: { label: "统计", short: "统计" },
     calendar: { label: "日历", short: "日历" },
@@ -684,7 +684,7 @@ export const viewLabelsByLocale: Record<AuthLocale, Record<ViewKey, { label: str
   en: {
     tutorial: { label: "Tutorial", short: "Guide" },
     inbox: { label: "Inbox", short: "Home" },
-    allmail: { label: "Mail History", short: "History" },
+    allmail: { label: "Mails", short: "Mails" },
     agent: { label: "Agent Window", short: "Agent" },
     stats: { label: "Stats", short: "Stats" },
     calendar: { label: "Calendar", short: "Cal" },
@@ -694,7 +694,7 @@ export const viewLabelsByLocale: Record<AuthLocale, Record<ViewKey, { label: str
   ja: {
     tutorial: { label: "チュートリアル", short: "ガイド" },
     inbox: { label: "受信箱", short: "ホーム" },
-    allmail: { label: "メール履歴", short: "履歴" },
+    allmail: { label: "メール", short: "メール" },
     agent: { label: "Agent Window", short: "Agent" },
     stats: { label: "統計", short: "統計" },
     calendar: { label: "カレンダー", short: "予定" },

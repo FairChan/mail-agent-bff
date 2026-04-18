@@ -11,13 +11,13 @@
   },
   "PER_002": {
     "personId": "PER_002",
-    "email": "noreply@github.com",
-    "name": "AR307",
-    "profile": "除CI失败通知外，新增推送代码仓库协作邀请通知，需用户及时处理。",
+    "email": "notifications@github.com",
+    "name": "Ferris Chan",
+    "profile": "继续发送CI失败通知，最新提示CI工作流verify任务在46秒后失败并产生2个注解。",
     "role": "未标注",
     "importance": 0.8,
-    "recentInteractions": 10,
-    "lastUpdated": "2026-04-10T08:05:36.000Z"
+    "recentInteractions": 12,
+    "lastUpdated": "2026-04-18T13:09:39.000Z"
   },
   "PER_003": {
     "personId": "PER_003",
@@ -83,11 +83,11 @@
     "personId": "PER_007",
     "email": "coursera@m.learn.coursera.org",
     "name": "Coursera",
-    "profile": "继续推送限时6折促销活动，强调活动即将结束。",
+    "profile": "继续推送限时6折促销活动，本期重点推荐Google的AI及数据分析课程，强调优惠即将结束催促购买。",
     "role": "未标注",
     "importance": 0.2,
-    "recentInteractions": 2,
-    "lastUpdated": "2026-04-16T16:59:54.000Z"
+    "recentInteractions": 3,
+    "lastUpdated": "2026-04-18T15:44:55.000Z"
   },
   "PER_008": {
     "personId": "PER_008",
@@ -218,5 +218,25 @@
     "importance": 0.3,
     "recentInteractions": 2,
     "lastUpdated": "2026-04-05T16:42:01.000Z"
+  },
+  "PER_010004": {
+    "personId": "PER_010004",
+    "email": "fwbg9315@hotmail.com",
+    "name": "paucek ines",
+    "profile": "陌生个人邮箱，发送家庭洪水紧急提醒，内容极简，身份及邮件真实性高度存疑，可能为钓鱼或恶作剧。",
+    "role": "未标注",
+    "importance": 0.6,
+    "recentInteractions": 1,
+    "lastUpdated": "2026-04-18T13:22:41.000Z"
+  },
+  "PER_010005": {
+    "personId": "PER_010005",
+    "email": "ssemaster@outlook.com",
+    "name": "陳 公允",
+    "profile": "连续发送两封内容相同的洪水求援邮件，行为异常，身份及真实性依然存疑。",
+    "role": "未标注",
+    "importance": 0.5,
+    "recentInteractions": 2,
+    "lastUpdated": "2026-04-18T14:55:13.000Z"
   }
 }

@@ -16,7 +16,6 @@ import { AgentWorkspaceWindow } from "./components/agent/AgentWorkspaceWindow";
 import { AuthScreen } from "./components/auth/AuthScreen";
 import { ContextAuthScreen } from "./components/auth/ContextAuthScreen";
 import { InboxView } from "./components/dashboard/InboxView";
-import { AllMailListView } from "./components/dashboard/AllMailListView";
 import { CalendarView } from "./components/dashboard/CalendarView";
 import { StatsView } from "./components/dashboard/StatsView";
 import { TutorialView } from "./components/dashboard/TutorialView";
@@ -262,7 +261,7 @@ function MainLayout({
       case "inbox":
         return <InboxView onViewMailDetail={() => {}} />;
       case "allmail":
-        return <AllMailListView />;
+        return <KnowledgeBaseView initialTab="mails" />;
       case "agent":
         return <AgentWorkspaceWindow apiBase={API_BASE} embedded />;
       case "calendar":
@@ -270,7 +269,7 @@ function MainLayout({
       case "stats":
         return <StatsView />;
       case "knowledgebase":
-        return <KnowledgeBaseView />;
+        return <KnowledgeBaseView initialTab="overview" />;
       case "settings":
         return <SettingsView />;
       default:

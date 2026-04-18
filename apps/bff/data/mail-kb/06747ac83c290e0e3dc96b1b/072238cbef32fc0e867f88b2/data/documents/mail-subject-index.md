@@ -1,9 +1,15 @@
 # 邮件题目索引（题目 + 标识码）
 
-生成时间：2026-04-18T13:07:57.172Z
+生成时间：2026-04-18T15:45:58.624Z
 
 | 标识码 | 题目 | 接收时间 | 知识卡片 |
 | --- | --- | --- | --- |
+| MSG_121r6da | 40% off ends soon: Learn AI skills with Google | 2026-04-18T15:44:55.000Z | 否 |
+| MSG_o7skco | 紧急邮件 | 2026-04-18T14:55:17.000Z | 否 |
+| MSG_1fq54wz | 紧急邮件 | 2026-04-18T14:55:13.000Z | 否 |
+| MSG_asqioo | 重要邮件！ | 2026-04-18T13:22:41.000Z | 否 |
+| MSG_uby43z | \[FairChan/mail\-agent\-bff\] Run failed: CI \- master \(779cc63\) | 2026-04-18T13:09:39.000Z | 否 |
+| MSG_gww2fz | \[FairChan/mail\-agent\-bff\] Run failed: \.github/workflows/codeql\.yml \- master \(779cc63\) | 2026-04-18T13:08:41.000Z | 否 |
 | MSG_2muhex | \[FairChan/mail\-agent\-bff\] Run failed: CI \- master \(5e0cda8\) | 2026-04-18T09:09:07.000Z | 否 |
 | MSG_1o8whq1 | \[FairChan/mail\-agent\-bff\] Run failed: \.github/workflows/codeql\.yml \- master \(5e0cda8\) | 2026-04-18T09:08:12.000Z | 否 |
 | MSG_1nwxgz0 | \[FairChan/mail\-agent\-bff\] Run failed: Load Tests \- master \(4d8a543\) | 2026-04-18T05:44:08.000Z | 否 |

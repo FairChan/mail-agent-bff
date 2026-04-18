@@ -17,7 +17,11 @@ import MailKBSummaryModal from "../MailKBSummaryModal";
 
 type TabKey = "overview" | "mails" | "events" | "persons" | "documents";
 
-export function KnowledgeBaseView() {
+interface KnowledgeBaseViewProps {
+  initialTab?: TabKey;
+}
+
+export function KnowledgeBaseView({ initialTab = "overview" }: KnowledgeBaseViewProps) {
   const {
     kbStats,
     kbMails,
@@ -32,7 +36,7 @@ export function KnowledgeBaseView() {
   } = useMail();
   const { locale } = useApp();
 
-  const [activeTab, setActiveTab] = useState<TabKey>("overview");
+  const [activeTab, setActiveTab] = useState<TabKey>(initialTab);
   const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
@@ -51,6 +55,10 @@ export function KnowledgeBaseView() {
   useEffect(() => {
     void loadAll();
   }, [loadAll]);
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
 
   const handleSummarize = async () => {
     setIsSummarizing(true);
