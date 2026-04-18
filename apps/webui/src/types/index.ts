@@ -78,10 +78,15 @@ export type {
   MailInsightsEnvelope,
   MailQueryEnvelope,
   CalendarSyncEnvelope,
+  CalendarBatchSyncEnvelope,
   CalendarDeleteEnvelope,
   OutlookLaunchEnvelope,
   AutoConnectEnvelope,
   NotificationPreferences,
+  MailNotificationPreferencesResult,
+  MailNotificationPollResult,
+  MailCalendarDraft,
+  MailCalendarBatchSyncResult,
 } from "@mail-agent/shared-types";
 
 export { quadrantMeta, quadrantLabelsByLocale, viewItems, viewLabelsByLocale } from "@mail-agent/shared-types";
@@ -485,6 +490,7 @@ export const mailSourceVerifyEnvelopeSchema = z.object({
 });
 
 const mailQuadrantSchema = z.enum([
+  "unprocessed",
   "urgent_important",
   "not_urgent_important",
   "urgent_not_important",
@@ -614,8 +620,9 @@ export const mailKnowledgeRecordSchema = z.object({
   subject: z.string(),
   personId: z.string(),
   eventId: z.string().nullable(),
-  importanceScore: z.number().min(1).max(10),
-  urgencyScore: z.number().min(1).max(10),
+  importanceScore: z.number().min(0).max(10),
+  urgencyScore: z.number().min(0).max(10),
+  scoreScale: z.enum(["ratio", "ten"]).optional(),
   quadrant: mailQuadrantSchema,
   summary: z.string(),
   receivedAt: z.string(),

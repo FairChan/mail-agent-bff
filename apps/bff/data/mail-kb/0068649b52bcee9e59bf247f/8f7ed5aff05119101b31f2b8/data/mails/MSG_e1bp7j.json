@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_e1bp7j",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABglraxgAAAA==",
+  "subject": "Unable to download or preview project files",
+  "personId": "PER_001008",
+  "eventId": "EVT_001079",
+  "importanceScore": 0.6,
+  "urgencyScore": 0.5,
+  "scoreScale": "ratio",
+  "quadrant": "not_urgent_important",
+  "summary": "OpenAI通知ChatGPT文件上传及预览功能故障仍在实施缓解措施中，受影响组件为ChatGPT文件上传（性能降级），事件始于3月25日00:12 UTC。",
+  "receivedAt": "2026-03-25T07:44:53.000Z",
+  "processedAt": "2026-04-18T05:35:10.276Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABglraxgAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

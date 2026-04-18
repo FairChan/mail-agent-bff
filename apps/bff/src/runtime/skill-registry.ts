@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { runtimePaths } from "./paths.js";
@@ -98,7 +99,15 @@ export class SkillRegistry {
     }
 
     const skillsDir = runtimePaths.skillsDir;
-    const dirents = await readdir(skillsDir, { withFileTypes: true });
+    let dirents: Dirent<string>[];
+    try {
+      dirents = await readdir(skillsDir, { withFileTypes: true });
+    } catch {
+      this.cache = [];
+      this.cacheLoadedAt = Date.now();
+      return this.cache;
+    }
+
     const skills: SkillSummary[] = [];
 
     for (const dirent of dirents) {

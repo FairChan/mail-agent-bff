@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_uhj9as",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABjvyjdgAAAA==",
+  "subject": "Payment Success for SEA GAMER MALL SDN BHD [ S-84384362-61820835 ]",
+  "personId": "PER_001026",
+  "eventId": "EVT_001029",
+  "importanceScore": 0.5,
+  "urgencyScore": 0.2,
+  "scoreScale": "ratio",
+  "quadrant": "not_urgent_not_important",
+  "summary": "Fiuu支付网关发送的支付成功通知，交易ID 3628411392，向商户SEA GAMER MALL支付MYR 101.01，包含支付明细。",
+  "receivedAt": "2026-04-13T19:49:12.000Z",
+  "processedAt": "2026-04-18T04:59:56.487Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABjvyjdgAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

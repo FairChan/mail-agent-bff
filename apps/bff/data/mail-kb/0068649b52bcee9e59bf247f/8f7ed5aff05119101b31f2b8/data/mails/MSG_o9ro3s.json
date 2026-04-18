@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_o9ro3s",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABg0niWwAAAA==",
+  "subject": "Responses API and Sora Increased Error Rates",
+  "personId": "PER_001008",
+  "eventId": "EVT_001076",
+  "importanceScore": 0.7,
+  "urgencyScore": 0.4,
+  "scoreScale": "ratio",
+  "quadrant": "not_urgent_important",
+  "summary": "OpenAI确认Responses API和Sora高错误率的根本原因，已实施缓解措施，错误率开始下降，服务正在逐步恢复正常。",
+  "receivedAt": "2026-03-26T23:08:41.000Z",
+  "processedAt": "2026-04-18T05:30:13.561Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABg0niWwAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

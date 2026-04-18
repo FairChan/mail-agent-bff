@@ -1,18 +1,12 @@
 import { useState } from "react";
-import type { MailKnowledgeRecord, EventCluster, PersonProfile, MailQuadrant } from "@mail-agent/shared-types";
+import type { MailKnowledgeRecord, EventCluster, PersonProfile } from "@mail-agent/shared-types";
+import { formatMailScore, getQuadrantMeta, resolveMailScoreScale } from "./quadrants";
 
 interface MailsListPanelProps {
   mails: MailKnowledgeRecord[];
   persons: PersonProfile[];
   events: EventCluster[];
 }
-
-const quadrantMeta: Record<MailQuadrant, { label: string; color: string; bg: string }> = {
-  urgent_important: { label: "紧急重要", color: "text-red-600", bg: "bg-red-100" },
-  not_urgent_important: { label: "重要", color: "text-blue-600", bg: "bg-blue-100" },
-  urgent_not_important: { label: "紧急", color: "text-orange-600", bg: "bg-orange-100" },
-  not_urgent_not_important: { label: "普通", color: "text-gray-600", bg: "bg-gray-100" },
-};
 
 export function MailsListPanel({ mails, persons, events }: MailsListPanelProps) {
   const [selectedMail, setSelectedMail] = useState<MailKnowledgeRecord | null>(null);
@@ -68,13 +62,14 @@ export function MailsListPanel({ mails, persons, events }: MailsListPanelProps) 
         {/* List */}
         <div className="flex-1 space-y-2 overflow-auto">
           {filteredMails.map((mail) => {
-            const meta = quadrantMeta[mail.quadrant];
+            const meta = getQuadrantMeta(mail.quadrant);
             const isSelected = selectedMail?.mailId === mail.mailId;
             return (
-              <div
+              <button
                 key={mail.mailId}
+                type="button"
                 onClick={() => setSelectedMail(mail)}
-                className={`cursor-pointer rounded-xl border p-4 transition-colors ${
+                className={`w-full cursor-pointer rounded-xl border p-4 text-left transition-colors ${
                   isSelected
                     ? "border-zinc-400 bg-zinc-50"
                     : "border-zinc-200 bg-white hover:border-zinc-300"
@@ -83,7 +78,7 @@ export function MailsListPanel({ mails, persons, events }: MailsListPanelProps) 
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${meta.bg} ${meta.color}`}>
+                      <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${meta.badgeClass}`}>
                         {meta.label}
                       </span>
                       <span className="text-xs text-zinc-400">{mail.mailId}</span>
@@ -93,7 +88,7 @@ export function MailsListPanel({ mails, persons, events }: MailsListPanelProps) 
                     <p className="mt-1 text-xs text-zinc-400">{formatDate(mail.receivedAt)}</p>
                   </div>
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>
@@ -105,8 +100,8 @@ export function MailsListPanel({ mails, persons, events }: MailsListPanelProps) 
           <div className="space-y-4">
             <div>
               <div className="flex items-center gap-2">
-                <span className={`rounded px-2 py-1 text-xs font-medium ${quadrantMeta[selectedMail.quadrant].bg} ${quadrantMeta[selectedMail.quadrant].color}`}>
-                  {quadrantMeta[selectedMail.quadrant].label}
+                <span className={`rounded px-2 py-1 text-xs font-medium ${getQuadrantMeta(selectedMail.quadrant).badgeClass}`}>
+                  {getQuadrantMeta(selectedMail.quadrant).label}
                 </span>
                 <span className="text-sm text-zinc-500">{selectedMail.mailId}</span>
               </div>
@@ -124,11 +119,21 @@ export function MailsListPanel({ mails, persons, events }: MailsListPanelProps) 
               </div>
               <div>
                 <p className="text-zinc-500">重要性</p>
-                <p className="font-medium text-zinc-900">{selectedMail.importanceScore}/10</p>
+                <p className="font-medium text-zinc-900">
+                  {formatMailScore(
+                    selectedMail.importanceScore,
+                    resolveMailScoreScale(selectedMail)
+                  )}
+                </p>
               </div>
               <div>
                 <p className="text-zinc-500">紧急性</p>
-                <p className="font-medium text-zinc-900">{selectedMail.urgencyScore}/10</p>
+                <p className="font-medium text-zinc-900">
+                  {formatMailScore(
+                    selectedMail.urgencyScore,
+                    resolveMailScoreScale(selectedMail)
+                  )}
+                </p>
               </div>
               {selectedMail.eventId && (
                 <div className="col-span-2">

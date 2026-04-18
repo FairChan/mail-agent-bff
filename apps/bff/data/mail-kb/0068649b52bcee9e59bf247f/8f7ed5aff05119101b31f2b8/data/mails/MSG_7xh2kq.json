@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_7xh2kq",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABjST-ugAAAA==",
+  "subject": "Issues with share link creation on web UI",
+  "personId": "PER_001008",
+  "eventId": "EVT_001040",
+  "importanceScore": 0.6,
+  "urgencyScore": 0.1,
+  "scoreScale": "ratio",
+  "quadrant": "not_urgent_important",
+  "summary": "OpenAI Web UI共享链接创建功能曾出现故障，经调查后现已完全解决，所有受影响服务已恢复，无需采取行动。",
+  "receivedAt": "2026-04-10T04:48:57.000Z",
+  "processedAt": "2026-04-18T05:06:49.359Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABjST%2FugAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

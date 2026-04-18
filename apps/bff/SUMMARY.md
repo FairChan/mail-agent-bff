@@ -252,3 +252,29 @@ Google 自 2024 年起逐步淘汰 App Passwords，Gmail SMTP 发送需要使用
 ---
 
 *文档更新时间: 2026-03-28*
+
+---
+
+### 2026-04-17T21:16:02+08:00 — Non-code
+
+- Task: inspected backend/mail architecture for a one-time last-30-days email summarization pipeline, focusing on fetch APIs, storage, knowledge/memory persistence, and batch job/progress placement.
+- Deliverable: concrete integration points and file/function map; no code changes requested beyond this log entry.
+- Audit: N/A (no code changes)
+
+### 2026-04-18T15:37:30+08:00 — Non-code
+
+- Task: independently audited the latest backend delta in `apps/bff/src/agent/llm-gateway.ts`, `apps/bff/src/summary.ts`, and `apps/bff/src/server.ts`, focusing on `enable_thinking=false`, `/api/mail-kb/artifacts/content`, artifact key/path handling, and tenant-scoped file reads.
+- Deliverable: review findings only; no code changes requested beyond this log entry.
+- Audit: N/A (no code changes)
+
+### 2026-04-18T15:40:45+08:00 — Non-code
+
+- Task: re-audited the latest backend delta in `apps/bff/src/agent/llm-gateway.ts`, `apps/bff/src/summary.ts`, and `apps/bff/src/server.ts` after gating `enable_thinking` to SiliconFlow-hosted routes.
+- Deliverable: final review pass for summary request behavior, `/api/mail-kb/artifacts/content`, artifact key/path resolution, and tenant/file-read safety; no code changes requested beyond this log entry.
+- Audit: N/A (no code changes)
+
+### 2026-04-18T16:50:14+08:00 — Non-code
+
+- Task: final backend audit of `apps/bff/src/server.ts`, `apps/bff/src/summary.ts`, and `apps/bff/src/agent/llm-gateway.ts` after fixes for KB summarization routing, export failure signaling, routing-independent KB reads, and API key decrypt fallback.
+- Deliverable: review only; no code changes requested beyond this log entry.
+- Audit: N/A (no code changes)

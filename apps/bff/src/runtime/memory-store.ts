@@ -202,3 +202,10 @@ export class FileMemoryStore {
 export function createMemoryStore(): FileMemoryStore {
   return new FileMemoryStore();
 }
+
+let defaultMemoryStore: FileMemoryStore | null = null;
+
+export function getDefaultMemoryStore(): FileMemoryStore {
+  defaultMemoryStore ??= new FileMemoryStore();
+  return defaultMemoryStore;
+}

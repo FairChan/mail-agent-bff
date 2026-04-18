@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { existsSync, readFileSync } from "node:fs";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import argon2 from "argon2";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
@@ -14,6 +15,14 @@ import {
 } from "./email.js";
 import { GatewayHttpError, invokeTool, queryAgent } from "./gateway.js";
 import { initComposioClient } from "./composio-service.js";
+import { exportMailKnowledgeBaseDocuments } from "./mail-kb-export.js";
+import { getMailKnowledgeBaseStore } from "./mail-kb-store.js";
+import {
+  getKnowledgeBaseJob,
+  getLatestKnowledgeBaseJob,
+  triggerMailSummary,
+} from "./knowledge-base-service.js";
+import { summarizeMailInbox, type SummarizeResult } from "./summary.js";
 import {
   beginMicrosoftDirectAuth,
   completeMicrosoftDirectAuth,
@@ -27,6 +36,7 @@ import {
 import { MailSourceService } from "./mail-source-service.js";
 import { getPrismaClient, isPrismaUniqueConstraintError } from "./persistence.js";
 import { createRedisAuthSessionStore } from "./redis-session-store.js";
+import { getDefaultMemoryStore, type AgentMemoryRecord } from "./runtime/memory-store.js";
 import {
   answerMailQuestion,
   buildMailInsights,
@@ -52,6 +62,7 @@ if (env.composioApiKey && env.composioMcpUrl) {
 const agentRuntime = createAgentRuntime(server.log);
 const llmGatewayService = new LlmGatewayService(server.log);
 const mailSourceService = new MailSourceService(server.log);
+const agentFileMemoryStore = getDefaultMemoryStore();
 const sessions = new Map<string, number>();
 const loginAttempts = new Map<string, { count: number; windowStart: number }>();
 const batchRouteAttempts = new Map<string, { count: number; windowStart: number }>();
@@ -232,9 +243,10 @@ const maxAuthUserEntries = 200000;
 const maxPendingRegistrationEntries = 5000;
 const notificationSeenUrgentTtlMs = 14 * 24 * 60 * 60 * 1000;
 const aiSummaryCacheTtlMs = 24 * 60 * 60 * 1000;
-const aiSummaryBatchSize = 8;
-const aiSummaryMaxLength = 120;
-const aiSummaryRequestBudgetMs = 12000;
+const aiSummaryBatchSize = 6;
+const aiSummaryMaxLength = 96;
+const aiSummaryRequestBudgetMs = 9000;
+const aiSummaryParallelChunkLimit = 3;
 const aiSummaryResponseSchema = z
   .object({
     summaries: z
@@ -266,6 +278,7 @@ const mailSourceAutoConnectRateLimitPerMin = 12;
 const notificationPrefsReadRateLimitPerMin = 60;
 const notificationPrefsWriteRateLimitPerMin = 24;
 const notificationPollRateLimitPerMin = 60;
+const mailProcessingRunRateLimitPerMin = 12;
 const notificationStreamConnectRateLimitPerMin = 24;
 const mailInboxViewRateLimitPerMin = 60;
 const sessionStatusRateLimitPerMin = 180;
@@ -1966,21 +1979,29 @@ function renderMicrosoftAuthPopupPage(input: {
       <p>${escapeHtml(input.message)}</p>
       <button type="button" onclick="window.close()">关闭窗口</button>
     </main>
-    <script>
-      const payload = ${payloadJson};
-      try {
-        if (window.opener && ${inlineScriptJson(input.appOrigin)}) {
-          window.opener.postMessage(payload, ${inlineScriptJson(input.appOrigin)});
-        }
-      } catch {}
-      setTimeout(() => {
-        try {
-          window.close();
-        } catch {}
-      }, 120);
-    </script>
-  </body>
-</html>`;
+	    <script>
+	      const payload = ${payloadJson};
+	      const targetOrigin = ${inlineScriptJson(input.appOrigin)};
+	      const notifyOpener = () => {
+	        try {
+	          if (window.opener && targetOrigin) {
+	            window.opener.postMessage(payload, targetOrigin);
+	          }
+	        } catch {}
+	      };
+	      notifyOpener();
+	      try {
+	        setTimeout(notifyOpener, 160);
+	        setTimeout(notifyOpener, 420);
+	      } catch {}
+	      setTimeout(() => {
+	        try {
+	          window.close();
+	        } catch {}
+	      }, 900);
+	    </script>
+	  </body>
+	</html>`;
 }
 
 function normalizedErrorText(input: string): string {
@@ -2670,81 +2691,108 @@ async function summarizeRecordsWithLlmGateway(
   };
 
   let skipAgentCalls = !tenant || tenant.isLegacySession || tenant.userId.startsWith("legacy:");
+  const chunkQueue: Array<Array<{ record: AiSummaryRecord; cacheKey: string }>> = [];
   for (let start = 0; start < missing.length; start += aiSummaryBatchSize) {
-    const chunk = missing.slice(start, start + aiSummaryBatchSize);
+    chunkQueue.push(missing.slice(start, start + aiSummaryBatchSize));
+  }
+
+  for (let groupStart = 0; groupStart < chunkQueue.length; groupStart += aiSummaryParallelChunkLimit) {
+    const group = chunkQueue.slice(groupStart, groupStart + aiSummaryParallelChunkLimit);
     const elapsedMs = Date.now() - startedAt;
     const remainingBudgetMs = aiSummaryRequestBudgetMs - elapsedMs;
     if (!skipAgentCalls && remainingBudgetMs <= 0) {
       skipAgentCalls = true;
       server.log.warn(
-        { sourceId, budgetMs: aiSummaryRequestBudgetMs, elapsedMs, remainingCount: missing.length - start },
+        { sourceId, budgetMs: aiSummaryRequestBudgetMs, elapsedMs, remainingCount: missing.length - groupStart * aiSummaryBatchSize },
         "AI summary budget exceeded; falling back for remaining records"
       );
     }
 
     if (skipAgentCalls) {
-      applyChunkSummaries(chunk, new Map<string, string>());
+      for (const chunk of group) {
+        applyChunkSummaries(chunk, new Map<string, string>());
+      }
       continue;
     }
 
-    const promptRecords = chunk.map(({ record }) => ({
-      id: record.id,
-      kind: record.kind,
-      subject: record.subject,
-      fromName: record.fromName ?? "",
-      fromAddress: record.fromAddress ?? "",
-      preview: record.preview ?? "",
-      receivedDateTime: record.receivedDateTime ?? "",
-      dueAt: record.dueAt ?? "",
-      eventType: record.eventType ?? "",
-      evidence: record.evidence ?? "",
-    }));
+    const timeoutPerChunkMs = Math.min(
+      env.GATEWAY_TIMEOUT_MS,
+      Math.max(1500, Math.floor(remainingBudgetMs / Math.max(group.length, 1)))
+    );
 
-    const prompt = buildAiSummaryPrompt(promptRecords, locale);
+    const settled = await Promise.all(
+      group.map(async (chunk) => {
+        const promptRecords = chunk.map(({ record }) => ({
+          id: record.id,
+          kind: record.kind,
+          subject: record.subject,
+          fromName: record.fromName ?? "",
+          fromAddress: record.fromAddress ?? "",
+          preview: record.preview ?? "",
+          receivedDateTime: record.receivedDateTime ?? "",
+          dueAt: record.dueAt ?? "",
+          eventType: record.eventType ?? "",
+          evidence: record.evidence ?? "",
+        }));
+        const prompt = buildAiSummaryPrompt(promptRecords, locale);
 
-    let parsedSummaries = new Map<string, string>();
-    try {
-      const requestTimeoutMs = Math.min(env.GATEWAY_TIMEOUT_MS, Math.max(1, remainingBudgetMs));
-      const outputText = await llmGatewayService.generateText({
-        tenant: tenant!,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You summarize email records for a private mail assistant. Return only compact JSON matching the requested schema.",
-          },
-          { role: "user", content: prompt },
-        ],
-        timeoutMs: requestTimeoutMs,
-        maxTokens: Math.max(200, chunk.length * aiSummaryMaxLength),
-        temperature: 0.1,
-        responseFormat: { type: "json_object" },
-      });
-      if (outputText) {
-        parsedSummaries = parseAiSummariesFromAgentText(outputText);
-        if (parsedSummaries.size === 0) {
+        let parsedSummaries = new Map<string, string>();
+        let shouldSkipFuture = false;
+        try {
+          const outputText = await llmGatewayService.generateText({
+            tenant: tenant!,
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You summarize email records for a private mail assistant. Return terse JSON only. No reasoning, no prose outside the schema.",
+              },
+              { role: "user", content: prompt },
+            ],
+            timeoutMs: timeoutPerChunkMs,
+            maxTokens: Math.max(160, chunk.length * aiSummaryMaxLength),
+            temperature: 0,
+            enableThinking: false,
+            responseFormat: { type: "json_object" },
+          });
+          if (outputText) {
+            parsedSummaries = parseAiSummariesFromAgentText(outputText);
+            if (parsedSummaries.size === 0) {
+              server.log.warn(
+                {
+                  sourceId,
+                  locale,
+                  chunkSize: chunk.length,
+                },
+                "AI summary parse produced no valid items; using fallback summaries"
+              );
+            }
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (/(\b429\b|\b504\b|timeout|abort)/i.test(message)) {
+            shouldSkipFuture = true;
+          }
           server.log.warn(
-            {
-              sourceId,
-              locale,
-              chunkSize: chunk.length,
-            },
-            "AI summary parse produced no valid items; using fallback summaries"
+            { message, sourceId },
+            "AI summary generation failed, using fallback summary"
           );
         }
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (/(\b429\b|\b504\b|timeout|abort)/i.test(message)) {
+
+        return {
+          chunk,
+          parsedSummaries,
+          shouldSkipFuture,
+        };
+      })
+    );
+
+    for (const item of settled) {
+      if (item.shouldSkipFuture) {
         skipAgentCalls = true;
       }
-      server.log.warn(
-        { message, sourceId },
-        "AI summary generation failed, using fallback summary"
-      );
+      applyChunkSummaries(item.chunk, item.parsedSummaries);
     }
-
-    applyChunkSummaries(chunk, parsedSummaries);
   }
 
   return summaries;
@@ -2758,6 +2806,11 @@ async function enrichTriageWithAiSummaries(
 ): Promise<Awaited<ReturnType<typeof triageInbox>> & {
   allItems: Array<Awaited<ReturnType<typeof triageInbox>>["allItems"][number] & { aiSummary: string }>;
 }> {
+  const userId = getUserIdForSessionToken(sessionToken);
+  const kbStore =
+    userId && !userId.startsWith("legacy:")
+      ? await getMailKnowledgeBaseStore(userId, sourceId)
+      : null;
   const summaryRecords: AiSummaryRecord[] = result.allItems.map((item) => ({
     id: item.id,
     kind: "mail",
@@ -2770,7 +2823,9 @@ async function enrichTriageWithAiSummaries(
   const summaryById = await summarizeRecordsWithLlmGateway(sessionToken, sourceId, summaryRecords, locale);
   const allItems = result.allItems.map((item) => ({
     ...item,
+    quadrant: kbStore?.getMailByRawId(item.id)?.quadrant ?? "unprocessed",
     aiSummary:
+      kbStore?.getMailByRawId(item.id)?.summary ??
       summaryById.get(item.id) ??
       buildAiSummaryFallback(
         {
@@ -2785,18 +2840,27 @@ async function enrichTriageWithAiSummaries(
         locale
       ),
   }));
-
-  const itemById = new Map(allItems.map((item) => [item.id, item]));
-  const quadrants = {
-    urgent_important: result.quadrants.urgent_important.map((item) => itemById.get(item.id) ?? { ...item, aiSummary: "" }),
-    not_urgent_important: result.quadrants.not_urgent_important.map((item) => itemById.get(item.id) ?? { ...item, aiSummary: "" }),
-    urgent_not_important: result.quadrants.urgent_not_important.map((item) => itemById.get(item.id) ?? { ...item, aiSummary: "" }),
-    not_urgent_not_important: result.quadrants.not_urgent_not_important.map((item) => itemById.get(item.id) ?? { ...item, aiSummary: "" }),
+  const groupedQuadrants = {
+    unprocessed: [] as typeof allItems,
+    urgent_important: [] as typeof allItems,
+    not_urgent_important: [] as typeof allItems,
+    urgent_not_important: [] as typeof allItems,
+    not_urgent_not_important: [] as typeof allItems,
   };
+  for (const item of allItems) {
+    groupedQuadrants[item.quadrant].push(item);
+  }
 
   return {
     ...result,
-    quadrants,
+    counts: {
+      unprocessed: groupedQuadrants.unprocessed.length,
+      urgent_important: groupedQuadrants.urgent_important.length,
+      not_urgent_important: groupedQuadrants.not_urgent_important.length,
+      urgent_not_important: groupedQuadrants.urgent_not_important.length,
+      not_urgent_not_important: groupedQuadrants.not_urgent_not_important.length,
+    },
+    quadrants: groupedQuadrants,
     allItems,
   };
 }
@@ -3122,15 +3186,42 @@ async function upsertMicrosoftSourceForSession(
     mailboxUserIdHint: account.mailboxUserIdHint,
   });
   await hydrateMailSourcesForSession(sessionToken);
-
-  const routingStatus = await verifySourceRoutingForSession(sessionToken, sourceResult.source.id);
-  const ready = routingStatus.routingVerified && !routingStatus.failFast;
+  const optimisticRoutingStatus: MailSourceRoutingStatus = {
+    verifiedAt: new Date().toISOString(),
+    routingVerified: true,
+    failFast: false,
+    message: "Microsoft Outlook 已连接，邮箱验证会在后台继续完成。",
+    mailbox: {
+      required: true,
+      status: "verified",
+      verified: true,
+      message: "OAuth 令牌已返回，邮箱读取验证正在后台执行。",
+    },
+    connectedAccount: {
+      required: false,
+      status: "skipped",
+      verified: true,
+      message: "Direct Microsoft auth does not use Composio connectedAccountId.",
+    },
+  };
+  sourceRoutingStatusBySession.set(sourceScopedSessionKey(sessionToken, sourceResult.source.id), optimisticRoutingStatus);
+  enforceMapLimit(sourceRoutingStatusBySession, maxMailSourceRoutingSessionEntries);
+  await mailSourceService.saveRoutingStatus(userId, sourceResult.source.id, optimisticRoutingStatus);
+  await hydrateMailSourcesForSession(sessionToken);
+  queueMicrotask(() => {
+    void verifySourceRoutingForSession(sessionToken, sourceResult.source.id).catch((error) => {
+      server.log.warn(
+        { message: error instanceof Error ? error.message : String(error), sourceId: sourceResult.source.id },
+        "Background Microsoft mailbox verification failed"
+      );
+    });
+  });
 
   return {
     source: getMailSourcesSnapshotBySession(sessionToken).sources.find((item) => item.id === sourceResult.source.id) ?? sourceResult.source,
     activeSourceId: getMailSourcesSnapshotBySession(sessionToken).activeSourceId ?? sourceResult.source.id,
-    ready,
-    routingStatus,
+    ready: true,
+    routingStatus: optimisticRoutingStatus,
   };
 }
 
@@ -3841,6 +3932,10 @@ type NotificationPollResult = {
     lastDigestDateKey: string | null;
     lastDigestSentAt: string | null;
   };
+  triage: {
+    total: number;
+    counts: Awaited<ReturnType<typeof triageInbox>>["counts"];
+  };
   urgent: {
     totalUrgentImportant: number;
     newItems: Array<{
@@ -4016,6 +4111,10 @@ async function buildNotificationPollResult(
       ...preferences,
     },
     state: toNotificationStateView(projectedState),
+    triage: {
+      total: triage.total,
+      counts: triage.counts,
+    },
     urgent: {
       totalUrgentImportant: triage.counts.urgent_important,
       newItems: newUrgentItems,
@@ -4054,6 +4153,38 @@ async function runNotificationPollWithLock(
   } finally {
     notificationPollLocksBySession.delete(scopeKey);
   }
+}
+
+function knowledgeBaseProcessingView(result: SummarizeResult) {
+  const hasExportFailure = result.errors.some((error) =>
+    error.startsWith("知识库文档导出失败:")
+  );
+  const status: "completed" | "failed" = hasExportFailure ? "failed" : "completed";
+  return {
+    status,
+    processedCount: result.processedCount,
+    newMailCount: result.newMailCount,
+    updatedMailCount: result.updatedMailCount,
+    newEventCount: result.newEventCount,
+    updatedEventCount: result.updatedEventCount,
+    newSenderCount: result.newSenderCount,
+    updatedSenderCount: result.updatedSenderCount,
+    errors: result.errors.slice(0, 20),
+  };
+}
+
+function failedKnowledgeBaseProcessingView(error: unknown) {
+  return {
+    status: "failed" as const,
+    processedCount: 0,
+    newMailCount: 0,
+    updatedMailCount: 0,
+    newEventCount: 0,
+    updatedEventCount: 0,
+    newSenderCount: 0,
+    updatedSenderCount: 0,
+    errors: [error instanceof Error ? error.message : String(error)].slice(0, 20),
+  };
 }
 
 const maintenanceTimer = setInterval(() => {
@@ -4239,6 +4370,62 @@ const agentRememberSchema = z.object({
   tags: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
 });
 
+function fileMemoryKey(record: AgentMemoryRecord): string {
+  const key = record.metadata?.key;
+  if (typeof key === "string" && key.trim()) {
+    return key;
+  }
+  return `${record.kind}:${record.id.slice(0, 12)}`;
+}
+
+function fileMemoryToAgentMemoryView(record: AgentMemoryRecord) {
+  return {
+    id: record.id,
+    key: fileMemoryKey(record),
+    value: record.content,
+    kind: record.kind,
+    tags: record.tags,
+    updatedAt: record.createdAt,
+  };
+}
+
+function mergeAgentMemoryViews(
+  primary: Array<{
+    id: string;
+    key: string;
+    value: string;
+    kind: string;
+    tags: string[];
+    updatedAt: string;
+  }>,
+  secondary: Array<{
+    id: string;
+    key: string;
+    value: string;
+    kind: string;
+    tags: string[];
+    updatedAt: string;
+  }>,
+  limit: number
+) {
+  const seen = new Set<string>();
+  const merged: typeof primary = [];
+
+  for (const item of [...primary, ...secondary]) {
+    const signature = `${item.kind}::${item.key}::${item.value}`;
+    if (seen.has(signature)) {
+      continue;
+    }
+    seen.add(signature);
+    merged.push(item);
+    if (merged.length >= limit) {
+      break;
+    }
+  }
+
+  return merged;
+}
+
 const priorityRuleFieldSchema = z.enum(["from", "subject", "body", "any"]);
 const priorityRuleQuadrantSchema = z.enum([
   "urgent_important",
@@ -4293,6 +4480,20 @@ const notificationPollQuerySchema = z.object({
   sourceId: sourceIdOptionalSchema,
   limit: z.coerce.number().int().min(5).max(100).default(40),
   horizonDays: z.coerce.number().int().min(1).max(30).default(7),
+  tz: z
+    .string()
+    .min(1)
+    .max(80)
+    .optional()
+    .refine((value) => value === undefined || isValidIanaTimeZone(value), {
+      message: "Invalid IANA time zone",
+    }),
+});
+
+const mailProcessingRunSchema = z.object({
+  sourceId: sourceIdOptionalSchema,
+  limit: z.coerce.number().int().min(5).max(60).default(30),
+  horizonDays: z.coerce.number().int().min(1).max(30).default(14),
   tz: z
     .string()
     .min(1)
@@ -7518,6 +7719,224 @@ server.get("/api/mail/notifications/stream", async (request, reply) => {
   keepaliveTimer.unref();
 });
 
+server.post("/api/mail/processing/run", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  const now = Date.now();
+  if (
+    isBatchRouteRateLimited(
+      scopedRouteKey("mail_processing_run", sessionToken),
+      request.ip,
+      now,
+      mailProcessingRunRateLimitPerMin
+    )
+  ) {
+    reply.header("Retry-After", "60");
+    reply.status(429);
+    return {
+      ok: false,
+      error: "Too many mail processing requests",
+      errorCode: "MAIL_PROCESSING_RATE_LIMITED",
+    };
+  }
+
+  if (!sessionToken) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+      errorCode: "UNAUTHORIZED",
+    };
+  }
+
+  const parsed = mailProcessingRunSchema.safeParse(request.body ?? {});
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid payload",
+      details: parsed.error.issues,
+    };
+  }
+
+  const tenant = buildTenantContextForRequest(reply, sessionToken, parsed.data.sourceId);
+  if (!tenant) {
+    return {
+      ok: false,
+      error: "Unauthorized or source not found",
+      errorCode: "MAIL_SOURCE_NOT_FOUND",
+    };
+  }
+
+  const routingGuard = requireSourceRoutingReady(reply, sessionToken, tenant.sourceId);
+  if (!routingGuard.ok) {
+    return routingGuard.payload;
+  }
+
+  const startedAt = new Date().toISOString();
+  const timeZone = normalizeIanaTimeZoneOrFallback(parsed.data.tz);
+  const priorityRules = getPriorityRulesSnapshotBySession(sessionToken, tenant.sourceId);
+
+  let knowledgeBase;
+  try {
+    const summary = await summarizeMailInbox(
+      tenant.userId,
+      tenant,
+      tenant.sessionToken,
+      server.log,
+      parsed.data.limit
+    );
+    try {
+      const store = await getMailKnowledgeBaseStore(tenant.userId, tenant.sourceId);
+      const baselineStatus = store.readBaselineStatus();
+      const backfillCompleted = Boolean(baselineStatus?.backfillCompleted);
+      await exportMailKnowledgeBaseDocuments({
+        userId: tenant.userId,
+        sourceId: tenant.sourceId,
+        logger: server.log,
+        backfillCompleted,
+        note:
+          baselineStatus?.note ??
+          (backfillCompleted
+            ? "旧有邮件信息已完成归档，可直接用于问答检索。"
+            : "当前仅完成文档刷新，历史邮件归纳任务尚未确认全部完成。"),
+      });
+    } catch (exportError) {
+      const exportMessage =
+        exportError instanceof Error ? exportError.message : String(exportError);
+      summary.errors.push(`知识库文档导出失败: ${exportMessage}`);
+      server.log.warn(
+        { userId: tenant.userId, sourceId: tenant.sourceId, message: exportMessage },
+        "Mail processing knowledge-base export failed"
+      );
+    }
+    knowledgeBase = knowledgeBaseProcessingView(summary);
+  } catch (error) {
+    server.log.warn(
+      { userId: tenant.userId, sourceId: tenant.sourceId, message: error instanceof Error ? error.message : String(error) },
+      "Mail processing knowledge-base update failed"
+    );
+    knowledgeBase = failedKnowledgeBaseProcessingView(error);
+  }
+
+  const warnings: string[] = [];
+  let triage: {
+    total: number;
+    counts: Awaited<ReturnType<typeof triageInbox>>["counts"];
+  } = {
+    total: 0,
+    counts: {
+      unprocessed: 0,
+      urgent_important: 0,
+      not_urgent_important: 0,
+      urgent_not_important: 0,
+      not_urgent_not_important: 0,
+    },
+  };
+  let urgent: NotificationPollResult["urgent"] = {
+    totalUrgentImportant: 0,
+    newItems: [],
+  };
+  let dailyDigest: NotificationPollResult["dailyDigest"] = null;
+  let calendarDrafts: Array<{
+    messageId: string;
+    subject: string;
+    type: string;
+    dueAt: string;
+    dueDateLabel: string;
+    confidence?: number;
+  }> = [];
+
+  const warningMessage = (stage: string, error: unknown) =>
+    `${stage}: ${error instanceof Error ? error.message : String(error)}`;
+
+  try {
+    const notificationComputation = await runNotificationPollWithLock(
+      sessionToken,
+      {
+        sourceId: tenant.sourceId,
+        limit: parsed.data.limit,
+        horizonDays: parsed.data.horizonDays,
+        tz: timeZone,
+      },
+      false
+    );
+    if (!notificationComputation) {
+      warnings.push("notification: another processing run is already polling notifications");
+    } else {
+      notificationComputation.commit();
+      triage = notificationComputation.result.triage;
+      urgent = notificationComputation.result.urgent;
+      dailyDigest = notificationComputation.result.dailyDigest;
+    }
+  } catch (error) {
+    warnings.push(warningMessage("notification", error));
+    server.log.warn(
+      { sourceId: tenant.sourceId, message: error instanceof Error ? error.message : String(error) },
+      "Mail processing notification stage failed"
+    );
+  }
+
+  if (triage.total === 0) {
+    try {
+      const triageResult = await triageInbox(parsed.data.limit, priorityRules, tenant);
+      triage = {
+        total: triageResult.total,
+        counts: triageResult.counts,
+      };
+    } catch (error) {
+      warnings.push(warningMessage("triage", error));
+      server.log.warn(
+        { sourceId: tenant.sourceId, message: error instanceof Error ? error.message : String(error) },
+        "Mail processing triage fallback failed"
+      );
+    }
+  }
+
+  try {
+    const insights = await buildMailInsights(
+      parsed.data.limit,
+      parsed.data.horizonDays,
+      timeZone,
+      priorityRules,
+      tenant
+    );
+    calendarDrafts = insights.upcoming.slice(0, 12).map((item) => ({
+      messageId: item.messageId,
+      subject: item.subject,
+      type: item.type,
+      dueAt: item.dueAt,
+      dueDateLabel: item.dueDateLabel,
+      ...(item.confidence === undefined ? {} : { confidence: item.confidence }),
+    }));
+  } catch (error) {
+    warnings.push(warningMessage("insights", error));
+    server.log.warn(
+      { sourceId: tenant.sourceId, message: error instanceof Error ? error.message : String(error) },
+      "Mail processing insights stage failed"
+    );
+  }
+
+  return {
+    ok: true,
+    sourceId: tenant.sourceId,
+    result: {
+      status: warnings.length > 0 || knowledgeBase.status === "failed" ? "partial" : "completed",
+      warnings: [...(knowledgeBase.status === "failed" ? knowledgeBase.errors : []), ...warnings].slice(0, 20),
+      sourceId: tenant.sourceId,
+      startedAt,
+      completedAt: new Date().toISOString(),
+      limit: parsed.data.limit,
+      horizonDays: parsed.data.horizonDays,
+      timeZone,
+      knowledgeBase,
+      triage,
+      urgent,
+      dailyDigest,
+      calendarDrafts,
+    },
+  };
+});
+
 server.get("/api/mail/triage", async (request, reply) => {
   const sessionToken = getSessionTokenFromRequest(request);
   const now = Date.now();
@@ -8574,6 +8993,12 @@ function normalizeKbScore(value: number): number {
 }
 
 function kbQuadrantFromScores(importanceScore: number, urgencyScore: number): string {
+  if (!Number.isFinite(importanceScore) || !Number.isFinite(urgencyScore)) {
+    return "unprocessed";
+  }
+  if (importanceScore <= 0 && urgencyScore <= 0) {
+    return "unprocessed";
+  }
   const importance = normalizeKbScore(importanceScore);
   const urgency = normalizeKbScore(urgencyScore);
   if (importance >= 6 && urgency >= 6) return "urgent_important";
@@ -8645,16 +9070,62 @@ function mailKbJobMessage(row: any): string {
 }
 
 function toMailKbJobDto(row: any) {
+  if (row?.jobId && row?.progress && typeof row.progress === "object") {
+    const total = Number(
+      row.progress?.total ??
+        row.exportReport?.mailCount ??
+        row.result?.processedCount ??
+        0
+    );
+    const processed = Number(row.progress?.processed ?? 0);
+    const percent =
+      total > 0 ? Math.min(100, Math.max(0, Math.round((processed / total) * 100))) : row.status === "completed" ? 100 : 0;
+    return {
+      id: row.jobId,
+      jobId: row.jobId,
+      sourceId: row.sourceId,
+      status: row.status,
+      error: row.error ?? null,
+      createdAt: kbIsoDate(row.createdAt),
+      startedAt: kbIsoDate(row.startedAt),
+      completedAt: kbIsoDate(row.completedAt),
+      finishedAt: kbIsoDate(row.completedAt),
+      progress: {
+        phase: row.progress?.phase ?? "idle",
+        message: row.progress?.message ?? "",
+        total,
+        processed,
+        percent,
+      },
+      counts: {
+        mails: Number(row.exportReport?.mailCount ?? row.result?.processedCount ?? total),
+        processedMails: processed,
+        events: Number(
+          row.exportReport?.eventCount ??
+            ((row.result?.newEventCount ?? 0) + (row.result?.updatedEventCount ?? 0))
+        ),
+        persons: Number(
+          row.exportReport?.personCount ??
+            ((row.result?.newSenderCount ?? 0) + (row.result?.updatedSenderCount ?? 0))
+        ),
+      },
+      logs: Array.isArray(row.logs) ? row.logs : [],
+      exportReport: row.exportReport ?? null,
+      result: row.result ?? null,
+    };
+  }
+
   const total = Number(row.totalMails ?? 0);
   const processed = Number(row.processedMails ?? 0);
   return {
     id: row.id,
     jobId: row.id,
     sourceId: row.sourceId,
-    status: row.status,
+    status: row.status === "queued" ? "pending" : row.status,
     error: row.error ?? null,
     createdAt: kbIsoDate(row.createdAt),
     startedAt: kbIsoDate(row.startedAt),
+    completedAt: kbIsoDate(row.finishedAt),
     finishedAt: kbIsoDate(row.finishedAt),
     progress: {
       phase: mailKbJobPhase(row.status),
@@ -9032,11 +9503,19 @@ const kbListQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(200).optional(),
   offset: z.coerce.number().int().min(0).optional(),
 });
+const kbTriggerBodySchema = z.object({
+  limit: z.coerce.number().int().min(30).max(400).optional(),
+  windowDays: z.coerce.number().int().min(1).max(90).optional(),
+});
 const kbJobParamSchema = z.object({
   jobId: z.string().min(1).max(200),
 });
 
-async function resolveKbTenant(request: FastifyRequest, reply: FastifyReply) {
+async function resolveKbTenant(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  options?: { requireRouting?: boolean }
+) {
   const query = kbListQuerySchema.safeParse(request.query ?? {});
   if (!query.success) {
     reply.status(400);
@@ -9056,12 +9535,14 @@ async function resolveKbTenant(request: FastifyRequest, reply: FastifyReply) {
     };
   }
 
-  const routingGuard = requireSourceRoutingReady(reply, sessionToken ?? "", tenant.sourceId);
-  if (!routingGuard.ok) {
-    return {
-      ok: false as const,
-      payload: routingGuard.payload,
-    };
+  if (options?.requireRouting) {
+    const routingGuard = requireSourceRoutingReady(reply, sessionToken ?? "", tenant.sourceId);
+    if (!routingGuard.ok) {
+      return {
+        ok: false as const,
+        payload: routingGuard.payload,
+      };
+    }
   }
 
   return { ok: true as const, tenant, query: query.data };
@@ -9083,25 +9564,13 @@ async function resolveMailKbJobForRequest(request: FastifyRequest, reply: Fastif
     reply.status(401);
     return { ok: false as const, payload: { ok: false, error: "Unauthorized", errorCode: "UNAUTHORIZED" } };
   }
-
-  const prisma = (await getPrismaClient(server.log)) as any;
-  if (!prisma?.mailKbJob?.findFirst) {
-    reply.status(503);
-    return {
-      ok: false as const,
-      payload: { ok: false, error: "Knowledge base job store unavailable", errorCode: "KB_JOB_STORE_UNAVAILABLE" },
-    };
-  }
-
-  const job = await prisma.mailKbJob.findFirst({
-    where: { id: parsed.data.jobId, userId },
-  });
+  const job = getKnowledgeBaseJob(parsed.data.jobId, userId);
   if (!job) {
     reply.status(404);
     return { ok: false as const, payload: { ok: false, error: "Job not found", errorCode: "KB_JOB_NOT_FOUND" } };
   }
 
-  return { ok: true as const, prisma, job };
+  return { ok: true as const, job };
 }
 
 server.get("/api/mail-kb/stats", async (request, reply) => {
@@ -9110,54 +9579,11 @@ server.get("/api/mail-kb/stats", async (request, reply) => {
     return resolved.payload;
   }
 
-  const prisma = (await getPrismaClient(server.log)) as any;
-  if (!prisma?.mailSummary?.count) {
-    reply.status(503);
-    return { ok: false, error: "Knowledge base store unavailable", errorCode: "KB_STORE_UNAVAILABLE" };
-  }
+  const store = await getMailKnowledgeBaseStore(resolved.tenant.userId, resolved.tenant.sourceId);
+  const stats = store.getStats();
+  const baselineStatus = store.readBaselineStatus();
 
-  const where = { userId: resolved.tenant.userId, sourceId: resolved.tenant.sourceId };
-  const [totalMails, totalEvents, totalPersons, newest, oldest, scoreRows] = await Promise.all([
-    prisma.mailSummary.count({ where }),
-    prisma.mailEvent.count({ where }),
-    prisma.senderProfile.count({ where }),
-    prisma.mailSummary.findFirst({ where, orderBy: { processedAt: "desc" }, select: { processedAt: true } }),
-    prisma.mailSummary.findFirst({ where, orderBy: { processedAt: "asc" }, select: { processedAt: true } }),
-    prisma.mailSummary.findMany({
-      where,
-      select: {
-        importanceScore: true,
-        urgencyScore: true,
-        scoreRecord: { select: { quadrant: true } },
-      },
-      take: 5000,
-    }),
-  ]);
-  const quadrantDistribution = {
-    urgent_important: 0,
-    not_urgent_important: 0,
-    urgent_not_important: 0,
-    not_urgent_not_important: 0,
-  };
-  for (const row of scoreRows) {
-    const quadrant = row.scoreRecord?.quadrant ?? kbQuadrantFromScores(row.importanceScore, row.urgencyScore);
-    if (quadrant in quadrantDistribution) {
-      quadrantDistribution[quadrant as keyof typeof quadrantDistribution] += 1;
-    }
-  }
-  const stats = {
-    totalMails,
-    totalEvents,
-    totalPersons,
-    processedAt: new Date().toISOString(),
-    dateRange: {
-      start: oldest?.processedAt ? oldest.processedAt.toISOString() : "",
-      end: newest?.processedAt ? newest.processedAt.toISOString() : "",
-    },
-    quadrantDistribution,
-  };
-
-  return { ok: true, stats, result: stats };
+  return { ok: true, stats, baselineStatus, result: { stats, baselineStatus } };
 });
 
 server.get("/api/mail-kb/mails", async (request, reply) => {
@@ -9166,26 +9592,12 @@ server.get("/api/mail-kb/mails", async (request, reply) => {
     return resolved.payload;
   }
 
-  const prisma = (await getPrismaClient(server.log)) as any;
-  if (!prisma?.mailSummary?.findMany) {
-    reply.status(503);
-    return { ok: false, error: "Knowledge base store unavailable", errorCode: "KB_STORE_UNAVAILABLE" };
-  }
-
   const limit = resolved.query.pageSize ?? resolved.query.limit ?? 50;
   const offset = resolved.query.offset ?? 0;
-  const where = { userId: resolved.tenant.userId, sourceId: resolved.tenant.sourceId };
-  const [rows, total] = await Promise.all([
-    prisma.mailSummary.findMany({
-      where,
-      orderBy: { processedAt: "desc" },
-      skip: offset,
-      take: limit,
-      include: { scoreRecord: true },
-    }),
-    prisma.mailSummary.count({ where }),
-  ]);
-  const mails = rows.map(toKbMailDto);
+  const store = await getMailKnowledgeBaseStore(resolved.tenant.userId, resolved.tenant.sourceId);
+  const allMails = store.getAllMails();
+  const total = allMails.length;
+  const mails = allMails.slice(offset, offset + limit);
 
   return { ok: true, mails, total, result: { mails, total, limit, offset } };
 });
@@ -9196,18 +9608,8 @@ server.get("/api/mail-kb/events", async (request, reply) => {
     return resolved.payload;
   }
 
-  const prisma = (await getPrismaClient(server.log)) as any;
-  if (!prisma?.mailEvent?.findMany) {
-    reply.status(503);
-    return { ok: false, error: "Knowledge base store unavailable", errorCode: "KB_STORE_UNAVAILABLE" };
-  }
-
-  const rows = await prisma.mailEvent.findMany({
-    where: { userId: resolved.tenant.userId, sourceId: resolved.tenant.sourceId },
-    orderBy: { updatedAt: "desc" },
-    include: { summaries: { select: { id: true } } },
-  });
-  const events = rows.map(toKbEventDto);
+  const store = await getMailKnowledgeBaseStore(resolved.tenant.userId, resolved.tenant.sourceId);
+  const events = store.getAllEvents();
 
   return { ok: true, events, result: { events } };
 });
@@ -9218,19 +9620,111 @@ server.get("/api/mail-kb/persons", async (request, reply) => {
     return resolved.payload;
   }
 
-  const prisma = (await getPrismaClient(server.log)) as any;
-  if (!prisma?.senderProfile?.findMany) {
-    reply.status(503);
-    return { ok: false, error: "Knowledge base store unavailable", errorCode: "KB_STORE_UNAVAILABLE" };
-  }
-
-  const rows = await prisma.senderProfile.findMany({
-    where: { userId: resolved.tenant.userId, sourceId: resolved.tenant.sourceId },
-    orderBy: [{ lastSeenAt: "desc" }, { updatedAt: "desc" }],
-  });
-  const persons = rows.map(toKbPersonDto);
+  const store = await getMailKnowledgeBaseStore(resolved.tenant.userId, resolved.tenant.sourceId);
+  const persons = store.getAllPersons();
 
   return { ok: true, persons, result: { persons } };
+});
+
+server.get("/api/mail-kb/subjects", async (request, reply) => {
+  const resolved = await resolveKbTenant(request, reply);
+  if (!resolved.ok) {
+    return resolved.payload;
+  }
+
+  const store = await getMailKnowledgeBaseStore(resolved.tenant.userId, resolved.tenant.sourceId);
+  const subjects = store.getAllSubjectIndexes();
+
+  return { ok: true, subjects, result: { subjects } };
+});
+
+server.get("/api/mail-kb/scores", async (request, reply) => {
+  const resolved = await resolveKbTenant(request, reply);
+  if (!resolved.ok) {
+    return resolved.payload;
+  }
+
+  const store = await getMailKnowledgeBaseStore(resolved.tenant.userId, resolved.tenant.sourceId);
+  const scores = store.getAllScoreIndexes();
+
+  return { ok: true, scores, result: { scores } };
+});
+
+server.get("/api/mail-kb/artifacts", async (request, reply) => {
+  const resolved = await resolveKbTenant(request, reply);
+  if (!resolved.ok) {
+    return resolved.payload;
+  }
+
+  const store = await getMailKnowledgeBaseStore(resolved.tenant.userId, resolved.tenant.sourceId);
+  const paths = store.getPaths();
+  const baselineStatus = store.readBaselineStatus();
+  const artifacts = [
+    { key: "mailIds", label: "邮件标识码清单", path: paths.mailIdsDocPath },
+    { key: "subjects", label: "邮件题目索引", path: paths.mailSubjectDocPath },
+    { key: "scores", label: "邮件评分索引", path: paths.mailScoreDocPath },
+    { key: "summaries", label: "邮件总结正文库", path: paths.mailSummaryDocPath },
+    { key: "events", label: "事件聚类索引", path: paths.eventDocPath },
+    { key: "senders", label: "发件人画像索引", path: paths.senderDocPath },
+    { key: "baseline", label: "旧邮件归档状态", path: paths.baselineStatusPath },
+  ];
+
+  return {
+    ok: true,
+    artifacts,
+    baselineStatus,
+    result: {
+      artifacts,
+      baselineStatus,
+    },
+  };
+});
+
+const kbArtifactContentQuerySchema = z.object({
+  key: z.enum(["mailIds", "subjects", "scores", "summaries", "events", "senders", "baseline"]),
+});
+
+server.get("/api/mail-kb/artifacts/content", async (request, reply) => {
+  const resolved = await resolveKbTenant(request, reply);
+  if (!resolved.ok) {
+    return resolved.payload;
+  }
+
+  const parsed = kbArtifactContentQuerySchema.safeParse(request.query ?? {});
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid artifact key.",
+      errorCode: "INVALID_ARTIFACT_KEY",
+      details: parsed.error.flatten(),
+    };
+  }
+
+  const store = await getMailKnowledgeBaseStore(resolved.tenant.userId, resolved.tenant.sourceId);
+  const paths = store.getPaths();
+  const artifactMap = {
+    mailIds: { label: "邮件标识码清单", path: paths.mailIdsDocPath, kind: "markdown" },
+    subjects: { label: "邮件题目索引", path: paths.mailSubjectDocPath, kind: "markdown" },
+    scores: { label: "邮件评分索引", path: paths.mailScoreDocPath, kind: "markdown" },
+    summaries: { label: "邮件总结正文库", path: paths.mailSummaryDocPath, kind: "markdown" },
+    events: { label: "事件聚类索引", path: paths.eventDocPath, kind: "markdown" },
+    senders: { label: "发件人画像索引", path: paths.senderDocPath, kind: "markdown" },
+    baseline: { label: "旧邮件归档状态", path: paths.baselineStatusPath, kind: "json" },
+  } as const;
+  const artifact = artifactMap[parsed.data.key];
+  const content = existsSync(artifact.path) ? readFileSync(artifact.path, "utf-8") : "";
+
+  return {
+    ok: true,
+    result: {
+      key: parsed.data.key,
+      label: artifact.label,
+      path: artifact.path,
+      kind: artifact.kind,
+      content,
+    },
+  };
 });
 
 server.get("/api/mail-kb/export", async (request, reply) => {
@@ -9239,122 +9733,85 @@ server.get("/api/mail-kb/export", async (request, reply) => {
     return resolved.payload;
   }
 
-  const prisma = (await getPrismaClient(server.log)) as any;
-  if (!prisma?.mailSummary?.findMany || !prisma?.mailEvent?.findMany || !prisma?.senderProfile?.findMany) {
-    reply.status(503);
-    return { ok: false, error: "Knowledge base store unavailable", errorCode: "KB_STORE_UNAVAILABLE" };
-  }
-
-  const where = { userId: resolved.tenant.userId, sourceId: resolved.tenant.sourceId };
-  const [mailRows, eventRows, personRows] = await Promise.all([
-    prisma.mailSummary.findMany({ where, orderBy: { processedAt: "desc" }, take: 200, include: { scoreRecord: true } }),
-    prisma.mailEvent.findMany({
-      where,
-      orderBy: { updatedAt: "desc" },
-      take: 200,
-      include: { summaries: { select: { id: true } } },
-    }),
-    prisma.senderProfile.findMany({ where, orderBy: { updatedAt: "desc" }, take: 200 }),
-  ]);
-  const mails = mailRows.map(toKbMailDto);
-  const events = eventRows.map(toKbEventDto);
-  const persons = personRows.map(toKbPersonDto);
-  reply.header("Content-Type", "application/json");
-  reply.header("Content-Disposition", `attachment; filename="mail-kb-${new Date().toISOString().slice(0, 10)}.json"`);
-  const exportedAt = new Date().toISOString();
-  const document = {
-    sourceId: resolved.tenant.sourceId,
-    exportedAt,
-    mails,
-    events,
-    persons,
-  };
-  return {
-    ok: true,
-    ...document,
-    result: document,
-  };
-});
-
-server.post("/api/mail/knowledge-base/trigger", async (request, reply) => {
-  const resolved = await resolveKbTenant(request, reply);
-  if (!resolved.ok) {
-    return resolved.payload;
-  }
-
-  const prisma = (await getPrismaClient(server.log)) as any;
-  if (!prisma?.mailKbJob?.create) {
-    reply.status(503);
-    return { ok: false, error: "Knowledge base job store unavailable", errorCode: "KB_JOB_STORE_UNAVAILABLE" };
-  }
-
-  const lockKey = `${resolved.tenant.userId}:${resolved.tenant.sourceId}`;
-  if (mailKbJobLocks.has(lockKey)) {
+  const latestJob = getLatestKnowledgeBaseJob(resolved.tenant.userId, resolved.tenant.sourceId);
+  if (latestJob && (latestJob.status === "pending" || latestJob.status === "running")) {
     reply.status(409);
     return {
       ok: false,
-      error: "A knowledge base job is already running for this source.",
-      errorCode: "KB_JOB_ALREADY_RUNNING",
-    };
-  }
-
-  const existing = await prisma.mailKbJob.findFirst({
-    where: {
-      userId: resolved.tenant.userId,
-      sourceId: resolved.tenant.sourceId,
-      status: { in: ["queued", "running"] },
-    },
-    orderBy: { createdAt: "desc" },
-  });
-  if (existing) {
-    const staleCutoff = Date.now() - 15 * 60 * 1000;
-    const lastHeartbeatAt =
-      existing.updatedAt instanceof Date
-        ? existing.updatedAt.getTime()
-        : existing.startedAt instanceof Date
-          ? existing.startedAt.getTime()
-          : existing.createdAt instanceof Date
-            ? existing.createdAt.getTime()
-            : Date.now();
-    if (lastHeartbeatAt < staleCutoff) {
-      await prisma.mailKbJob.update({
-        where: { id: existing.id },
-        data: {
-          status: "failed",
-          error: "Previous in-process KB worker stopped before completion. Job was marked stale and can be retried.",
-          finishedAt: new Date(),
-        },
-      });
-      addMailKbJobLog(existing.id, "warn", "Stale KB job was marked failed before retry");
-    } else {
-    return {
-      ok: true,
-      jobId: existing.id,
+      error: "Knowledge base backfill is still running for this mailbox.",
+      errorCode: "KB_JOB_RUNNING",
       result: {
-        sourceId: existing.sourceId,
-        status: existing.status,
+        job: toMailKbJobDto(latestJob),
       },
     };
-    }
   }
 
-  const job = await prisma.mailKbJob.create({
-    data: {
-      userId: resolved.tenant.userId,
-      sourceId: resolved.tenant.sourceId,
-      status: "queued",
-      progress: 0,
-    },
+  const store = await getMailKnowledgeBaseStore(resolved.tenant.userId, resolved.tenant.sourceId);
+  const existingBaselineStatus = store.readBaselineStatus();
+  const report = await exportMailKnowledgeBaseDocuments({
+    userId: resolved.tenant.userId,
+    sourceId: resolved.tenant.sourceId,
+    logger: server.log,
+    backfillCompleted: Boolean(existingBaselineStatus?.backfillCompleted || latestJob?.status === "completed"),
+    note:
+      existingBaselineStatus?.note ??
+      (latestJob?.status === "completed"
+        ? "旧有邮件信息已完成归档，可直接用于问答检索。"
+        : "当前仅完成文档导出，历史邮件归纳任务尚未确认全部完成。"),
   });
-  addMailKbJobLog(job.id, "info", "Knowledge base job queued");
-  void runMailKbJob(job.id, resolved.tenant);
+  const baselineStatus = store.readBaselineStatus();
+  const { files: _files, ...reportView } = report;
+
+  return { ok: true, report: reportView, baselineStatus, result: { report: reportView, baselineStatus } };
+});
+
+server.post("/api/mail/knowledge-base/trigger", async (request, reply) => {
+  const resolved = await resolveKbTenant(request, reply, { requireRouting: true });
+  if (!resolved.ok) {
+    return resolved.payload;
+  }
+  const body = kbTriggerBodySchema.safeParse(request.body ?? {});
+  if (!body.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid trigger payload",
+      details: body.error.issues,
+    };
+  }
+
+  const latestJob = getLatestKnowledgeBaseJob(resolved.tenant.userId, resolved.tenant.sourceId);
+  if (latestJob && (latestJob.status === "pending" || latestJob.status === "running")) {
+    const job = toMailKbJobDto(latestJob);
+    return {
+      ok: true,
+      jobId: latestJob.jobId,
+      result: {
+        sourceId: resolved.tenant.sourceId,
+        status: latestJob.status,
+        job,
+      },
+    };
+  }
+
+  const { jobId } = await triggerMailSummary({
+    userId: resolved.tenant.userId,
+    sourceId: resolved.tenant.sourceId,
+    sourceContext: resolved.tenant,
+    sessionKey: resolved.tenant.sessionToken,
+    logger: server.log,
+    ...(body.data.limit ? { limit: body.data.limit } : {}),
+    ...(body.data.windowDays ? { windowDays: body.data.windowDays } : {}),
+  });
+  const job = getKnowledgeBaseJob(jobId, resolved.tenant.userId);
 
   return {
     ok: true,
-    jobId: job.id,
+    jobId,
     result: {
       sourceId: resolved.tenant.sourceId,
-      status: "queued",
+      status: job?.status ?? "pending",
+      ...(job ? { job: toMailKbJobDto(job) } : {}),
     },
   };
 });
@@ -9386,7 +9843,7 @@ server.get("/api/mail/knowledge-base/jobs/:jobId/stream", async (request, reply)
   let closed = false;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   const raw = reply.raw;
-  const jobId = resolved.job.id;
+  const jobId = resolved.job.jobId;
   let sentLogCount = 0;
 
   const closeStream = () => {
@@ -9421,9 +9878,7 @@ server.get("/api/mail/knowledge-base/jobs/:jobId/stream", async (request, reply)
     if (closed) {
       return;
     }
-    const latest = await resolved.prisma.mailKbJob.findFirst({
-      where: { id: jobId, userId: resolved.job.userId },
-    });
+    const latest = getKnowledgeBaseJob(jobId, resolved.job.userId);
     if (!latest) {
       writeEvent("error", { error: "Job not found", code: "KB_JOB_NOT_FOUND" });
       closeStream();
@@ -9436,7 +9891,12 @@ server.get("/api/mail/knowledge-base/jobs/:jobId/stream", async (request, reply)
     if (logs.length > 0) {
       writeEvent("logs", { logs });
     }
-    writeEvent("status", { status: dto.status, error: dto.error, progress: dto.progress });
+    writeEvent("status", {
+      status: dto.status,
+      error: dto.error,
+      progress: dto.progress,
+      completedAt: dto.completedAt ?? dto.finishedAt ?? null,
+    });
     if (dto.status === "completed") {
       writeEvent("final", { job: dto });
       closeStream();
@@ -9505,13 +9965,35 @@ server.get("/api/agent/memory/recent", async (request, reply) => {
     };
   }
 
-  const prisma = (await getPrismaClient(server.log)) as any;
+  const limit = parsed.data.limit ?? 10;
+  const fileRecords = await agentFileMemoryStore.recent(
+    { userId: tenant.userId, sourceId: tenant.sourceId },
+    limit
+  );
+  const fileMemory = fileRecords.map(fileMemoryToAgentMemoryView);
+
+  let prisma: any = null;
+  try {
+    prisma = (await getPrismaClient(server.log)) as any;
+  } catch (error) {
+    server.log.warn(
+      {
+        userId: tenant.userId,
+        sourceId: tenant.sourceId,
+        message: error instanceof Error ? error.message : String(error),
+      },
+      "Agent memory API falling back to file memory"
+    );
+  }
+
   if (!prisma?.agentMemory?.findMany) {
-    reply.status(503);
     return {
-      ok: false,
-      error: "Agent memory store unavailable",
-      errorCode: "MEMORY_STORE_UNAVAILABLE",
+      ok: true,
+      result: {
+        sourceId: tenant.sourceId,
+        storage: "file",
+        memory: fileMemory,
+      },
     };
   }
 
@@ -9521,21 +10003,24 @@ server.get("/api/agent/memory/recent", async (request, reply) => {
       sourceId: tenant.sourceId,
     },
     orderBy: { updatedAt: "desc" },
-    take: parsed.data.limit ?? 10,
+    take: limit,
   });
+
+  const databaseMemory = rows.map((row: any) => ({
+    id: row.id,
+    key: row.key,
+    value: row.value,
+    kind: row.kind ?? "fact",
+    tags: Array.isArray(row.tags) ? row.tags : [],
+    updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt),
+  }));
 
   return {
     ok: true,
     result: {
       sourceId: tenant.sourceId,
-      memory: rows.map((row: any) => ({
-        id: row.id,
-        key: row.key,
-        value: row.value,
-        kind: row.kind ?? "fact",
-        tags: Array.isArray(row.tags) ? row.tags : [],
-        updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt),
-      })),
+      storage: "file+database",
+      memory: mergeAgentMemoryViews(fileMemory, databaseMemory, limit),
     },
   };
 });
@@ -9560,44 +10045,90 @@ server.post("/api/agent/memory", async (request, reply) => {
     };
   }
 
-  const prisma = (await getPrismaClient(server.log)) as any;
+  const note = parsed.data.note.trim().slice(0, 1200);
+  const tags = Array.from(new Set(parsed.data.tags ?? [])).slice(0, 12);
+  const key = `manual:${randomUUID()}`;
+  const fileRecord = await agentFileMemoryStore.append(
+    { userId: tenant.userId, sourceId: tenant.sourceId },
+    {
+      kind: parsed.data.kind ?? "fact",
+      content: note,
+      tags,
+      metadata: { key },
+    }
+  );
+
+  let prisma: any = null;
+  try {
+    prisma = (await getPrismaClient(server.log)) as any;
+  } catch (error) {
+    server.log.warn(
+      {
+        userId: tenant.userId,
+        sourceId: tenant.sourceId,
+        message: error instanceof Error ? error.message : String(error),
+      },
+      "Agent memory write mirrored to file memory only"
+    );
+  }
+
   if (!prisma?.agentMemory?.create) {
-    reply.status(503);
     return {
-      ok: false,
-      error: "Agent memory store unavailable",
-      errorCode: "MEMORY_STORE_UNAVAILABLE",
+      ok: true,
+      result: {
+        sourceId: tenant.sourceId,
+        storage: "file",
+        memory: fileMemoryToAgentMemoryView(fileRecord),
+      },
     };
   }
 
-  const note = parsed.data.note.trim().slice(0, 1200);
-  const tags = Array.from(new Set(parsed.data.tags ?? [])).slice(0, 12);
-  const created = await prisma.agentMemory.create({
-    data: {
-      userId: tenant.userId,
-      sourceId: tenant.sourceId,
-      key: `manual:${randomUUID()}`,
-      value: note,
-      kind: parsed.data.kind ?? "fact",
-      tags,
-    },
-  });
-
-  return {
-    ok: true,
-    result: {
-      sourceId: tenant.sourceId,
-      memory: {
-        id: created.id,
-        key: created.key,
-        value: created.value,
-        kind: created.kind,
-        tags: created.tags,
-        updatedAt:
-          created.updatedAt instanceof Date ? created.updatedAt.toISOString() : String(created.updatedAt),
+  try {
+    const created = await prisma.agentMemory.create({
+      data: {
+        userId: tenant.userId,
+        sourceId: tenant.sourceId,
+        key,
+        value: note,
+        kind: parsed.data.kind ?? "fact",
+        tags,
       },
-    },
-  };
+    });
+
+    return {
+      ok: true,
+      result: {
+        sourceId: tenant.sourceId,
+        storage: "file+database",
+        memory: {
+          id: created.id,
+          key: created.key,
+          value: created.value,
+          kind: created.kind,
+          tags: created.tags,
+          updatedAt:
+            created.updatedAt instanceof Date ? created.updatedAt.toISOString() : String(created.updatedAt),
+        },
+      },
+    };
+  } catch (error) {
+    server.log.warn(
+      {
+        userId: tenant.userId,
+        sourceId: tenant.sourceId,
+        message: error instanceof Error ? error.message : String(error),
+      },
+      "Agent memory write kept in file memory after database mirror failed"
+    );
+    return {
+      ok: true,
+      result: {
+        sourceId: tenant.sourceId,
+        storage: "file",
+        memory: fileMemoryToAgentMemoryView(fileRecord),
+      },
+    };
+  }
 });
 
 function writeAgentSseError(

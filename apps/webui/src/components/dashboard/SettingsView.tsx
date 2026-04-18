@@ -4,11 +4,30 @@
  * 包含 Microsoft Outlook 直连授权功能
  */
 
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import { useMail } from "../../contexts/MailContext";
 import { useAuth } from "../../contexts/AuthContext";
 import { useApp } from "../../contexts/AppContext";
 import { LoadingSpinner } from "../shared/LoadingSpinner";
+
+function padTime(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function toTimeInputValue(hour: number, minute: number): string {
+  return `${padTime(hour)}:${padTime(minute)}`;
+}
+
+function fromTimeInputValue(value: string): { hour: number; minute: number } {
+  const [hourText = "20", minuteText = "00"] = value.split(":");
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+
+  return {
+    hour: Number.isFinite(hour) ? Math.min(23, Math.max(0, hour)) : 20,
+    minute: Number.isFinite(minute) ? Math.min(59, Math.max(0, minute)) : 0,
+  };
+}
 
 export function SettingsView() {
   const {
@@ -21,6 +40,11 @@ export function SettingsView() {
     deleteSource,
     verifySource,
     launchOutlookAuth,
+    notificationPrefs,
+    fetchNotificationPrefs,
+    updateNotificationPrefs,
+    notificationStreamStatus,
+    notificationStreamError,
     error,
   } = useMail();
   const { user, updatePreferences, logout } = useAuth();
@@ -35,11 +59,72 @@ export function SettingsView() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [sourceInfo, setSourceInfo] = useState<string | null>(null);
+  const [urgentPushEnabled, setUrgentPushEnabled] = useState(true);
+  const [dailyDigestEnabled, setDailyDigestEnabled] = useState(true);
+  const [digestTimeValue, setDigestTimeValue] = useState("20:00");
+  const [digestTimeZone, setDigestTimeZone] = useState("Asia/Shanghai");
+  const [notificationDirty, setNotificationDirty] = useState(false);
+  const [isSavingNotifications, setIsSavingNotifications] = useState(false);
+  const [notificationInfo, setNotificationInfo] = useState<string | null>(null);
+  const [notificationError, setNotificationError] = useState<string | null>(null);
+  const [desktopPermission, setDesktopPermission] = useState<NotificationPermission | "unsupported">("unsupported");
   const allowLegacyComposioSource = import.meta.env.VITE_ENABLE_LEGACY_COMPOSIO === "true";
+  const activeSource = sources.find((source) => source.id === activeSourceId) ?? null;
+  const notificationPrefsReady = !activeSourceId || notificationPrefs !== null;
+
+  const digestScheduleSummary = useMemo(() => {
+    if (!dailyDigestEnabled) {
+      return locale === "zh" ? "每日摘要已关闭。" : "Daily digest is disabled.";
+    }
+
+    return locale === "zh"
+      ? `每日摘要会按 ${digestTimeZone} 的 ${digestTimeValue} 投递到 App 与浏览器提醒。`
+      : `Daily digest is delivered at ${digestTimeValue} in ${digestTimeZone}.`;
+  }, [dailyDigestEnabled, digestTimeValue, digestTimeZone, locale]);
 
   useEffect(() => {
     fetchSources();
   }, [fetchSources]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.Notification === "undefined") {
+      setDesktopPermission("unsupported");
+      return;
+    }
+
+    setDesktopPermission(window.Notification.permission);
+  }, []);
+
+  useEffect(() => {
+    if (!activeSourceId) {
+      setNotificationDirty(false);
+      setNotificationInfo(null);
+      setNotificationError(null);
+      return;
+    }
+
+    const fallbackTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai";
+    setUrgentPushEnabled(true);
+    setDailyDigestEnabled(true);
+    setDigestTimeValue("20:00");
+    setDigestTimeZone(fallbackTimeZone);
+    setNotificationDirty(false);
+    setNotificationInfo(null);
+    setNotificationError(null);
+    void fetchNotificationPrefs();
+  }, [activeSourceId, fetchNotificationPrefs]);
+
+  useEffect(() => {
+    if (!notificationPrefs) {
+      return;
+    }
+
+    setUrgentPushEnabled(notificationPrefs.urgentPushEnabled);
+    setDailyDigestEnabled(notificationPrefs.dailyDigestEnabled);
+    setDigestTimeValue(toTimeInputValue(notificationPrefs.digestHour, notificationPrefs.digestMinute));
+    setDigestTimeZone(notificationPrefs.digestTimeZone);
+    setNotificationDirty(false);
+  }, [notificationPrefs, activeSourceId]);
 
   // ========== Microsoft Outlook 直连授权 ==========
 
@@ -58,7 +143,7 @@ export function SettingsView() {
         setNewSourceLabel(`Outlook ${result.account.email}`);
       }
       setAuthInfo(result.message || "Microsoft Outlook 已连接，邮箱数据源已返回。");
-      await fetchSources();
+      void fetchSources();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "授权失败";
       if (msg.includes("401") || msg.includes("Unauthorized")) {
@@ -141,6 +226,78 @@ export function SettingsView() {
       await logout();
     }
   }, [logout]);
+
+  const markNotificationDirty = useCallback(() => {
+    setNotificationDirty(true);
+    setNotificationInfo(null);
+    setNotificationError(null);
+  }, []);
+
+  const handleEnableDesktopNotifications = useCallback(async () => {
+    if (typeof window === "undefined" || typeof window.Notification === "undefined") {
+      setDesktopPermission("unsupported");
+      return;
+    }
+
+    const permission = await window.Notification.requestPermission();
+    setDesktopPermission(permission);
+  }, []);
+
+  const handleUseBrowserTimeZone = useCallback(() => {
+    const detected = Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai";
+    setDigestTimeZone(detected);
+    markNotificationDirty();
+  }, [markNotificationDirty]);
+
+  const handleResetNotificationSettings = useCallback(() => {
+    if (!notificationPrefs) {
+      return;
+    }
+
+    setUrgentPushEnabled(notificationPrefs.urgentPushEnabled);
+    setDailyDigestEnabled(notificationPrefs.dailyDigestEnabled);
+    setDigestTimeValue(toTimeInputValue(notificationPrefs.digestHour, notificationPrefs.digestMinute));
+    setDigestTimeZone(notificationPrefs.digestTimeZone);
+    setNotificationDirty(false);
+    setNotificationInfo(null);
+    setNotificationError(null);
+  }, [notificationPrefs]);
+
+  const handleSaveNotificationSettings = useCallback(async () => {
+    if (!activeSourceId) {
+      setNotificationError(locale === "zh" ? "请先连接并选中一个邮箱数据源。" : "Select a mail source first.");
+      return;
+    }
+
+    setIsSavingNotifications(true);
+    setNotificationInfo(null);
+    setNotificationError(null);
+
+    try {
+      const { hour, minute } = fromTimeInputValue(digestTimeValue);
+      await updateNotificationPrefs({
+        urgentPushEnabled,
+        dailyDigestEnabled,
+        digestHour: hour,
+        digestMinute: minute,
+        digestTimeZone: digestTimeZone.trim() || "Asia/Shanghai",
+      });
+      setNotificationDirty(false);
+      setNotificationInfo(locale === "zh" ? "通知设置已保存。" : "Notification settings saved.");
+    } catch (err) {
+      setNotificationError(err instanceof Error ? err.message : (locale === "zh" ? "保存失败" : "Failed to save settings."));
+    } finally {
+      setIsSavingNotifications(false);
+    }
+  }, [
+    activeSourceId,
+    dailyDigestEnabled,
+    digestTimeValue,
+    digestTimeZone,
+    locale,
+    updateNotificationPrefs,
+    urgentPushEnabled,
+  ]);
 
   return (
     <div className="space-y-6">
@@ -352,8 +509,184 @@ export function SettingsView() {
       <section className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-800">
         <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">通知设置</h3>
         <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-          紧急邮件和每日摘要将通过 Outlook 推送通知
+          当前设置只作用于选中的邮箱数据源，紧急邮件和每日摘要会通过 App 内通知与浏览器桌面提醒送达。
         </p>
+
+        <div className="mt-4 rounded-lg border border-zinc-200 px-3 py-3 dark:border-zinc-700">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">当前数据源</p>
+              <p className="mt-1 text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                {activeSource?.name || activeSource?.emailHint || "未连接邮箱"}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`rounded-full px-2 py-0.5 text-[11px] ${
+                notificationStreamStatus === "connected"
+                  ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                  : notificationStreamStatus === "connecting"
+                    ? "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                    : notificationStreamStatus === "error"
+                      ? "bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                      : "bg-zinc-100 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300"
+              }`}>
+                {notificationStreamStatus === "connected"
+                  ? "实时已连接"
+                  : notificationStreamStatus === "connecting"
+                    ? "实时连接中"
+                    : notificationStreamStatus === "error"
+                      ? "实时异常"
+                      : "等待连接"}
+              </span>
+              <span className={`rounded-full px-2 py-0.5 text-[11px] ${
+                desktopPermission === "granted"
+                  ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                  : desktopPermission === "denied"
+                    ? "bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                    : "bg-zinc-100 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300"
+              }`}>
+                {desktopPermission === "granted"
+                  ? "桌面提醒已开启"
+                  : desktopPermission === "denied"
+                    ? "桌面提醒已阻止"
+                    : desktopPermission === "default"
+                      ? "桌面提醒未授权"
+                      : "浏览器不支持"}
+              </span>
+            </div>
+          </div>
+
+          {notificationStreamError && (
+            <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-900/20 dark:text-red-300">
+              {notificationStreamError}
+            </p>
+          )}
+        </div>
+
+        <div className="mt-4 space-y-4">
+          <label className="flex items-start justify-between gap-3 rounded-lg border border-zinc-200 px-3 py-3 dark:border-zinc-700">
+            <div>
+              <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">紧急邮件即时提醒</p>
+              <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                紧急重要邮件到达后，立即进入通知中心并触发桌面提醒。
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={urgentPushEnabled}
+              onChange={(event) => {
+                setUrgentPushEnabled(event.target.checked);
+                markNotificationDirty();
+              }}
+              disabled={!notificationPrefsReady}
+              className="mt-1 h-4 w-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900 dark:border-zinc-600"
+            />
+          </label>
+
+          <label className="flex items-start justify-between gap-3 rounded-lg border border-zinc-200 px-3 py-3 dark:border-zinc-700">
+            <div>
+              <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">每日摘要</p>
+              <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                将当天邮件总览、紧急项和近期 DDL 在固定时间汇总推送。
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={dailyDigestEnabled}
+              onChange={(event) => {
+                setDailyDigestEnabled(event.target.checked);
+                markNotificationDirty();
+              }}
+              disabled={!notificationPrefsReady}
+              className="mt-1 h-4 w-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900 dark:border-zinc-600"
+            />
+          </label>
+
+          <div className="grid gap-3 md:grid-cols-[minmax(0,12rem)_minmax(0,1fr)]">
+            <label className="grid gap-1 text-sm text-zinc-700 dark:text-zinc-300">
+              <span>摘要时间</span>
+              <input
+                type="time"
+                value={digestTimeValue}
+                aria-label="摘要时间"
+                onChange={(event) => {
+                  setDigestTimeValue(event.target.value);
+                  markNotificationDirty();
+                }}
+                disabled={!notificationPrefsReady || !dailyDigestEnabled}
+                className="h-10 rounded-lg border border-zinc-300 px-3 text-sm outline-none transition focus:border-zinc-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100"
+              />
+            </label>
+
+            <div className="grid gap-1 text-sm text-zinc-700 dark:text-zinc-300">
+              <span>摘要时区</span>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  value={digestTimeZone}
+                  aria-label="摘要时区"
+                  onChange={(event) => {
+                    setDigestTimeZone(event.target.value);
+                    markNotificationDirty();
+                  }}
+                  disabled={!notificationPrefsReady || !dailyDigestEnabled}
+                  placeholder="例如 Asia/Shanghai"
+                  className="h-10 min-w-0 flex-1 rounded-lg border border-zinc-300 px-3 text-sm outline-none transition focus:border-zinc-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-600 dark:bg-zinc-700 dark:text-zinc-100"
+                />
+                <button
+                  type="button"
+                  onClick={handleUseBrowserTimeZone}
+                  disabled={!notificationPrefsReady || !dailyDigestEnabled}
+                  className="rounded-lg border border-zinc-300 px-3 py-2 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-600 dark:text-zinc-300"
+                >
+                  使用浏览器时区
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-zinc-50 px-3 py-3 text-xs text-zinc-600 dark:bg-zinc-900/60 dark:text-zinc-300">
+            {!notificationPrefsReady ? (
+              <span className="mb-1 block text-zinc-500 dark:text-zinc-400">
+                正在加载当前邮箱源的通知设置...
+              </span>
+            ) : null}
+            {digestScheduleSummary}
+            {notificationPrefs?.updatedAt ? (
+              <span className="mt-1 block text-zinc-400 dark:text-zinc-500">
+                最近更新：{new Date(notificationPrefs.updatedAt).toLocaleString(locale === "zh" ? "zh-CN" : "en-US")}
+              </span>
+            ) : null}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleSaveNotificationSettings}
+              disabled={!activeSourceId || !notificationPrefsReady || isSavingNotifications || !notificationDirty}
+              className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-700"
+            >
+              {isSavingNotifications ? <LoadingSpinner size="sm" /> : null}
+              保存通知设置
+            </button>
+            <button
+              type="button"
+              onClick={handleResetNotificationSettings}
+              disabled={!notificationPrefsReady || !notificationDirty}
+              className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-600 dark:text-zinc-300"
+            >
+              撤销未保存更改
+            </button>
+            <button
+              type="button"
+              onClick={handleEnableDesktopNotifications}
+              disabled={!notificationPrefsReady || desktopPermission === "granted" || desktopPermission === "unsupported"}
+              className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-600 dark:text-zinc-300"
+            >
+              开启桌面提醒
+            </button>
+          </div>
+        </div>
       </section>
 
       {/* 错误和成功提示 */}
@@ -365,6 +698,16 @@ export function SettingsView() {
       {sourceInfo && (
         <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-600 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-400">
           {sourceInfo}
+        </div>
+      )}
+      {notificationInfo && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-600 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-400">
+          {notificationInfo}
+        </div>
+      )}
+      {notificationError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
+          {notificationError}
         </div>
       )}
       {error && (

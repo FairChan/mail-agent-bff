@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_d1wmpo",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABhsxA1wAAAA==",
+  "subject": "High error rate for completionsapi-gpt-5-nano",
+  "personId": "PER_001008",
+  "eventId": "EVT_001059",
+  "importanceScore": 0.6,
+  "urgencyScore": 0.5,
+  "scoreScale": "ratio",
+  "quadrant": "not_urgent_important",
+  "summary": "OpenAI报告completionsapi-gpt-5-nano端点出现高错误率，已确认问题并正在实施缓解措施，APIs Chat Completions服务性能降级。",
+  "receivedAt": "2026-04-02T07:41:42.000Z",
+  "processedAt": "2026-04-18T05:20:42.748Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABhsxA1wAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

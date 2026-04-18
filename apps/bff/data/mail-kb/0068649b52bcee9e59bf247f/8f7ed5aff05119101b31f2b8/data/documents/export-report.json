@@ -1,0 +1,20 @@
+{
+  "exportedAt": "2026-04-18T05:37:29.161Z",
+  "userId": "c14d27a3-0a53-4db8-8a45-c6b73c7dce9e",
+  "sourceId": "mem_outlook-ssemaster-outloo_e1702e",
+  "mailCount": 185,
+  "eventCount": 82,
+  "personCount": 51,
+  "files": [
+    "/Users/fairchan/Desktop/mail-agent-bff/apps/bff/data/mail-kb/0068649b52bcee9e59bf247f/8f7ed5aff05119101b31f2b8/data/documents/mail-ids.md",
+    "/Users/fairchan/Desktop/mail-agent-bff/apps/bff/data/mail-kb/0068649b52bcee9e59bf247f/8f7ed5aff05119101b31f2b8/data/documents/mail-subject-index.md",
+    "/Users/fairchan/Desktop/mail-agent-bff/apps/bff/data/mail-kb/0068649b52bcee9e59bf247f/8f7ed5aff05119101b31f2b8/data/documents/mail-score-index.md",
+    "/Users/fairchan/Desktop/mail-agent-bff/apps/bff/data/mail-kb/0068649b52bcee9e59bf247f/8f7ed5aff05119101b31f2b8/data/documents/mail-summaries.md",
+    "/Users/fairchan/Desktop/mail-agent-bff/apps/bff/data/mail-kb/0068649b52bcee9e59bf247f/8f7ed5aff05119101b31f2b8/data/documents/event-clusters.md",
+    "/Users/fairchan/Desktop/mail-agent-bff/apps/bff/data/mail-kb/0068649b52bcee9e59bf247f/8f7ed5aff05119101b31f2b8/data/documents/sender-profiles.md",
+    "/Users/fairchan/Desktop/mail-agent-bff/apps/bff/data/mail-kb/0068649b52bcee9e59bf247f/8f7ed5aff05119101b31f2b8/data/documents/baseline-status.json",
+    "/Users/fairchan/Desktop/mail-agent-bff/apps/bff/data/mail-kb/0068649b52bcee9e59bf247f/8f7ed5aff05119101b31f2b8/data/mails/index.json",
+    "/Users/fairchan/Desktop/mail-agent-bff/apps/bff/data/mail-kb/0068649b52bcee9e59bf247f/8f7ed5aff05119101b31f2b8/data/events/index.json",
+    "/Users/fairchan/Desktop/mail-agent-bff/apps/bff/data/mail-kb/0068649b52bcee9e59bf247f/8f7ed5aff05119101b31f2b8/data/persons/index.json"
+  ]
+}

@@ -55,12 +55,14 @@ export interface TriggerMailSummaryInput {
   sessionKey: string;
   logger: FastifyBaseLogger;
   limit?: number;
+  windowDays?: number;
 }
 
 const knowledgeBaseJobs = new Map<string, KnowledgeBaseJob>();
 const MAX_JOB_LOGS = 800;
 const MAX_JOBS = 200;
 const JOB_TTL_MS = 24 * 60 * 60 * 1000; // 24小时自动清理
+const DEFAULT_BACKFILL_LIMIT = 250;
 
 function generateJobId(): string {
   const now = Date.now();
@@ -127,14 +129,15 @@ function enforceJobLimit(): void {
 }
 
 async function runKnowledgeBaseJob(jobId: string, input: TriggerMailSummaryInput): Promise<void> {
-  const { userId, sourceId, sourceContext, sessionKey, logger, limit } = input;
+  const { userId, sourceId, sourceContext, sessionKey, logger, limit, windowDays } = input;
   const job = getJobOrThrow(jobId);
+  const resolvedWindowDays = Number.isFinite(windowDays) ? Math.max(1, Math.min(90, Math.floor(Number(windowDays)))) : 30;
 
   job.status = "running";
   job.startedAt = new Date().toISOString();
   job.progress = {
     phase: "fetch",
-    message: "任务启动，准备拉取近30天邮件...",
+    message: `任务启动，准备拉取近 ${resolvedWindowDays} 天邮件...`,
     processed: 0,
     total: 0,
   };
@@ -166,7 +169,7 @@ async function runKnowledgeBaseJob(jobId: string, input: TriggerMailSummaryInput
       sessionKey,
       logger,
       limit,
-      { onProgress }
+      { onProgress, windowDays: resolvedWindowDays }
     );
 
     const liveJob = getJobOrThrow(jobId);
@@ -187,6 +190,8 @@ async function runKnowledgeBaseJob(jobId: string, input: TriggerMailSummaryInput
       userId,
       sourceId,
       logger,
+      backfillCompleted: true,
+      note: "旧有邮件信息已完成归档，可直接用于问答检索。",
       logProgress: (level, message) => {
         const currentJob = getJobOrThrow(jobId);
         pushJobLog(currentJob, level, message, { phase: "export" });
@@ -230,6 +235,18 @@ async function runKnowledgeBaseJob(jobId: string, input: TriggerMailSummaryInput
 export async function triggerMailSummary(
   input: TriggerMailSummaryInput
 ): Promise<{ jobId: string }> {
+  const runningJob = Array.from(knowledgeBaseJobs.values())
+    .filter(
+      (job) =>
+        job.userId === input.userId &&
+        job.sourceId === input.sourceId &&
+        (job.status === "pending" || job.status === "running")
+    )
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())[0];
+  if (runningJob) {
+    return { jobId: runningJob.jobId };
+  }
+
   const jobId = generateJobId();
   const now = new Date().toISOString();
   const job: KnowledgeBaseJob = {
@@ -258,7 +275,10 @@ export async function triggerMailSummary(
 
   knowledgeBaseJobs.set(jobId, job);
   queueMicrotask(() => {
-    void runKnowledgeBaseJob(jobId, input);
+    void runKnowledgeBaseJob(jobId, {
+      ...input,
+      limit: input.limit ?? DEFAULT_BACKFILL_LIMIT,
+    });
   });
   enforceJobLimit();
   return { jobId };
@@ -275,4 +295,13 @@ export function listKnowledgeBaseJobs(userId: string): KnowledgeBaseJob[] {
   return Array.from(knowledgeBaseJobs.values())
     .filter((job) => job.userId === userId)
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+}
+
+export function getLatestKnowledgeBaseJob(
+  userId: string,
+  sourceId: string
+): KnowledgeBaseJob | undefined {
+  return Array.from(knowledgeBaseJobs.values())
+    .filter((job) => job.userId === userId && job.sourceId === sourceId)
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())[0];
 }

@@ -118,6 +118,15 @@
 - Added robust unauthorized-session cleanup and detail-request race protection (latest-only sequence gate).
 - Expanded CSS for quadrant board, mail cards, detail view, and responsive behavior.
 - Updated docs to M2 scope and new API contract.
+
+### 2026-04-17T21:42:39+08:00
+
+- Scope: Frontend audit of mailbox historical knowledge-base feature in `apps/webui`.
+- Task type: `Non-code`
+- Main notes:
+- Reviewed `MailKBSummaryModal`, `AgentWorkspaceWindow`, `useAgentConversation`, `MailContext`, `KnowledgeBaseView`, and `MailsListPanel` against current BFF contracts.
+- Validation: `./node_modules/.bin/tsc -p apps/webui/tsconfig.json --noEmit`
+- Audit: N/A (no code changes)
 - Validation completed:
 - `npm run check` and `npm run build` passed.
 - Runtime integration tested via curl: login -> triage -> message detail -> unauthorized on deprecated/invalid route.
@@ -198,12 +207,28 @@
 - Extended auth-epoch stale-response protection to tool invoke and agent query requests.
 - Updated docs (`README.md`) to include invalid `tz` behavior and explicit `horizonDays` semantics.
 - Added `zod` dependency to `apps/webui/package.json` for runtime validation.
-- Validation completed:
-- `npm run check` passed.
-- `npm run build` passed.
-- Runtime smoke tests passed: login, insights success (`tz=America/Los_Angeles`), invalid `tz` returns `400`, logout-without-cookie returns `200`.
+
+### 2026-04-17T21:05:00+08:00
+
+- Scope: Inspect frontend/webui architecture for a legacy-email summarization visualization window, focusing on settings/dashboard/agent-window insertion points.
+- Task type: `Non-code`
+- Main changes:
+- Traced the current standalone window pattern in the WebUI app shell and URL-param routing.
+- Mapped the existing knowledge-base trigger, progress modal, SSE stream, and stored-output dashboard surfaces.
+- Compared the frontend job-progress assumptions with the current Prisma-backed BFF job model and persistence boundaries.
+- Produced recommended insertion points and noted the main architectural risks for later job/result resurfacing.
 - Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
-- Audit evidence location: `/root/m4_code_audit`.
+
+### 2026-04-17T21:05:00+08:00 - Backend knowledge-base audit
+
+- Scope: Audit backend changes for the mailbox historical knowledge-base feature in `apps/bff/src/server.ts`, `apps/bff/src/agent/mail-skills.ts`, `apps/bff/src/agent/mastra-runtime.ts`, `apps/bff/src/summary.ts`, `apps/bff/src/mail-kb-store.ts`, `apps/bff/src/knowledge-base-service.ts`, and `apps/bff/src/mail-kb-export.ts`.
+- Task type: `Non-code`
+- Main changes:
+- Reviewed the knowledge-base job flow, export path, search path, and SSE job stream for correctness and privacy regressions.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes)
+- Final fixes after audit:
+- Not applicable.
 - Initial audit reported `High=2` (unbounded/weakly-cleaned `sessions` and `loginAttempts`).
 - Applied fixes and re-audited: final status `Critical=0`, `High=0`.
 - Remaining deferred items (`Medium/Low`) with rationale:
@@ -4025,6 +4050,31 @@ cp .env.example .env
 - Audit evidence summary: independent merge-resolution review found no Critical, High, Medium, or Low findings.
 - Final audit status: Critical 0, High 0, Medium 0, Low 0.
 
+- Timestamp: 2026-04-17T21:49:28+08:00
+- Task: Re-audit backend fixes in `apps/bff/src/server.ts`, `apps/bff/src/mail-kb-export.ts`, `apps/bff/src/knowledge-base-service.ts`, and `apps/bff/src/summary.ts`.
+- Task type: `Non-code`
+- Outcome: No Critical/High findings.
+- Validation: `npm --workspace apps/bff run check` passed.
+- Audit: N/A (no code changes)
+
+## 2026-04-17T21:48:55+08:00
+
+- Scope: Re-audit frontend fixes in `apps/webui/src/components/dashboard/MailKBSummaryModal.tsx` and `apps/webui/src/components/dashboard/knowledgebase/MailsListPanel.tsx`.
+- Task type: `Non-code`
+- Main updates:
+- Reviewed the diff and the surrounding BFF knowledge-base job/stat endpoints for contract drift.
+- Audit: N/A (no code changes).
+- Result: No Critical/High findings.
+
+## 2026-04-17T21:48:55+08:00
+
+- Scope: Re-audit frontend fixes in `apps/webui/src/components/dashboard/MailKBSummaryModal.tsx` and `apps/webui/src/components/dashboard/knowledgebase/MailsListPanel.tsx`.
+- Task type: `Non-code`
+- Main updates:
+- Reviewed the diff and the surrounding BFF knowledge-base job/stat endpoints for contract drift.
+- Audit: N/A (no code changes).
+- Result: No Critical/High findings.
+
 ### 2026-04-17T13:34:21+08:00
 
 - Scope: Deploy the merged latest local web app and verify the main runtime flow.
@@ -4096,3 +4146,475 @@ cp .env.example .env
 - BFF `/health` continued to report `llm.ok=true` with model `Pro/zai-org/GLM-5.1`.
 - Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
 - Audit: N/A (no code changes).
+
+### 2026-04-17T18:13:59+08:00
+
+- Scope: Verify and complete live Harness runtime support for lightweight local skills, hooks, file-backed memory, and mailbox-access integration.
+- Task type: `Code`
+- Main updates:
+- Confirmed requirement status from the active server path:
+  - lightweight OpenClaw-style local skill loading was `Partial`,
+  - hook + memory on the live runtime was `Partial`,
+  - mailbox content access was already `Completed`.
+- Wired the live `MastraRuntime` to load relevant workspace `skills/*/SKILL.md` entries through `SkillRegistry` and inject them into agent instructions.
+- Wired the live `MastraRuntime` to use the shared file-backed memory store and hook engine for `before_context_load`, tool lifecycle, model lifecycle, response capture, and error capture.
+- Added a shared default file-memory store so the runtime and API routes use the same backing store.
+- Made `rememberPreference` write to file memory first and treat Prisma as a best-effort mirror, with explicit fallback behavior when Prisma is disabled or initialization fails.
+- Made `/api/agent/memory` and `/api/agent/memory/recent` use file memory as the primary store and merge database records when present.
+- Hardened local skill discovery so a missing `skills/` directory returns an empty skill set instead of crashing the runtime.
+- Validation completed:
+- `npm --workspace apps/bff run check` passed.
+- `npm --workspace apps/bff run build` passed.
+- `git diff --check` passed.
+- `npm run harness:semantic` passed with pre-existing safeParse warnings outside this task's change set.
+- Local runtime probe confirmed:
+  - workspace skills loaded successfully,
+  - `MastraRuntime.listSkills()` exposed local skills including `email-reader`,
+  - file memory append/recall worked,
+  - `rememberPreference` returned `storage=file` without Prisma.
+- Local API probe confirmed:
+  - local admin login succeeded,
+  - a fallback in-memory Microsoft mail source could be created,
+  - `GET /api/agent/skills` returned local skills including `email-reader`,
+  - `POST /api/agent/memory` returned `storage=file`,
+  - `GET /api/agent/memory/recent` returned the stored probe note from file memory.
+- BFF was rebuilt and restarted locally on `http://127.0.0.1:8787`.
+- Existing WebUI remained reachable on `http://localhost:5173`.
+- `curl -sS http://127.0.0.1:8787/health` still returned degraded overall health because local Prisma and Microsoft OAuth are not enabled, while `llm.ok=true` remained healthy.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit evidence location: `.harness/audit/2026-04-17-agent-runtime-skill-hook-memory-audit.md`.
+- Audit evidence agent: `Laplace` (`019d9a8d-e6b9-7092-884b-57188fdd9d39`), Codex sub-agent.
+- Initial audit: Critical 0, High 0, Medium 1, Low 1.
+- Audit-driven fixes:
+  - converged runtime/API memory behavior onto file memory as the primary store,
+  - changed Prisma usage to best-effort mirroring instead of required primary persistence,
+  - added fallback handling when Prisma initialization throws.
+- Recheck audit result: no Critical, High, Medium, or Low findings.
+- Final audit status: Critical 0, High 0, Medium 0, Low 0.
+
+### 2026-04-17T20:19:42+08:00
+
+- Scope: Add a standalone full-page mail agent window so the user can directly chat with the live mailbox agent in a dedicated browser window.
+- Task type: `Code`
+- Main updates:
+- Added top-level `?window=agent` app mode in `apps/webui/src/App.tsx` so the WebUI can render a dedicated agent workspace without adding a separate router dependency.
+- Added `apps/webui/src/utils/agentWindow.ts` for building, opening, and maintaining standalone agent-window URLs with optional mailbox source selection.
+- Added shared agent chat state in `apps/webui/src/components/agent/useAgentConversation.ts`, including SSE parsing, assistant delta assembly, final-answer hydration, thread continuity, cancel/reset, and tool-activity tracking.
+- Added `apps/webui/src/components/agent/AgentWorkspaceWindow.tsx` with:
+- mailbox source selection,
+- source verification,
+- capability loading from `/api/agent/skills`,
+- suggested prompts,
+- transcript history,
+- dedicated message composer, and
+- live tool activity sidebar.
+- Updated the floating `AgentChatPanel` to reuse the shared conversation hook and expose `Pop Out` / `Agent Window` entrypoints into the standalone workspace.
+- Added a dashboard header button so the standalone agent window can be opened directly from the main app shell.
+- Expanded Playwright smoke coverage to verify `/?window=agent` loads and to assert the authenticated standalone workspace chrome under mocked mailbox state.
+- Audit-driven fixes after the first review:
+- cleared stale draft text when switching mailbox source or starting a new thread,
+- hydrated the assistant bubble from the final SSE answer when no deltas arrive,
+- restored compact-panel tool-progress feedback, and
+- strengthened smoke coverage to exercise the authenticated standalone window path.
+- Validation completed:
+- `npm --workspace apps/webui run build` passed.
+- `npm run harness:smoke` passed with 5/5 tests.
+- `git diff --check` passed.
+- `curl -sS http://127.0.0.1:8787/health` returned degraded overall health because local Prisma and Microsoft OAuth are still not fully enabled, while `llm.ok=true` remained healthy.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit evidence location: `.harness/audit/2026-04-17-agent-window-audit.md`.
+- Audit evidence agents:
+- `Russell` (`019d9b03-eee8-7f82-9794-93ead1a48737`) reported one Medium and one Low finding on draft-reset and smoke coverage.
+- `Galileo` (`019d9b09-75f2-7560-9ef8-d1e51ae77381`) reported two Medium and one Low finding on final-answer hydration, standalone-window smoke realism, and compact-panel progress feedback.
+- Audit-driven fixes:
+- cleared draft state on source/thread reset,
+- backfilled empty assistant messages from final SSE answers,
+- restored compact panel activity feedback, and
+- reworked smoke coverage to mock authenticated standalone-window dependencies.
+- Final re-audit agent: `Helmholtz` (`019d9b07-3702-76a2-af3c-d2cda04fd762`).
+- Final audit status: Critical 0, High 0, Medium 0, Low 0.
+
+### 2026-04-17T21:51:50+08:00
+
+- Scope: Build the historical-mail knowledge-base pipeline so the agent can summarize the last 30 days of email, persist mail/event/person records, export docs, and show live processing progress in the UI.
+- Task type: `Code`
+- Main updates:
+- Switched KB APIs in `apps/bff/src/server.ts` from the old Prisma-only path to the new tenant-isolated file-backed KB store and in-memory job service.
+- Added or wired file-backed KB persistence and exports for mail IDs, subject index, score index, mail summaries, event clusters, and sender profiles.
+- Added agent tools in `apps/bff/src/agent/mail-skills.ts` for historical backfill trigger, KB readiness/status, and historical KB search.
+- Updated `apps/bff/src/agent/mastra-runtime.ts` instructions so the agent knows when to trigger historical backfill and when to search the persisted KB.
+- Added agent-window support for KB job tracking via `apps/webui/src/components/agent/useAgentConversation.ts` and `apps/webui/src/components/agent/AgentWorkspaceWindow.tsx`.
+- Reworked `apps/webui/src/components/dashboard/MailKBSummaryModal.tsx` so it can safely merge initial job snapshots with SSE progress/logs and stay pinned to the correct mailbox source.
+- Updated `apps/webui/src/contexts/MailContext.tsx` to accept both top-level and nested KB API response envelopes.
+- Kept KB list/detail UI compatible with both `0-1` and legacy `1-10` score data in `apps/webui/src/components/dashboard/knowledgebase/MailsListPanel.tsx`.
+- Audit-driven fixes:
+- blocked manual export while a KB backfill is still running,
+- prevented premature `backfillCompleted=true` writes,
+- removed absolute file-path leakage from export responses,
+- expanded historical KB search beyond the newest 500 records,
+- sanitized Markdown-exported content,
+- pinned modal stats to the job source,
+- reconciled snapshot/SSE log updates safely,
+- restored backward-compatible score formatting,
+- added an explicit failure phase badge, and
+- refreshed event/sender context between analysis batches.
+- Validation completed:
+- `npm --workspace apps/bff run check` passed.
+- `npm --workspace apps/webui run check` passed.
+- `npm --workspace apps/bff run build` passed.
+- `npm --workspace apps/webui run build` passed.
+- `npm run harness:smoke` passed with `5/5`.
+- `git diff --check` passed.
+- Local runtime status:
+- BFF health endpoint on `http://127.0.0.1:8787/health` responds and reports `llm.ok=true`.
+- WebUI dev server remains accessible on `http://127.0.0.1:4173`.
+- Sub-agent audit findings:
+- Audit evidence location: `.harness/audit/2026-04-17-mail-kb-history-audit.md`.
+- Initial backend auditor: `Beauvoir` (`019d9bac-8c00-77f1-9e8b-f25a53858e99`).
+- Initial frontend auditor: `Socrates` (`019d9bac-8c21-7b52-91c5-60c1085c9993`).
+- Re-audit backend auditor: `Galileo` (`019d9bb3-064f-7160-b924-afe35acee8a4`).
+- Re-audit frontend auditor: `Volta` (`019d9bb3-067c-77c1-a276-d92ed921186b`).
+- Final audit status: Critical `0`, High `0`, Medium `0`, Low `0`.
+
+### 2026-04-17T23:07:48+08:00
+
+- Scope: Design the next product changes needed to complete the full mail AI assistant feature set, including core mail ingestion/classification, notifications, daily digests, calendar sync, personalization, semantic search, auto-reply, multi-account/channel adaptation, knowledge cards, and dashboards.
+- Task type: `Non-code`
+- Output: produced a staged product and engineering roadmap with feature modules, priority order, dependencies, and acceptance criteria for the next implementation marathon.
+- Audit: N/A (no code changes requested for this design task).
+
+### 2026-04-17T23:20:00+08:00
+
+- Scope: Independent review of the Eisenhower matrix fix batch, focusing on unknown quadrant handling, legacy score display, and smoke coverage.
+- Task type: `Non-code`
+- Main changes:
+- Reviewed `apps/webui/src/components/dashboard/knowledgebase/EisenhowerMatrixPanel.tsx`, `MailsListPanel.tsx`, `quadrants.ts`, `apps/bff/src/mail-kb-store.ts`, and the smoke test coverage without editing business logic.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes)
+- Final fixes after audit:
+- Not applicable.
+
+### 2026-04-17T23:27:02+08:00
+
+- Scope: Final short review of `apps/webui/src/components/dashboard/knowledgebase/quadrants.ts`, `apps/bff/src/mail-kb-store.ts`, and `apps/bff/src/mail-kb-export.ts`.
+- Task type: `Non-code`
+- Main changes:
+- Read-only verification only; no code changes.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes)
+- Final fixes after audit:
+- Not applicable.
+
+### 2026-04-17T23:27:32+08:00
+
+- Scope: Add the Eisenhower four-quadrant matrix to the mail knowledge-base overview and harden score/quadrant handling for legacy KB data.
+- Task type: `Code`
+- Main updates:
+- Added a full `EisenhowerMatrixPanel` that groups KB mails into urgent-important, important-not-urgent, urgent-not-important, and low-priority quadrants with counts, top mails, and a detail pane.
+- Centralized quadrant labels, visual metadata, score normalization, and runtime quadrant fallback in `apps/webui/src/components/dashboard/knowledgebase/quadrants.ts`.
+- Updated the knowledge-base overview, stats card, and mail list to reuse the shared quadrant helpers.
+- Changed mail-list rows to keyboard-reachable buttons.
+- Added optional `scoreScale` to shared KB mail and score-index types.
+- Hardened the BFF file-backed KB store so read paths normalize unknown quadrants and synthesize score scales for project-owned KB records.
+- Updated KB score exports to include explicit score-scale labels instead of assuming raw values are always `0-1`.
+- Expanded Playwright smoke coverage to cover the matrix, unknown quadrant fallback, and legacy `1-10` score display.
+- Validation completed:
+- `npm --workspace apps/webui run check` passed.
+- `npm --workspace apps/bff run check` passed.
+- `npm --workspace apps/webui run build` passed.
+- `npm --workspace apps/bff run build` passed.
+- `npm run harness:smoke` passed with `6/6`.
+- `git diff --check` passed.
+- Sub-agent audit findings:
+- Audit evidence location: `.harness/audit/2026-04-17-eisenhower-matrix-audit.md`.
+- Initial auditor: `Heisenberg` (`019d9c01-4496-7d70-97b9-98a62e39b32e`) found one High, one Medium, and two Low issues.
+- Follow-up auditor: `Chandrasekhar` (`019d9c05-a1fc-7422-a070-243d2cbe601b`) confirmed the High was fixed and reported one remaining Medium plus one Low.
+- Final auditor: `Parfit` (`019d9c0d-6ae4-7892-8793-5fc4ab610128`) reported Critical `0`, High `0`, Medium `0`, Low `0`.
+- Final audit status: deliverable.
+
+### 2026-04-17T23:41:10+08:00
+
+- Scope: Final read-only review of the previous audit closure items for inbox processing, API partial results, context reset behavior, and smoke coverage.
+- Task type: `Non-code`
+- Main changes:
+- Read-only verification only; no code changes.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes)
+- Final fixes after audit:
+- Not applicable.
+
+### 2026-04-17T23:41:15+08:00
+
+- Scope: Add a new-mail processing workbench and aggregate processing API that ties together KB update, urgent notification detection, daily digest output, and calendar draft extraction.
+- Task type: `Code`
+- Main updates:
+- Added `POST /api/mail/processing/run` to `apps/bff/src/server.ts`.
+- The processing API runs the KB update through `summarizeMailInbox`, reuses notification polling for urgent/digest state, returns triage counts, and extracts calendar-ready drafts from mail insights.
+- The API now returns partial results with warnings when notification, triage fallback, or insights stages fail after KB work has already succeeded.
+- Added shared `MailProcessingRunResult` to `packages/shared-types/src/index.ts`.
+- Added processing state and `runMailProcessing()` to `MailContext`.
+- Added an Inbox workbench panel with an immediate processing button, status cards, partial-result warning display, and urgent-item previews.
+- Expanded Playwright smoke coverage to click the new processing button and verify the returned result appears.
+- Audit-driven fixes:
+- Removed post-processing `fetchTriage()` / `fetchInsights()` calls to avoid multiplying real mailbox reads.
+- Reused notification-poll triage counts on the happy path.
+- Cleared stale processing results on source switch, processing start, and processing failure.
+- Validation completed:
+- `npm --workspace apps/webui run check` passed.
+- `npm --workspace apps/bff run check` passed.
+- `npm --workspace apps/webui run build` passed.
+- `npm --workspace apps/bff run build` passed.
+- `npm run harness:smoke` passed with `7/7`.
+- `git diff --check` passed.
+- `npm run check:standard` passed with `HARNESS_STANDARD_OK`.
+- Sub-agent audit findings:
+- Audit evidence location: `.harness/audit/2026-04-17-mail-processing-workbench-audit.md`.
+- Initial auditor: `Ohm` (`019d9c14-abbf-73b3-825c-bbff624cabe3`) found one High, two Medium, and one Low issue.
+- Final auditor: `Hume` (`019d9c19-beb7-7550-a57d-cedd465cf06c`) reported Critical `0`, High `0`, Medium `0`, Low `0`.
+- Final audit status: deliverable.
+
+### 2026-04-18T00:26:25+08:00
+
+- Scope: Wire the existing notification polling APIs into the WebUI header so the app surfaces urgent mail and daily digests in-app.
+- Task type: `Code`
+- Main updates:
+- Added shared notification result/state types to `packages/shared-types/src/index.ts` and reused them in the mail-processing result shape.
+- Extended `MailContext` with source-aware notification preference parsing, notification snapshot state, manual polling, and stale-source guards for late responses.
+- Rebuilt `apps/webui/src/components/notification/NotificationCenter.tsx` into a real urgent/digest popover with empty/loading states and refresh support.
+- Wired the notification center into `apps/webui/src/components/layout/Header.tsx` so active-source changes and manual refreshes trigger notification polling.
+- Updated the WebUI API client/re-exports to understand the real notification response envelope.
+- Expanded Playwright smoke mocks to match the backend contract, verify notification poll query parameters, and assert that urgent items plus the daily digest render in the header popover.
+- Validation completed:
+- `npm --workspace packages/shared-types run typecheck` passed.
+- `npm --workspace apps/webui run check` passed.
+- `npm --workspace apps/bff run check` passed.
+- `npm --workspace apps/webui run build` passed.
+- `npm --workspace apps/bff run build` passed.
+- `npm run harness:smoke` passed with `8/8`.
+- `git diff --check` passed.
+- `npm run check:standard` passed with `HARNESS_STANDARD_OK`.
+- Sub-agent audit findings:
+- Audit evidence location: `.harness/audit/2026-04-18-notification-center-audit.md`.
+- Final auditor: `Bernoulli` (`019d9c43-8821-7761-9e2c-94af5a0df736`) reported Critical `0`, High `0`, Medium `0`, Low `0`.
+- Final audit status: deliverable.
+
+### 2026-04-18T00:42:53+08:00
+
+- Scope: Turn the in-app notification entry into a realtime notification loop and let the new-mail workbench confirm calendar drafts directly into Outlook.
+- Task type: `Code`
+- Main updates:
+- Added reusable calendar-draft and batch-sync shared types in `packages/shared-types/src/index.ts`.
+- Extended `MailContext` with source-safe notification stream state, SSE subscription/fallback polling, silent fallback on stream failure, and chunked batch calendar sync for `calendarDrafts`.
+- Stopped calendar-sync failures from forcing the whole Inbox into the global error screen.
+- Upgraded the header notification UX with realtime connection status, optional desktop-notification enablement, and browser-level urgent/daily-digest notifications with local dedupe.
+- Upgraded the new-mail processing workbench so `calendarDrafts` render as an actionable confirmation list with per-item sync, batch sync, and direct jump to the calendar view.
+- Expanded Playwright smoke coverage with a mocked notification SSE source and a batch calendar-sync happy-path assertion.
+- Validation completed:
+- `npm --workspace packages/shared-types run typecheck` passed.
+- `npm --workspace apps/webui run check` passed.
+- `npm --workspace apps/bff run check` passed.
+- `npm --workspace apps/webui run build` passed.
+- `npm --workspace apps/bff run build` passed.
+- `npm run harness:smoke` passed with `8/8`.
+- `git diff --check` passed.
+- `npm run check:standard` passed with `HARNESS_STANDARD_OK`.
+- Sub-agent audit findings:
+- Audit evidence location: `.harness/audit/2026-04-18-realtime-notification-calendar-loop-audit.md`.
+- Final auditor: `Maxwell` (`019d9c52-528f-7fe3-8a57-b9c0faf30d9e`) reported Critical `0`, High `0`, Medium `0`, Low `0`.
+- Final audit status: deliverable.
+
+### 2026-04-18T01:17:12+08:00
+
+- Scope: Make notification settings truly source-aware in the settings page, harden source-switch behavior, and close the daily-digest scheduling loop with source-bound smoke coverage.
+- Task type: `Code`
+- Main updates:
+- Extended `apps/webui/src/components/dashboard/SettingsView.tsx` so notification controls reset on source changes, stay disabled until the current source preferences load, and surface a loading hint while source-scoped settings hydrate.
+- Tightened `apps/webui/src/contexts/MailContext.tsx` so late notification-preference responses are ignored whenever the active source no longer matches the in-flight request.
+- Expanded `apps/webui/e2e/smoke.spec.ts` with per-source notification preference state, strict `sourceId` assertions for preference fetch/save requests, and a regression test proving notification settings stay isolated across two mailbox sources.
+- Validation completed:
+- `npm --workspace packages/shared-types run typecheck` passed.
+- `npm --workspace apps/webui run check` passed.
+- `npm --workspace apps/bff run check` passed.
+- `npm --workspace apps/webui run build` passed.
+- `npm --workspace apps/bff run build` passed.
+- `npm run harness:smoke` passed with `10/10`.
+- `git diff --check` passed.
+- `npm run check:standard` passed with `HARNESS_STANDARD_OK`.
+- Sub-agent audit findings:
+- Audit evidence location: `.harness/audit/2026-04-18-notification-settings-digest-schedule-audit.md`.
+- Initial auditors: `Huygens` (`019d9c67-8f70-7861-b981-8be58afc0218`) and `Einstein` (`019d9c6e-3eb4-7860-bf4a-f0542845c087`) surfaced stale-source and source-bound notification coverage issues; both were fixed.
+- Final auditor: `Arendt` (`019d9c71-c05d-75a1-b980-3f869b766eee`) reported Critical `0`, High `0`, Medium `0`, Low `0`.
+- Final audit status: deliverable.
+
+### 2026-04-18T12:32:36+08:00
+
+- Scope: Review the current product state, summarize what is already implemented, and identify the biggest remaining gaps for the mail agent roadmap.
+- Task type: `Non-code`
+- Main updates:
+- Reviewed recent delivery records and current workspace capabilities around Outlook direct auth, historical KB, agent chat window, realtime notifications, calendar sync, Eisenhower matrix, and notification settings.
+- Produced a concrete status map for the user covering completed features, partially completed flows, and major product areas that still need implementation or production hardening.
+- Audit: `N/A (no code changes)`
+- Final status: deliverable.
+# 2026-04-18T13:18:04+08:00
+
+## Non-code Inspection
+
+- Inspected WebUI navigation and quadrant behavior for the agent window and inbox triage flow.
+- Audit: N/A (no code changes)
+# 2026-04-18T12:32:00+08:00
+
+- Task: Inspected the old-mail knowledge-base summary pipeline, persistence, agent access, and WebUI KB surfaces.
+- Scope: `apps/bff/src/server.ts`, `apps/bff/src/mail-kb-export.ts`, `apps/bff/src/summary.ts`, `apps/bff/src/agent/mail-skills.ts`, and relevant WebUI KB files.
+- Audit: N/A (no code changes)
+
+### 2026-04-18T15:09:23+08:00
+
+- 2026-04-18T15:36:29+08:00
+- Task: Independent audit of latest frontend KB documents-tab delta covering `ArtifactsLibraryPanel`, `KnowledgeBaseView`, and smoke coverage for the doc-preview flow.
+- Task type: `Non-code`
+- Audit: N/A (no code changes)
+
+- Scope: Fix onboarding/tutorial flow, Outlook direct-auth UX, summary speed, unprocessed mailbox quadrant handling, Agent navigation, and local KB artifact access for historical mail.
+- Task type: `Code`
+- Main updates:
+- Persisted `APP_ENCRYPTION_KEY` in the local ignored `apps/bff/.env` so BFF restarts do not depend on an injected one-off secret.
+- Sped up historical mailbox summarization by shrinking body slices, lowering completion budget, forcing terse JSON output, and parallelizing lightweight summary batches on the server path.
+- Removed the floating `Open Agent` widget from the main app, added `Agent Window` to the left navigation, and embedded the full agent workspace in the right pane.
+- Added an explicit `unprocessed` quadrant through shared types, BFF KB/triage normalization, inbox/stats/knowledge-base UI, and matrix layout so mail that has not gone through the agent no longer defaults to `不紧急不重要`.
+- Improved Outlook direct auth by giving the popup message handshake more time, delaying close-failure reporting, optimistic source activation after callback, and background routing verification so mail surfaces appear faster after connect.
+- Added KB artifact endpoints and tutorial/onboarding UI that guides mailbox binding, history-range selection, local artifact visibility, and future agent access to local summary documents.
+- Tightened tutorial auto-open behavior to trigger once per authenticated session after hydration, and expanded smoke coverage to validate the first-login tutorial path plus new KB tutorial dependencies.
+- Validation completed:
+- `npm run test:e2e -- e2e/smoke.spec.ts` passed with `11/11`.
+- `npm run check:standard` passed with `HARNESS_STANDARD_OK`.
+- Sub-agent audit findings:
+- Audit evidence location: `.harness/audit/2026-04-18-onboarding-outlook-unprocessed-audit.md`.
+- Initial backend audit (`McClintock`, `019d9f06-02bf-7513-bbc2-3bee697e8a3d`) raised one secret-handling concern; it was verified as a false positive because `apps/bff/.env` is git-ignored and untracked.
+- Initial frontend audit (`Maxwell`, `019d9f06-031b-7802-ab18-a0516eb70658`) raised tutorial redirect and smoke coverage gaps; both were fixed.
+- Final re-audits from `McClintock` and `Maxwell` reported `No findings`.
+- Final audit status: deliverable.
+
+## 2026-04-18T15:41:43+08:00
+
+- Scope: Re-audit the knowledge-base documents tab delta covering `ArtifactsLibraryPanel`, `KnowledgeBaseView`, and the smoke test updates for preview switching and artifact-read failures.
+- Task type: `Non-code`
+- Validation completed:
+- Reviewed `apps/webui/src/components/dashboard/knowledgebase/ArtifactsLibraryPanel.tsx`.
+- Reviewed `apps/webui/src/components/dashboard/knowledgebase/KnowledgeBaseView.tsx`.
+- Reviewed `apps/webui/e2e/smoke.spec.ts`.
+- Audit: `N/A (no code changes)`
+
+## 2026-04-18T15:43:39+08:00
+
+- Scope: Final re-audit of the latest documents-tab frontend delta after refresh-token wiring, read-failure preview messaging, and expanded smoke assertions.
+- Task type: `Non-code`
+- Validation completed:
+- Re-reviewed `apps/webui/src/components/dashboard/knowledgebase/ArtifactsLibraryPanel.tsx`.
+- Re-reviewed `apps/webui/src/components/dashboard/knowledgebase/KnowledgeBaseView.tsx`.
+- Re-reviewed `apps/webui/e2e/smoke.spec.ts`.
+- Audit: `N/A (no code changes)`
+
+## 2026-04-18T15:46:23+08:00
+
+- Scope: Final follow-up re-audit of the latest documents-tab frontend fixes covering refresh-token preview reloads, renamed tab-local refresh affordance, and smoke assertions for refresh plus failed-read states.
+- Task type: `Non-code`
+- Validation completed:
+- Re-reviewed `apps/webui/src/components/dashboard/knowledgebase/ArtifactsLibraryPanel.tsx`.
+- Re-reviewed `apps/webui/src/components/dashboard/knowledgebase/KnowledgeBaseView.tsx`.
+- Re-reviewed `apps/webui/e2e/smoke.spec.ts`.
+- Audit: `N/A (no code changes)`
+
+## 2026-04-18T15:48:05+08:00
+
+- Scope: Final re-audit of the latest documents-tab delta after adding `handleRefreshArtifacts` and expanded smoke coverage for both top-level and tab-local refresh controls.
+- Task type: `Non-code`
+- Validation completed:
+- Re-reviewed `apps/webui/src/components/dashboard/knowledgebase/ArtifactsLibraryPanel.tsx`.
+- Re-reviewed `apps/webui/src/components/dashboard/knowledgebase/KnowledgeBaseView.tsx`.
+- Re-reviewed `apps/webui/e2e/smoke.spec.ts`.
+- Audit: `N/A (no code changes)`
+
+## 2026-04-18T16:08:30+08:00
+
+- Scope: Independent audit of the latest delta touching the documents-tab UI, smoke coverage, and provider-specific `enable_thinking` handling in the BFF.
+- Task type: `Non-code`
+- Validation completed:
+- Reviewed `apps/webui/src/components/dashboard/knowledgebase/ArtifactsLibraryPanel.tsx`.
+- Reviewed `apps/webui/src/components/dashboard/knowledgebase/KnowledgeBaseView.tsx`.
+- Reviewed `apps/webui/e2e/smoke.spec.ts`.
+- Reviewed `apps/bff/src/agent/llm-gateway.ts`.
+- Reviewed `apps/bff/src/summary.ts`.
+- Reviewed `apps/bff/src/server.ts`.
+- Audit: `N/A (no code changes)`
+
+## 2026-04-18T16:26:11+08:00
+
+- Scope: Independent frontend/test audit of source-pinned KB requests, artifact stale-response guards, tutorial artifact loading, and overlapping refresh coverage.
+- Task type: `Non-code`
+- Validation completed:
+- Reviewed `apps/webui/src/components/dashboard/knowledgebase/ArtifactsLibraryPanel.tsx`.
+- Reviewed `apps/webui/src/components/dashboard/knowledgebase/KnowledgeBaseView.tsx`.
+- Reviewed `apps/webui/src/components/dashboard/TutorialView.tsx`.
+- Reviewed `apps/webui/src/contexts/MailContext.tsx`.
+- Reviewed `apps/webui/e2e/smoke.spec.ts`.
+- Ran targeted smoke coverage: `npm run harness:smoke -- --grep 'document|tutorial'` (`4 passed`).
+- Audit: `N/A (no code changes)`
+
+## 2026-04-18T16:30:13+08:00
+
+- Scope: Independent frontend/test audit of `ArtifactsLibraryPanel`, `KnowledgeBaseView`, `TutorialView`, `MailContext`, and `smoke.spec`.
+- Task type: `Non-code`
+- Validation completed:
+- Reviewed `apps/webui/src/components/dashboard/knowledgebase/ArtifactsLibraryPanel.tsx`.
+- Reviewed `apps/webui/src/components/dashboard/knowledgebase/KnowledgeBaseView.tsx`.
+- Reviewed `apps/webui/src/components/dashboard/TutorialView.tsx`.
+- Reviewed `apps/webui/src/contexts/MailContext.tsx`.
+- Reviewed `apps/webui/e2e/smoke.spec.ts`.
+- Audit: `N/A (no code changes)`
+
+## 2026-04-18T16:31:09+08:00
+
+- Scope: Independent backend audit of `apps/bff/src/server.ts`, `apps/bff/src/summary.ts`, and `apps/bff/src/agent/llm-gateway.ts`.
+- Task type: `Non-code`
+- Validation completed:
+- Reviewed `apps/bff/src/server.ts`.
+- Reviewed `apps/bff/src/summary.ts`.
+- Reviewed `apps/bff/src/agent/llm-gateway.ts`.
+- Audit: `N/A (no code changes)`
+
+## 2026-04-18T16:35:00+08:00
+
+- Scope: Final frontend audit of `MailContext`, KB document panels, tutorial flow, and smoke coverage.
+- Task type: `Non-code`
+- Validation completed:
+- Reviewed `apps/webui/src/contexts/MailContext.tsx`.
+- Reviewed `apps/webui/src/components/dashboard/knowledgebase/ArtifactsLibraryPanel.tsx`.
+- Reviewed `apps/webui/src/components/dashboard/knowledgebase/KnowledgeBaseView.tsx`.
+- Reviewed `apps/webui/src/components/dashboard/TutorialView.tsx`.
+- Reviewed `apps/webui/e2e/smoke.spec.ts`.
+- Audit: `N/A (no code changes)`
+
+## 2026-04-18T17:03:56+08:00
+
+- Scope: Continued the KB/source-pinned documents and onboarding work after user interruption; fixed the remaining audit findings around LLM routing, KB artifact export status, file-backed KB availability, source-switch stale state, tutorial/document artifact races, and source-list stale responses.
+- Task type: `Code`
+- Implementation completed:
+- Historical KB summarization and single-mail summarization now route through `LlmGatewayService`, so source/user LLM routes and usage accounting apply.
+- `/api/mail/processing/run` refreshes exported KB artifacts after summarization and reports artifact-export failures as a partial processing result instead of a silent success.
+- File-backed KB read/export endpoints no longer require live mailbox routing readiness; only the backfill trigger requires a routable mailbox.
+- WebUI KB state clears immediately on mailbox source changes, KB/document requests are source-pinned, tutorial/document artifact loaders reject stale responses, and overlapping document-refresh smoke coverage is deterministic.
+- `fetchSources()` now ignores stale source-list responses, preventing older source fetches from rolling the active mailbox backward.
+- Validation completed:
+- `npm run check` in `apps/bff` passed.
+- `npm run check` in `apps/webui` passed.
+- `npm run test:e2e -- e2e/smoke.spec.ts` in `apps/webui` passed (`14 passed`).
+- `git diff --check` passed.
+- Audit: independent sub-agent audit performed; returned Critical/High findings were fixed. Final backend re-audit reported `No findings`; final frontend clean re-audit was blocked by Codex usage quota after the last Medium finding was fixed. Evidence: `.harness/audit/2026-04-18-kb-source-pinned-docs-audit.md`.
+
+## 2026-04-18T17:07:33+08:00
+
+- Scope: Explained what `prisma.ok=false` means in the local `/health` response and how it affects the current app.
+- Task type: `Non-code`
+- Validation completed:
+- Checked BFF Prisma configuration references including `PRISMA_AUTH_ENABLED`, `DATABASE_URL`, `getPrismaClient()`, and health reporting paths.
+- Audit: `N/A (no code changes)`

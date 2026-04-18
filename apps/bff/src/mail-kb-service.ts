@@ -22,6 +22,7 @@ const PERSONS_DIR = join(KB_DATA_DIR, "persons");
 // ========== Zod Schemas ==========
 
 export const mailQuadrantSchema = z.enum([
+  "unprocessed",
   "urgent_important",
   "not_urgent_important",
   "urgent_not_important",
@@ -376,6 +377,7 @@ class MailKnowledgeBase {
 
   getStats() {
     const quadrantCounts: Record<MailQuadrantKB, number> = {
+      unprocessed: 0,
       urgent_important: 0,
       not_urgent_important: 0,
       urgent_not_important: 0,

@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_6z5e8o",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABjvyjhgAAAA==",
+  "subject": "Account Creation Issues",
+  "personId": "PER_001008",
+  "eventId": "EVT_001020",
+  "importanceScore": 0.6,
+  "urgencyScore": 0.2,
+  "scoreScale": "ratio",
+  "quadrant": "not_urgent_important",
+  "summary": "OpenAI账户创建问题已解决，受影响的APIs、ChatGPT和Sora登录服务均已恢复正常运行，无需进一步操作。",
+  "receivedAt": "2026-04-14T17:16:30.000Z",
+  "processedAt": "2026-04-18T04:54:35.825Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABjvyjhgAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

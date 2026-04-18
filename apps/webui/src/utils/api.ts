@@ -12,6 +12,10 @@ import type {
   MailDetailResponse,
   MailPriorityRule,
   NotificationPreferences,
+  MailNotificationPreferencesResult,
+  MailNotificationPollResult,
+  MailCalendarDraft,
+  MailCalendarBatchSyncResult,
   KnowledgeBaseStats,
   EventCluster,
   PersonProfile,
@@ -28,6 +32,16 @@ export type ApiResponse<T> = {
 export type ResultEnvelope<T> = ApiResponse<T> & {
   result: T;
 };
+
+function extractNotificationPreferences(
+  result: NotificationPreferences | MailNotificationPreferencesResult
+): NotificationPreferences {
+  if ("preferences" in result) {
+    return result.preferences;
+  }
+
+  return result;
+}
 
 // ========== API 客户端类 ==========
 
@@ -272,6 +286,31 @@ class ApiClient {
     });
   }
 
+  async syncCalendarBatch(
+    items: MailCalendarDraft[],
+    sourceId?: string
+  ): Promise<MailCalendarBatchSyncResult> {
+    const data = await this.request<ResultEnvelope<MailCalendarBatchSyncResult>>(
+      "/mail/calendar/sync/batch",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ...(sourceId ? { sourceId } : {}),
+          items: items.map((item) => ({
+            messageId: item.messageId,
+            subject: item.subject,
+            type: item.type,
+            dueAt: item.dueAt,
+            dueDateLabel: item.dueDateLabel,
+            evidence: item.evidence,
+            timeZone: item.timeZone,
+          })),
+        }),
+      }
+    );
+    return data.result;
+  }
+
   async deleteCalendarEvent(eventId: string): Promise<void> {
     await this.request("/mail/calendar/delete", {
       method: "POST",
@@ -315,10 +354,12 @@ class ApiClient {
   // ========== 通知偏好 API ==========
 
   async getNotificationPrefs(): Promise<NotificationPreferences> {
-    const data = await this.request<ResultEnvelope<NotificationPreferences>>(
+    const data = await this.request<
+      ResultEnvelope<NotificationPreferences | MailNotificationPreferencesResult>
+    >(
       "/mail/notifications/preferences"
     );
-    return data.result;
+    return extractNotificationPreferences(data.result);
   }
 
   async updateNotificationPrefs(
@@ -328,6 +369,30 @@ class ApiClient {
       method: "POST",
       body: JSON.stringify(prefs),
     });
+  }
+
+  async pollNotifications(
+    options: {
+      sourceId?: string;
+      limit?: number;
+      horizonDays?: number;
+      tz?: string;
+    } = {}
+  ): Promise<MailNotificationPollResult> {
+    const params = new URLSearchParams();
+    if (options.sourceId) {
+      params.set("sourceId", options.sourceId);
+    }
+    params.set("limit", String(options.limit ?? 40));
+    params.set("horizonDays", String(options.horizonDays ?? 7));
+    if (options.tz) {
+      params.set("tz", options.tz);
+    }
+
+    const data = await this.request<ResultEnvelope<MailNotificationPollResult>>(
+      `/mail/notifications/poll?${params.toString()}`
+    );
+    return data.result;
   }
 
   // ========== Composio Outlook 授权 API ==========

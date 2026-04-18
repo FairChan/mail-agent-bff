@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_1mwosfp",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEXAAAAuwy7MzosG06pVDL2vfy8mAABhsy2IAAAAA==",
+  "subject": "Did You Forget Something?",
+  "personId": "PER_001024",
+  "eventId": "EVT_001027",
+  "importanceScore": 0.2,
+  "urgencyScore": 0.3,
+  "scoreScale": "ratio",
+  "quadrant": "not_urgent_not_important",
+  "summary": "SEAGM平台发送购物车未结账提醒，通知用户有一笔TNG Reload Pin（MYR 10）订单尚未完成支付。邮件以轻松语气催促用户完成付款并重新加入购物乐趣，同时提供在线客服支持。属于常规电商挽回邮件。",
+  "receivedAt": "2026-04-05T16:42:01.000Z",
+  "processedAt": "2026-04-18T05:14:23.342Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEXAAAAuwy7MzosG06pVDL2vfy8mAABhsy2IAAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

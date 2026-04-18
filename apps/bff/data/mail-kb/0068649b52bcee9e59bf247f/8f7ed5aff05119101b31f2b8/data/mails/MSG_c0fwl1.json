@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_c0fwl1",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABjvyjegAAAA==",
+  "subject": "Elevated 401 errors for API endpoints",
+  "personId": "PER_001008",
+  "eventId": "EVT_001024",
+  "importanceScore": 0.8,
+  "urgencyScore": 0.7,
+  "scoreScale": "ratio",
+  "quadrant": "urgent_important",
+  "summary": "OpenAI更新API端点401错误事件状态，确认间歇性错误由超时引起，已应用缓解措施降低影响。",
+  "receivedAt": "2026-04-13T20:18:03.000Z",
+  "processedAt": "2026-04-18T04:58:33.305Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABjvyjegAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

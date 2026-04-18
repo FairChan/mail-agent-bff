@@ -6,10 +6,13 @@
 // ========== 枚举和常量 ==========
 
 export type MailQuadrant =
+  | "unprocessed"
   | "urgent_important"
   | "not_urgent_important"
   | "urgent_not_important"
   | "not_urgent_not_important";
+
+export type MailScoreScale = "ratio" | "ten";
 
 export type MailInsightType = "ddl" | "meeting" | "exam" | "event";
 
@@ -26,7 +29,15 @@ export type MailQaIntent =
 
 export type AiSummaryLocale = "zh-CN" | "en-US" | "ja-JP";
 
-export type ViewKey = "inbox" | "allmail" | "stats" | "calendar" | "knowledgebase" | "settings";
+export type ViewKey =
+  | "tutorial"
+  | "inbox"
+  | "allmail"
+  | "agent"
+  | "stats"
+  | "calendar"
+  | "knowledgebase"
+  | "settings";
 
 export type AuthLocale = "zh" | "en" | "ja";
 
@@ -195,6 +206,10 @@ export type MailCalendarSyncInput = {
   timeZone?: string;
 };
 
+export type MailCalendarDraft = MailCalendarSyncInput & {
+  confidence?: number;
+};
+
 export type MailCalendarSyncResponse = {
   eventId: string;
   eventSubject: string;
@@ -213,6 +228,34 @@ export type MailCalendarDeleteResponse = {
   eventId: string;
   deleted: boolean;
   alreadyDeleted: boolean;
+};
+
+export type MailCalendarBatchSyncResult = {
+  sourceId: string;
+  total: number;
+  createdCount: number;
+  deduplicatedCount: number;
+  failedCount: number;
+  items: Array<
+    | {
+        key: string;
+        messageId: string;
+        type: MailInsightType;
+        dueAt: string;
+        ok: true;
+        deduplicated: boolean;
+        verified?: boolean;
+        result: MailCalendarSyncResponse;
+      }
+    | {
+        key: string;
+        messageId: string;
+        type: MailInsightType;
+        dueAt: string;
+        ok: false;
+        error: string;
+      }
+  >;
 };
 
 // ========== 邮件问答相关 ==========
@@ -287,6 +330,7 @@ export type MailKnowledgeRecord = {
   eventId: string | null;
   importanceScore: number;
   urgencyScore: number;
+  scoreScale?: MailScoreScale;
   quadrant: MailQuadrant;
   summary: string;
   receivedAt: string;
@@ -326,6 +370,7 @@ export type MailScoreIndex = {
   mailId: string;
   importanceScore: number;
   urgencyScore: number;
+  scoreScale?: MailScoreScale;
   quadrant: MailQuadrant;
   timestamp: string;
 };
@@ -410,6 +455,10 @@ export type CalendarDeleteEnvelope = ApiResponse<{
   result: MailCalendarDeleteResponse;
 }>;
 
+export type CalendarBatchSyncEnvelope = ApiResponse<{
+  result: MailCalendarBatchSyncResult;
+}>;
+
 export type OutlookLaunchEnvelope = ApiResponse<{
   status: "active" | "initiated" | "failed";
   hasActiveConnection: boolean;
@@ -433,11 +482,111 @@ export type NotificationPreferences = {
   digestHour: number;
   digestMinute: number;
   digestTimeZone: string;
+  updatedAt?: string;
+};
+
+export type NotificationStateView = {
+  seenUrgentCount: number;
+  lastDigestDateKey: string | null;
+  lastDigestSentAt: string | null;
+};
+
+export type MailNotificationPreferencesResult = {
+  sourceId: string;
+  preferences: NotificationPreferences;
+  state: NotificationStateView;
+};
+
+export type MailNotificationUrgentItem = {
+  messageId: string;
+  subject: string;
+  fromName: string;
+  fromAddress: string;
+  receivedDateTime: string;
+  webLink: string;
+  reasons: string[];
+};
+
+export type MailDailyDigestNotification = {
+  triggeredAt: string;
+  dateKey: string;
+  timeZone: string;
+  digest: {
+    date: string;
+    total: number;
+    unread: number;
+    urgentImportant: number;
+    highImportance: number;
+    upcomingCount: number;
+    tomorrowDdlCount: number;
+  };
+  tomorrowDdl: Array<{
+    messageId: string;
+    subject: string;
+    dueDateLabel: string;
+  }>;
+  upcoming: Array<{
+    messageId: string;
+    subject: string;
+    type: MailInsightType;
+    dueDateLabel: string;
+  }>;
+};
+
+export type MailNotificationPollResult = MailNotificationPreferencesResult & {
+  generatedAt: string;
+  triage: {
+    total: number;
+    counts: Record<MailQuadrant, number>;
+  };
+  urgent: {
+    totalUrgentImportant: number;
+    newItems: MailNotificationUrgentItem[];
+  };
+  dailyDigest: MailDailyDigestNotification | null;
+};
+
+export type MailProcessingRunResult = {
+  status: "completed" | "partial";
+  warnings: string[];
+  sourceId: string;
+  startedAt: string;
+  completedAt: string;
+  limit: number;
+  horizonDays: number;
+  timeZone: string;
+  knowledgeBase: {
+    status: "completed" | "failed";
+    processedCount: number;
+    newMailCount: number;
+    updatedMailCount: number;
+    newEventCount: number;
+    updatedEventCount: number;
+    newSenderCount: number;
+    updatedSenderCount: number;
+    errors: string[];
+  };
+  triage: {
+    total: number;
+    counts: Record<MailQuadrant, number>;
+  };
+  urgent: {
+    totalUrgentImportant: number;
+    newItems: MailNotificationUrgentItem[];
+  };
+  dailyDigest: MailDailyDigestNotification | null;
+  calendarDrafts: MailCalendarDraft[];
 };
 
 // ========== UI 相关常量 ==========
 
 export const quadrantMeta: Record<MailQuadrant, { tone: string; badge: string; bgClass: string; textClass: string }> = {
+  unprocessed: {
+    tone: "text-violet-700",
+    badge: "bg-violet-50 text-violet-700 ring-violet-200",
+    bgClass: "bg-violet-500",
+    textClass: "text-violet-600",
+  },
   urgent_important: {
     tone: "text-red-700",
     badge: "bg-red-50 text-red-700 ring-red-200",
@@ -466,18 +615,21 @@ export const quadrantMeta: Record<MailQuadrant, { tone: string; badge: string; b
 
 export const quadrantLabelsByLocale: Record<AuthLocale, Record<MailQuadrant, string>> = {
   zh: {
+    unprocessed: "未处理",
     urgent_important: "紧急重要",
     not_urgent_important: "不紧急重要",
     urgent_not_important: "紧急不重要",
     not_urgent_not_important: "不紧急不重要",
   },
   en: {
+    unprocessed: "Unprocessed",
     urgent_important: "Urgent & Important",
     not_urgent_important: "Important",
     urgent_not_important: "Urgent",
     not_urgent_not_important: "Later",
   },
   ja: {
+    unprocessed: "未処理",
     urgent_important: "緊急・重要",
     not_urgent_important: "重要",
     urgent_not_important: "緊急",
@@ -493,8 +645,10 @@ export const insightTypeLabels: Record<MailInsightType, string> = {
 };
 
 export const viewItems: Array<{ key: ViewKey }> = [
+  { key: "tutorial" },
   { key: "inbox" },
   { key: "allmail" },
+  { key: "agent" },
   { key: "stats" },
   { key: "calendar" },
   { key: "knowledgebase" },
@@ -503,24 +657,30 @@ export const viewItems: Array<{ key: ViewKey }> = [
 
 export const viewLabelsByLocale: Record<AuthLocale, Record<ViewKey, { label: string; short: string }>> = {
   zh: {
+    tutorial: { label: "教程", short: "教程" },
     inbox: { label: "收件箱", short: "主页" },
     allmail: { label: "邮件历史", short: "历史" },
+    agent: { label: "Agent Window", short: "Agent" },
     stats: { label: "统计", short: "统计" },
     calendar: { label: "日历", short: "日历" },
     knowledgebase: { label: "知识库", short: "知识库" },
     settings: { label: "设置", short: "设置" },
   },
   en: {
+    tutorial: { label: "Tutorial", short: "Guide" },
     inbox: { label: "Inbox", short: "Home" },
     allmail: { label: "Mail History", short: "History" },
+    agent: { label: "Agent Window", short: "Agent" },
     stats: { label: "Stats", short: "Stats" },
     calendar: { label: "Calendar", short: "Cal" },
     knowledgebase: { label: "Knowledge Base", short: "KB" },
     settings: { label: "Settings", short: "Settings" },
   },
   ja: {
+    tutorial: { label: "チュートリアル", short: "ガイド" },
     inbox: { label: "受信箱", short: "ホーム" },
     allmail: { label: "メール履歴", short: "履歴" },
+    agent: { label: "Agent Window", short: "Agent" },
     stats: { label: "統計", short: "統計" },
     calendar: { label: "カレンダー", short: "予定" },
     knowledgebase: { label: "ナレッジベース", short: "知識" },
@@ -532,19 +692,23 @@ export const viewLabelsByLocale: Record<AuthLocale, Record<ViewKey, { label: str
 
 export function getQuadrantPriority(quadrant: MailQuadrant): number {
   switch (quadrant) {
-    case "urgent_important":
+    case "unprocessed":
       return 0;
-    case "not_urgent_important":
+    case "urgent_important":
       return 1;
-    case "urgent_not_important":
+    case "not_urgent_important":
       return 2;
-    case "not_urgent_not_important":
+    case "urgent_not_important":
       return 3;
+    case "not_urgent_not_important":
+      return 4;
   }
 }
 
 export function getQuadrantColor(quadrant: MailQuadrant): { bg: string; border: string; text: string } {
   switch (quadrant) {
+    case "unprocessed":
+      return { bg: "bg-violet-50", border: "border-violet-200", text: "text-violet-700" };
     case "urgent_important":
       return { bg: "bg-red-50", border: "border-red-200", text: "text-red-700" };
     case "not_urgent_important":

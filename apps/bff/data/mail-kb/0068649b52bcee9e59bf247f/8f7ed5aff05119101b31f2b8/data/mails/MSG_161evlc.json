@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_161evlc",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABhc-wxAAAAA==",
+  "subject": "Your Dub Login Link",
+  "personId": "PER_001068",
+  "eventId": "EVT_001071",
+  "importanceScore": 0.5,
+  "urgencyScore": 0.6,
+  "scoreScale": "ratio",
+  "quadrant": "urgent_not_important",
+  "summary": "Dub.co平台发送登录验证链接（magic link），用户可通过点击链接或复制URL至浏览器登录partners.dub.co账户。邮件发送至ssemaster@outlook.com，若非本人操作可忽略。",
+  "receivedAt": "2026-03-30T01:36:16.000Z",
+  "processedAt": "2026-04-18T05:24:30.431Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABhc%2FwxAAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_2l4hco",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABhsxA3QAAAA==",
+  "subject": "您最近的 Steam 交易",
+  "personId": "PER_001001",
+  "eventId": "EVT_001021",
+  "importanceScore": 0.9,
+  "urgencyScore": 0.9,
+  "scoreScale": "ratio",
+  "quadrant": "urgent_important",
+  "summary": "Steam账户交易通知，显示与用户“超薄也是距离”进行交易，账户失去一件物品且未收到任何物品。邮件提示若非本人操作需立即撤销交易，可能存在账户被盗风险。",
+  "receivedAt": "2026-04-02T14:21:24.000Z",
+  "processedAt": "2026-04-18T05:19:30.797Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABhsxA3QAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

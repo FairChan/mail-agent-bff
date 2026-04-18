@@ -715,14 +715,43 @@ export async function listMicrosoftInboxMessages(
   limit: number,
   userId?: string
 ): Promise<MicrosoftMessage[]> {
-  const top = Math.max(5, Math.min(limit, 100));
+  return listMicrosoftInboxMessagesPage(sessionToken, accountId, {
+    top: limit,
+    userId,
+  });
+}
+
+export async function listMicrosoftInboxMessagesPage(
+  sessionToken: string,
+  accountId: string,
+  options: {
+    top: number;
+    skip?: number;
+    receivedAfter?: string;
+    userId?: string;
+  }
+): Promise<MicrosoftMessage[]> {
+  const top = Math.max(5, Math.min(options.top, 100));
+  const skip = Math.max(0, Math.trunc(options.skip ?? 0));
+  const queryParts = [
+    `$top=${top}`,
+    `$orderby=receivedDateTime%20desc`,
+    `$select=id,subject,from,bodyPreview,receivedDateTime,importance,isRead,hasAttachments,webLink`,
+  ];
+  if (skip > 0) {
+    queryParts.push(`$skip=${skip}`);
+  }
+  if (options.receivedAfter?.trim()) {
+    const iso = new Date(options.receivedAfter).toISOString();
+    queryParts.push(`$filter=${encodeURIComponent(`receivedDateTime ge ${iso}`)}`);
+  }
   const payload = await requestMicrosoftGraphJson(
     sessionToken,
     accountId,
-    `/me/messages?$top=${top}&$orderby=receivedDateTime%20desc&$select=id,subject,from,bodyPreview,receivedDateTime,importance,isRead,hasAttachments,webLink`,
+    `/me/messages?${queryParts.join("&")}`,
     { method: "GET" },
     undefined,
-    userId
+    options.userId
   );
   return parseBoundary(microsoftMessageListSchema, payload, "Microsoft inbox list response").value;
 }

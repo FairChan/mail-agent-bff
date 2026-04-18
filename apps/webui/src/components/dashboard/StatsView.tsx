@@ -15,6 +15,7 @@ export function StatsView() {
   const quadrantLabels = viewLabelsByLocale[locale];
 
   const counts = useMemo(() => triage?.counts ?? {
+    unprocessed: 0,
     urgent_important: 0,
     not_urgent_important: 0,
     urgent_not_important: 0,
@@ -57,7 +58,7 @@ export function StatsView() {
 
   const labels = {
     classification: locale === "zh" ? "邮件分类统计" : locale === "ja" ? "メールの分類統計" : "Classification Stats",
-    classificationDesc: locale === "zh" ? "按四象限矩阵统计邮件分布" : locale === "ja" ? "4象限マトリックスでメールの分布を統計" : "Mail distribution by Eisenhower matrix",
+    classificationDesc: locale === "zh" ? "按未处理队列与艾森豪威尔矩阵统计邮件分布" : locale === "ja" ? "未処理キューとアイゼンハワーマトリクスでメール分布を集計" : "Mail distribution across the pending queue and Eisenhower matrix",
     topSenders: locale === "zh" ? "高频发件人" : locale === "ja" ? "上位送信者" : "Top Senders",
     metrics: locale === "zh" ? "关键指标" : locale === "ja" ? "主要指標" : "Key Metrics",
     totalMail: locale === "zh" ? "总邮件数" : locale === "ja" ? "総メール数" : "Total Emails",
@@ -91,6 +92,8 @@ export function StatsView() {
                 <div
                   className={`h-2 rounded-full transition-all duration-500 ${row.key === "urgent_important"
                       ? "bg-red-500"
+                      : row.key === "unprocessed"
+                        ? "bg-violet-500"
                       : row.key === "not_urgent_important"
                         ? "bg-blue-500"
                         : row.key === "urgent_not_important"

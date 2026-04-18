@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_izufji",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABjvyjhQAAAA==",
+  "subject": "您最近的 Steam 交易",
+  "personId": "PER_001001",
+  "eventId": "EVT_001021",
+  "importanceScore": 0.9,
+  "urgencyScore": 0.9,
+  "scoreScale": "ratio",
+  "quadrant": "urgent_important",
+  "summary": "Steam账户与用户“C0h3mud”完成了一笔交易，账户失去一件物品且未收到任何物品。邮件提醒若非本人操作需立即撤销，可能存在账户被盗风险。",
+  "receivedAt": "2026-04-14T16:57:40.000Z",
+  "processedAt": "2026-04-18T04:54:35.831Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABjvyjhQAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

@@ -197,7 +197,7 @@ export function registerKnowledgeBaseRoutes(server: FastifyInstance, deps: Knowl
       eventId: body.eventId ? String(body.eventId) : null,
       importanceScore: Number(body.importanceScore ?? 5),
       urgencyScore: Number(body.urgencyScore ?? 5),
-      quadrant: (body.quadrant as MailKnowledgeRecord["quadrant"]) ?? "not_urgent_not_important",
+      quadrant: (body.quadrant as MailKnowledgeRecord["quadrant"]) ?? "unprocessed",
       summary: String(body.summary ?? ""),
       receivedAt: String(body.receivedAt ?? new Date().toISOString()),
       processedAt: new Date().toISOString(),

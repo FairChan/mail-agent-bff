@@ -3,11 +3,13 @@
  * 使用 AuthContext 和 MailContext
  */
 
-import React, { useCallback } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../../contexts/AuthContext";
 import { useApp } from "../../contexts/AppContext";
 import { useMail } from "../../contexts/MailContext";
 import { useTheme } from "../../contexts/ThemeContext";
+import { openAgentWindow } from "../../utils/agentWindow";
+import { NotificationCenter } from "../notification";
 import { RefreshIcon } from "../shared/Icons";
 
 interface HeaderProps {
@@ -17,17 +19,103 @@ interface HeaderProps {
 export function Header({ onMenuToggle }: HeaderProps) {
   const { user, logout } = useAuth();
   const { locale, setLocale } = useApp();
-  const { activeSourceId, sources, fetchTriage, fetchInsights, isLoadingMail } = useMail();
-  const { theme, setTheme, resolvedTheme } = useTheme();
+  const {
+    activeSourceId,
+    sources,
+    fetchTriage,
+    fetchInsights,
+    isLoadingMail,
+    notificationSnapshot,
+    isPollingNotifications,
+    notificationStreamStatus,
+    notificationStreamError,
+    pollNotifications,
+  } = useMail();
+  const { setTheme, resolvedTheme } = useTheme();
+  const [desktopPermission, setDesktopPermission] = useState<NotificationPermission | "unsupported">("unsupported");
+  const seenUrgentNotificationKeysRef = useRef<Set<string>>(new Set());
+  const seenDigestNotificationKeysRef = useRef<Set<string>>(new Set());
 
   const activeSource = sources.find((s) => s.id === activeSourceId);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.Notification === "undefined") {
+      setDesktopPermission("unsupported");
+      return;
+    }
+    setDesktopPermission(window.Notification.permission);
+  }, []);
+
+  useEffect(() => {
+    seenUrgentNotificationKeysRef.current.clear();
+    seenDigestNotificationKeysRef.current.clear();
+  }, [activeSourceId]);
+
+  useEffect(() => {
+    if (
+      desktopPermission !== "granted" ||
+      typeof window === "undefined" ||
+      typeof window.Notification === "undefined" ||
+      !notificationSnapshot
+    ) {
+      return;
+    }
+
+    const sourceKey = notificationSnapshot.sourceId;
+    for (const item of notificationSnapshot.urgent.newItems) {
+      const key = `${sourceKey}:${item.messageId}`;
+      if (seenUrgentNotificationKeysRef.current.has(key)) {
+        continue;
+      }
+      seenUrgentNotificationKeysRef.current.add(key);
+      const notification = new window.Notification(`紧急邮件：${item.subject || "无主题邮件"}`, {
+        body: `${item.fromName || item.fromAddress || "未知发件人"}${item.reasons.length ? ` · ${item.reasons.join(" · ")}` : ""}`,
+        tag: `mail-urgent-${key}`,
+      });
+      notification.onclick = () => {
+        if (item.webLink) {
+          window.open(item.webLink, "_blank", "noopener,noreferrer");
+        } else {
+          window.focus();
+        }
+        notification.close();
+      };
+    }
+
+    if (notificationSnapshot.dailyDigest) {
+      const digestKey = `${sourceKey}:${notificationSnapshot.dailyDigest.dateKey}`;
+      if (!seenDigestNotificationKeysRef.current.has(digestKey)) {
+        seenDigestNotificationKeysRef.current.add(digestKey);
+        const { digest } = notificationSnapshot.dailyDigest;
+        const notification = new window.Notification("今日邮件摘要", {
+          body: `${digest.total} 封邮件，${digest.urgentImportant} 封紧急重要，${digest.upcomingCount} 个近期事项`,
+          tag: `mail-digest-${digestKey}`,
+        });
+        notification.onclick = () => {
+          window.focus();
+          notification.close();
+        };
+      }
+    }
+  }, [desktopPermission, notificationSnapshot]);
+
+  const handleEnableDesktopNotifications = useCallback(async () => {
+    if (typeof window === "undefined" || typeof window.Notification === "undefined") {
+      setDesktopPermission("unsupported");
+      return;
+    }
+
+    const permission = await window.Notification.requestPermission();
+    setDesktopPermission(permission);
+  }, []);
 
   const handleRefresh = useCallback(() => {
     if (activeSourceId) {
       fetchTriage(50);
       fetchInsights(50, 7);
+      void pollNotifications(40, 7);
     }
-  }, [activeSourceId, fetchTriage, fetchInsights]);
+  }, [activeSourceId, fetchTriage, fetchInsights, pollNotifications]);
 
   const handleLogout = useCallback(async () => {
     if (confirm("确定要退出登录吗？")) {
@@ -111,17 +199,36 @@ export function Header({ onMenuToggle }: HeaderProps) {
             )}
           </button>
 
+          <NotificationCenter
+            snapshot={notificationSnapshot}
+            loading={isPollingNotifications}
+            sourceReady={Boolean(activeSourceId)}
+            streamStatus={notificationStreamStatus}
+            streamError={notificationStreamError}
+            desktopPermission={desktopPermission}
+            onEnableDesktop={handleEnableDesktopNotifications}
+            onRefresh={() => pollNotifications(40, 7)}
+          />
+
           {/* 刷新按钮 */}
           <button
             type="button"
             onClick={handleRefresh}
-            disabled={isLoadingMail}
+            disabled={isLoadingMail || isPollingNotifications}
             className="inline-flex h-9 items-center justify-center gap-1 rounded-xl border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
           >
-            <span className={isLoadingMail ? "animate-spin" : ""}>
+            <span className={isLoadingMail || isPollingNotifications ? "animate-spin" : ""}>
               <RefreshIcon />
             </span>
             刷新
+          </button>
+
+          <button
+            type="button"
+            onClick={() => openAgentWindow(activeSourceId)}
+            className="inline-flex h-9 items-center justify-center rounded-xl border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+          >
+            Agent 窗口
           </button>
 
           {/* 登出按钮 */}

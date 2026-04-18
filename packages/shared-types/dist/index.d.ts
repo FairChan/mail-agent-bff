@@ -2,13 +2,14 @@
  * Mail Agent 工作台 - 共享类型定义
  * 这些类型在 BFF 和 WebUI 之间共享，确保类型一致性
  */
-export type MailQuadrant = "urgent_important" | "not_urgent_important" | "urgent_not_important" | "not_urgent_not_important";
+export type MailQuadrant = "unprocessed" | "urgent_important" | "not_urgent_important" | "urgent_not_important" | "not_urgent_not_important";
+export type MailScoreScale = "ratio" | "ten";
 export type MailInsightType = "ddl" | "meeting" | "exam" | "event";
 export type MailSourceProvider = "outlook";
 export type MailRoutingCheckStatus = "skipped" | "verified" | "failed" | "unverifiable";
 export type MailQaIntent = "tomorrow_ddl" | "upcoming" | "unread_count" | "urgent_important" | "unknown";
 export type AiSummaryLocale = "zh-CN" | "en-US" | "ja-JP";
-export type ViewKey = "inbox" | "allmail" | "stats" | "calendar" | "knowledgebase" | "settings";
+export type ViewKey = "tutorial" | "inbox" | "allmail" | "agent" | "stats" | "calendar" | "knowledgebase" | "settings";
 export type AuthLocale = "zh" | "en" | "ja";
 export type TriageMailItem = {
     id: string;
@@ -153,6 +154,9 @@ export type MailCalendarSyncInput = {
     evidence?: string;
     timeZone?: string;
 };
+export type MailCalendarDraft = MailCalendarSyncInput & {
+    confidence?: number;
+};
 export type MailCalendarSyncResponse = {
     eventId: string;
     eventSubject: string;
@@ -170,6 +174,30 @@ export type MailCalendarDeleteResponse = {
     eventId: string;
     deleted: boolean;
     alreadyDeleted: boolean;
+};
+export type MailCalendarBatchSyncResult = {
+    sourceId: string;
+    total: number;
+    createdCount: number;
+    deduplicatedCount: number;
+    failedCount: number;
+    items: Array<{
+        key: string;
+        messageId: string;
+        type: MailInsightType;
+        dueAt: string;
+        ok: true;
+        deduplicated: boolean;
+        verified?: boolean;
+        result: MailCalendarSyncResponse;
+    } | {
+        key: string;
+        messageId: string;
+        type: MailInsightType;
+        dueAt: string;
+        ok: false;
+        error: string;
+    }>;
 };
 export type MailQaReference = {
     messageId: string;
@@ -228,6 +256,7 @@ export type MailKnowledgeRecord = {
     eventId: string | null;
     importanceScore: number;
     urgencyScore: number;
+    scoreScale?: MailScoreScale;
     quadrant: MailQuadrant;
     summary: string;
     receivedAt: string;
@@ -263,6 +292,7 @@ export type MailScoreIndex = {
     mailId: string;
     importanceScore: number;
     urgencyScore: number;
+    scoreScale?: MailScoreScale;
     quadrant: MailQuadrant;
     timestamp: string;
 };
@@ -331,6 +361,9 @@ export type CalendarDeleteEnvelope = ApiResponse<{
     sourceId: string;
     result: MailCalendarDeleteResponse;
 }>;
+export type CalendarBatchSyncEnvelope = ApiResponse<{
+    result: MailCalendarBatchSyncResult;
+}>;
 export type OutlookLaunchEnvelope = ApiResponse<{
     status: "active" | "initiated" | "failed";
     hasActiveConnection: boolean;
@@ -352,6 +385,94 @@ export type NotificationPreferences = {
     digestHour: number;
     digestMinute: number;
     digestTimeZone: string;
+    updatedAt?: string;
+};
+export type NotificationStateView = {
+    seenUrgentCount: number;
+    lastDigestDateKey: string | null;
+    lastDigestSentAt: string | null;
+};
+export type MailNotificationPreferencesResult = {
+    sourceId: string;
+    preferences: NotificationPreferences;
+    state: NotificationStateView;
+};
+export type MailNotificationUrgentItem = {
+    messageId: string;
+    subject: string;
+    fromName: string;
+    fromAddress: string;
+    receivedDateTime: string;
+    webLink: string;
+    reasons: string[];
+};
+export type MailDailyDigestNotification = {
+    triggeredAt: string;
+    dateKey: string;
+    timeZone: string;
+    digest: {
+        date: string;
+        total: number;
+        unread: number;
+        urgentImportant: number;
+        highImportance: number;
+        upcomingCount: number;
+        tomorrowDdlCount: number;
+    };
+    tomorrowDdl: Array<{
+        messageId: string;
+        subject: string;
+        dueDateLabel: string;
+    }>;
+    upcoming: Array<{
+        messageId: string;
+        subject: string;
+        type: MailInsightType;
+        dueDateLabel: string;
+    }>;
+};
+export type MailNotificationPollResult = MailNotificationPreferencesResult & {
+    generatedAt: string;
+    triage: {
+        total: number;
+        counts: Record<MailQuadrant, number>;
+    };
+    urgent: {
+        totalUrgentImportant: number;
+        newItems: MailNotificationUrgentItem[];
+    };
+    dailyDigest: MailDailyDigestNotification | null;
+};
+export type MailProcessingRunResult = {
+    status: "completed" | "partial";
+    warnings: string[];
+    sourceId: string;
+    startedAt: string;
+    completedAt: string;
+    limit: number;
+    horizonDays: number;
+    timeZone: string;
+    knowledgeBase: {
+        status: "completed" | "failed";
+        processedCount: number;
+        newMailCount: number;
+        updatedMailCount: number;
+        newEventCount: number;
+        updatedEventCount: number;
+        newSenderCount: number;
+        updatedSenderCount: number;
+        errors: string[];
+    };
+    triage: {
+        total: number;
+        counts: Record<MailQuadrant, number>;
+    };
+    urgent: {
+        totalUrgentImportant: number;
+        newItems: MailNotificationUrgentItem[];
+    };
+    dailyDigest: MailDailyDigestNotification | null;
+    calendarDrafts: MailCalendarDraft[];
 };
 export declare const quadrantMeta: Record<MailQuadrant, {
     tone: string;

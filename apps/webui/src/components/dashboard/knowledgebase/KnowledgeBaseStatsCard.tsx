@@ -3,14 +3,8 @@
  * 使用 shared-types
  */
 
-import type { KnowledgeBaseStats, MailQuadrant } from "@mail-agent/shared-types";
-
-const quadrantMeta: Record<MailQuadrant, { label: string; color: string; bg: string }> = {
-  urgent_important: { label: "紧急且重要", color: "text-red-600", bg: "bg-red-50 border-red-200" },
-  not_urgent_important: { label: "重要不紧急", color: "text-blue-600", bg: "bg-blue-50 border-blue-200" },
-  urgent_not_important: { label: "紧急不重要", color: "text-orange-600", bg: "bg-orange-50 border-orange-200" },
-  not_urgent_not_important: { label: "不紧急不重要", color: "text-gray-600", bg: "bg-gray-50 border-gray-200" },
-};
+import type { KnowledgeBaseStats } from "@mail-agent/shared-types";
+import { quadrantMeta, quadrantOrder } from "./quadrants";
 
 interface KnowledgeBaseStatsCardProps {
   stats: KnowledgeBaseStats;
@@ -63,21 +57,21 @@ export function KnowledgeBaseStatsCard({ stats }: KnowledgeBaseStatsCardProps) {
       {/* Quadrant Distribution */}
       <div>
         <h3 className="mb-4 text-lg font-semibold text-zinc-900 dark:text-zinc-100">艾森豪威尔矩阵分布</h3>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {(Object.keys(quadrantMeta) as MailQuadrant[]).map((key) => {
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          {quadrantOrder.map((key) => {
             const meta = quadrantMeta[key];
             const count = stats.quadrantDistribution[key] || 0;
             const percentage = stats.totalMails > 0 ? Math.round((count / stats.totalMails) * 100) : 0;
             return (
-              <div key={key} className={`rounded-xl border p-4 ${meta.bg}`}>
-                <p className={`text-sm font-medium ${meta.color}`}>{meta.label}</p>
+              <div key={key} className={`rounded-xl border p-4 ${meta.panelClass}`}>
+                <p className={`text-sm font-medium ${meta.textClass}`}>{meta.label}</p>
                 <div className="mt-2 flex items-baseline gap-2">
-                  <span className={`text-2xl font-bold ${meta.color}`}>{count}</span>
+                  <span className={`text-2xl font-bold ${meta.textClass}`}>{count}</span>
                   <span className="text-sm text-zinc-500">({percentage}%)</span>
                 </div>
                 <div className="mt-2 h-2 rounded-full bg-white/50">
                   <div
-                    className={`h-2 rounded-full ${meta.color.replace("text-", "bg-")}`}
+                    className={`h-2 rounded-full ${meta.accentClass}`}
                     style={{ width: `${percentage}%` }}
                   />
                 </div>

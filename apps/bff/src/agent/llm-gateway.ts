@@ -33,7 +33,21 @@ export type LlmGatewayGenerateInput = {
   temperature?: number;
   maxTokens?: number;
   responseFormat?: { type: "json_object" | "text" };
+  enableThinking?: boolean;
 };
+
+export function supportsSiliconFlowThinkingSwitch(
+  routeOrBaseUrl: Pick<PlatformLlmRoute, "baseUrl"> | string
+): boolean {
+  const baseUrl =
+    typeof routeOrBaseUrl === "string" ? routeOrBaseUrl : routeOrBaseUrl.baseUrl;
+  try {
+    const hostname = new URL(baseUrl).hostname.toLowerCase();
+    return hostname.endsWith("siliconflow.cn");
+  } catch {
+    return baseUrl.toLowerCase().includes("siliconflow.cn");
+  }
+}
 
 function chatCompletionsUrl(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, "");
@@ -113,6 +127,9 @@ export class LlmGatewayService {
           messages: input.messages,
           temperature: input.temperature ?? 0.2,
           max_tokens: input.maxTokens ?? 800,
+          ...(typeof input.enableThinking === "boolean" && supportsSiliconFlowThinkingSwitch(route)
+            ? { enable_thinking: input.enableThinking }
+            : {}),
           ...(input.responseFormat && input.responseFormat.type !== "text"
             ? { response_format: input.responseFormat }
             : {}),
@@ -185,7 +202,23 @@ export class LlmGatewayService {
         continue;
       }
 
-      const apiKey = row.apiKeyCiphertext ? decryptSecret(row.apiKeyCiphertext) : env.llmProviderApiKey;
+      let apiKey = env.llmProviderApiKey;
+      if (row.apiKeyCiphertext) {
+        try {
+          apiKey = decryptSecret(row.apiKeyCiphertext);
+        } catch (error) {
+          this.logger.warn(
+            {
+              routeId: row.id,
+              userId: tenant.userId,
+              sourceId: tenant.sourceId,
+              message: error instanceof Error ? error.message : String(error),
+            },
+            "Skipping LLM route with unreadable API key ciphertext"
+          );
+          continue;
+        }
+      }
       if (!apiKey) {
         this.logger.warn(
           { routeId: row.id, userId: tenant.userId, sourceId: tenant.sourceId },

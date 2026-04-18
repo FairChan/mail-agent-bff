@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_19qrd41",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABjvyjawAAAA==",
+  "subject": "Elevated 401 errors for API endpoints",
+  "personId": "PER_001008",
+  "eventId": "EVT_001024",
+  "importanceScore": 0.8,
+  "urgencyScore": 0.7,
+  "scoreScale": "ratio",
+  "quadrant": "urgent_important",
+  "summary": "OpenAI API端点401错误事件更新：已应用缓解措施，目前正处于恢复监控阶段。服务尚未完全恢复，需持续关注。",
+  "receivedAt": "2026-04-12T22:33:00.000Z",
+  "processedAt": "2026-04-18T05:02:14.645Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABjvyjawAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

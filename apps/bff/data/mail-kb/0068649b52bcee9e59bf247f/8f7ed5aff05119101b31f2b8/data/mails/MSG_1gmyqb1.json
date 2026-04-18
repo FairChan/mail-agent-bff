@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_1gmyqb1",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABjvyjmwAAAA==",
+  "subject": "[FairChan/mail-agent-bff] Run failed: Load Tests - master (4d8a543)",
+  "personId": "PER_001005",
+  "eventId": "EVT_001005",
+  "importanceScore": 0.9,
+  "urgencyScore": 0.9,
+  "scoreScale": "ratio",
+  "quadrant": "urgent_important",
+  "summary": "GitHub Actions通知，FairChan/mail-agent-bff项目的master分支Load Tests工作流运行失败，k6负载测试在16秒内失败，包含2个注解。",
+  "receivedAt": "2026-04-17T06:07:19.000Z",
+  "processedAt": "2026-04-18T04:47:10.342Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABjvyjmwAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

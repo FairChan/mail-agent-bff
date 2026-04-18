@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_1tjj2vu",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABjST-uwAAAA==",
+  "subject": "Issue with API platform login and account creation",
+  "personId": "PER_001008",
+  "eventId": "EVT_001020",
+  "importanceScore": 0.8,
+  "urgencyScore": 0.8,
+  "scoreScale": "ratio",
+  "quadrant": "urgent_important",
+  "summary": "OpenAI正在调查API平台登录和账户创建问题，目前APIs和Login组件处于性能下降状态，可能影响正常使用。",
+  "receivedAt": "2026-04-10T05:14:12.000Z",
+  "processedAt": "2026-04-18T05:06:49.352Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABjST%2FuwAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

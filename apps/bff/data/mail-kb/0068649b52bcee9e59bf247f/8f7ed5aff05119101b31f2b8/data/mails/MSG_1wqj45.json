@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_1wqj45",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABhsxA8gAAAA==",
+  "subject": "GET /v1/responses endpoint is currently down and unable to serve requests",
+  "personId": "PER_001008",
+  "eventId": "EVT_001048",
+  "importanceScore": 0.7,
+  "urgencyScore": 0.8,
+  "scoreScale": "ratio",
+  "quadrant": "urgent_important",
+  "summary": "OpenAI API的GET /v1/responses端点宕机事件首次报告：新事件，正在调查中。APIs Responses处于部分中断状态。",
+  "receivedAt": "2026-04-06T10:14:39.000Z",
+  "processedAt": "2026-04-18T05:12:09.074Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABhsxA8gAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

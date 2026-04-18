@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_gdmuzk",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABhsxA-wAAAA==",
+  "subject": "Elevated Errors with Login",
+  "personId": "PER_001008",
+  "eventId": "EVT_001020",
+  "importanceScore": 0.6,
+  "urgencyScore": 0.1,
+  "scoreScale": "ratio",
+  "quadrant": "not_urgent_important",
+  "summary": "OpenAI登录错误事件已解决，所有受影响的APIs和ChatGPT登录服务现已完全恢复正常运行，用户可正常使用。",
+  "receivedAt": "2026-04-08T17:49:15.000Z",
+  "processedAt": "2026-04-18T05:09:08.845Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABhsxA%2FwAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

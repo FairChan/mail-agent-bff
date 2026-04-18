@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_1d58j2e",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEXAAAAuwy7MzosG06pVDL2vfy8mAABhsy2JQAAAA==",
+  "subject": "Mery 邮箱验证码",
+  "personId": "PER_001041",
+  "eventId": "EVT_001043",
+  "importanceScore": 0.9,
+  "urgencyScore": 0.9,
+  "scoreScale": "ratio",
+  "quadrant": "urgent_important",
+  "summary": "Mery账号注册验证码邮件，验证码为707159，有效期为30分钟，若非本人操作请忽略。",
+  "receivedAt": "2026-04-08T10:59:10.000Z",
+  "processedAt": "2026-04-18T05:10:16.237Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEXAAAAuwy7MzosG06pVDL2vfy8mAABhsy2JQAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

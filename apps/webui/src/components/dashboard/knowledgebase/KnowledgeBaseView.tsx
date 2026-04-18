@@ -6,17 +6,30 @@
 import { useState, useEffect, useCallback } from "react";
 import { useMail } from "../../../contexts/MailContext";
 import { useApp } from "../../../contexts/AppContext";
+import { EisenhowerMatrixPanel } from "./EisenhowerMatrixPanel";
 import { KnowledgeBaseStatsCard } from "./KnowledgeBaseStatsCard";
 import { MailsListPanel } from "./MailsListPanel";
 import { EventsClusterPanel } from "./EventsClusterPanel";
 import { PersonsProfilePanel } from "./PersonsProfilePanel";
+import { ArtifactsLibraryPanel } from "./ArtifactsLibraryPanel";
 import { LoadingSpinner } from "../../shared/LoadingSpinner";
 import MailKBSummaryModal from "../MailKBSummaryModal";
 
-type TabKey = "overview" | "mails" | "events" | "persons";
+type TabKey = "overview" | "mails" | "events" | "persons" | "documents";
 
 export function KnowledgeBaseView() {
-  const { kbStats, kbMails, kbEvents, kbPersons, fetchKbStats, fetchKbMails, fetchKbEvents, fetchKbPersons, triggerSummarize } = useMail();
+  const {
+    kbStats,
+    kbMails,
+    kbEvents,
+    kbPersons,
+    activeSourceId,
+    fetchKbStats,
+    fetchKbMails,
+    fetchKbEvents,
+    fetchKbPersons,
+    triggerSummarize,
+  } = useMail();
   const { locale } = useApp();
 
   const [activeTab, setActiveTab] = useState<TabKey>("overview");
@@ -24,15 +37,19 @@ export function KnowledgeBaseView() {
   const [showModal, setShowModal] = useState(false);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [isSummarizing, setIsSummarizing] = useState(false);
+  const [artifactsRefreshToken, setArtifactsRefreshToken] = useState(0);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
-    await Promise.all([fetchKbStats(), fetchKbMails(), fetchKbEvents(), fetchKbPersons()]);
-    setLoading(false);
+    try {
+      await Promise.all([fetchKbStats(), fetchKbMails(), fetchKbEvents(), fetchKbPersons()]);
+    } finally {
+      setLoading(false);
+    }
   }, [fetchKbStats, fetchKbMails, fetchKbEvents, fetchKbPersons]);
 
   useEffect(() => {
-    loadAll();
+    void loadAll();
   }, [loadAll]);
 
   const handleSummarize = async () => {
@@ -54,6 +71,7 @@ export function KnowledgeBaseView() {
     setShowModal(false);
     setCurrentJobId(null);
     void loadAll();
+    setArtifactsRefreshToken((value) => value + 1);
   };
 
   const labels = {
@@ -62,9 +80,10 @@ export function KnowledgeBaseView() {
     mails: locale === "zh" ? "邮件" : locale === "ja" ? "メール" : "Mails",
     events: locale === "zh" ? "事件" : locale === "ja" ? "イベント" : "Events",
     persons: locale === "zh" ? "联系人" : locale === "ja" ? "連絡先" : "Persons",
+    documents: locale === "zh" ? "文档" : locale === "ja" ? "ドキュメント" : "Documents",
     loading: locale === "zh" ? "加载中..." : locale === "ja" ? "読み込み中..." : "Loading...",
     refresh: locale === "zh" ? "刷新" : locale === "ja" ? "更新" : "Refresh",
-    triggerSummarize: locale === "zh" ? "归纳邮件" : locale === "ja" ? "メールを要約" : "Summarize Mails",
+    triggerSummarize: locale === "zh" ? "归纳旧邮件" : locale === "ja" ? "過去メールを要約" : "Summarize Historical Mail",
   };
 
   const tabs: { key: TabKey; label: string; count?: number }[] = [
@@ -72,6 +91,7 @@ export function KnowledgeBaseView() {
     { key: "mails", label: labels.mails, count: kbStats?.totalMails },
     { key: "events", label: labels.events, count: kbStats?.totalEvents },
     { key: "persons", label: labels.persons, count: kbStats?.totalPersons },
+    { key: "documents", label: labels.documents },
   ];
 
   return (
@@ -84,7 +104,10 @@ export function KnowledgeBaseView() {
           </h1>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => void loadAll()}
+              onClick={() => {
+                void loadAll();
+                setArtifactsRefreshToken((value) => value + 1);
+              }}
               disabled={loading}
               className="flex items-center gap-2 rounded-lg bg-zinc-100 px-3 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-200 disabled:opacity-50 dark:bg-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-600"
             >
@@ -143,7 +166,14 @@ export function KnowledgeBaseView() {
         ) : (
           <>
             {activeTab === "overview" && kbStats && (
-              <KnowledgeBaseStatsCard stats={kbStats} />
+              <div className="space-y-6">
+                <KnowledgeBaseStatsCard stats={kbStats} />
+                <EisenhowerMatrixPanel
+                  mails={kbMails}
+                  persons={kbPersons}
+                  events={kbEvents}
+                />
+              </div>
             )}
             {activeTab === "mails" && (
               <MailsListPanel mails={kbMails} persons={kbPersons} events={kbEvents} />
@@ -153,6 +183,12 @@ export function KnowledgeBaseView() {
             )}
             {activeTab === "persons" && (
               <PersonsProfilePanel persons={kbPersons} mails={kbMails} />
+            )}
+            {activeTab === "documents" && (
+              <ArtifactsLibraryPanel
+                sourceId={activeSourceId}
+                refreshToken={artifactsRefreshToken}
+              />
             )}
           </>
         )}

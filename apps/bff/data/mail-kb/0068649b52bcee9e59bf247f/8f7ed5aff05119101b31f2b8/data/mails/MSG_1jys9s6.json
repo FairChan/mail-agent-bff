@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_1jys9s6",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABhsxA-QAAAA==",
+  "subject": "Elevated Errors with Login",
+  "personId": "PER_001008",
+  "eventId": "EVT_001020",
+  "importanceScore": 0.7,
+  "urgencyScore": 0.6,
+  "scoreScale": "ratio",
+  "quadrant": "not_urgent_important",
+  "summary": "OpenAI报告登录错误事件，已确认用户在API和ChatGPT登录时遇到性能下降问题，目前正着手实施缓解措施。",
+  "receivedAt": "2026-04-08T17:28:18.000Z",
+  "processedAt": "2026-04-18T05:10:16.214Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABhsxA%2FQAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

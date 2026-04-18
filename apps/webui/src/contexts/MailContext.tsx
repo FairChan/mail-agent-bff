@@ -3,8 +3,24 @@
  * 提供全局邮件状态管理
  */
 
-import React, { createContext, useContext, useReducer, useCallback, useEffect } from "react";
-import type { MailSourceProfile, MailTriageResult, MailInsightsResult, MailInboxViewerResponse, MailPriorityRule, NotificationPreferences, TriageMailItem, KnowledgeBaseStats, MailKnowledgeRecord, EventCluster, PersonProfile } from "@mail-agent/shared-types";
+import React, { createContext, useContext, useReducer, useCallback, useEffect, useRef } from "react";
+import type {
+  MailSourceProfile,
+  MailTriageResult,
+  MailInsightsResult,
+  MailInboxViewerResponse,
+  MailPriorityRule,
+  NotificationPreferences,
+  MailNotificationPreferencesResult,
+  MailNotificationPollResult,
+  MailCalendarDraft,
+  TriageMailItem,
+  KnowledgeBaseStats,
+  MailKnowledgeRecord,
+  EventCluster,
+  PersonProfile,
+  MailProcessingRunResult,
+} from "@mail-agent/shared-types";
 import { useAuth } from "./AuthContext";
 
 // ========== 类型定义 ==========
@@ -31,6 +47,14 @@ interface MailState {
 
   // 通知偏好
   notificationPrefs: NotificationPreferences | null;
+  notificationSnapshot: MailNotificationPollResult | null;
+  isPollingNotifications: boolean;
+  notificationStreamStatus: "idle" | "connecting" | "connected" | "error";
+  notificationStreamError: string | null;
+
+  // 新邮件处理
+  processingResult: MailProcessingRunResult | null;
+  isProcessingMail: boolean;
 
   // 知识库
   kbStats: KnowledgeBaseStats | null;
@@ -54,6 +78,12 @@ type MailAction =
   | { type: "SET_LOADING_DETAIL"; payload: boolean }
   | { type: "SET_PRIORITY_RULES"; payload: MailPriorityRule[] }
   | { type: "SET_NOTIFICATION_PREFS"; payload: NotificationPreferences }
+  | { type: "SET_NOTIFICATION_SNAPSHOT"; payload: MailNotificationPollResult | null }
+  | { type: "SET_POLLING_NOTIFICATIONS"; payload: boolean }
+  | { type: "SET_NOTIFICATION_STREAM_STATUS"; payload: MailState["notificationStreamStatus"] }
+  | { type: "SET_NOTIFICATION_STREAM_ERROR"; payload: string | null }
+  | { type: "SET_PROCESSING_RESULT"; payload: MailProcessingRunResult | null }
+  | { type: "SET_PROCESSING_MAIL"; payload: boolean }
   | { type: "SET_KB_STATS"; payload: KnowledgeBaseStats }
   | { type: "SET_KB_MAILS"; payload: MailKnowledgeRecord[] }
   | { type: "SET_KB_EVENTS"; payload: EventCluster[] }
@@ -75,6 +105,12 @@ const initialState: MailState = {
   mailBodyCache: new Map(),
   priorityRules: [],
   notificationPrefs: null,
+  notificationSnapshot: null,
+  isPollingNotifications: false,
+  notificationStreamStatus: "idle",
+  notificationStreamError: null,
+  processingResult: null,
+  isProcessingMail: false,
   kbStats: null,
   kbMails: [],
   kbEvents: [],
@@ -90,9 +126,34 @@ function mailReducer(state: MailState, action: MailAction): MailState {
         sources: action.payload.sources,
         activeSourceId: action.payload.activeSourceId,
         isLoadingSources: false,
+        ...(state.activeSourceId !== action.payload.activeSourceId
+          ? {
+              notificationPrefs: null,
+              notificationSnapshot: null,
+              notificationStreamStatus: "idle",
+              notificationStreamError: null,
+              processingResult: null,
+              kbStats: null,
+              kbMails: [],
+              kbEvents: [],
+              kbPersons: [],
+            }
+          : {}),
       };
     case "SET_ACTIVE_SOURCE":
-      return { ...state, activeSourceId: action.payload };
+      return {
+        ...state,
+        activeSourceId: action.payload,
+        notificationPrefs: null,
+        notificationSnapshot: null,
+        notificationStreamStatus: "idle",
+        notificationStreamError: null,
+        processingResult: null,
+        kbStats: null,
+        kbMails: [],
+        kbEvents: [],
+        kbPersons: [],
+      };
     case "SET_LOADING_SOURCES":
       return { ...state, isLoadingSources: action.payload };
     case "SET_INBOX":
@@ -111,6 +172,27 @@ function mailReducer(state: MailState, action: MailAction): MailState {
       return { ...state, priorityRules: action.payload };
     case "SET_NOTIFICATION_PREFS":
       return { ...state, notificationPrefs: action.payload };
+    case "SET_NOTIFICATION_SNAPSHOT":
+      return {
+        ...state,
+        notificationSnapshot: action.payload,
+        notificationPrefs: action.payload?.preferences ?? state.notificationPrefs,
+        isPollingNotifications: false,
+      };
+    case "SET_POLLING_NOTIFICATIONS":
+      return { ...state, isPollingNotifications: action.payload };
+    case "SET_NOTIFICATION_STREAM_STATUS":
+      return { ...state, notificationStreamStatus: action.payload };
+    case "SET_NOTIFICATION_STREAM_ERROR":
+      return { ...state, notificationStreamError: action.payload };
+    case "SET_PROCESSING_RESULT":
+      return { ...state, processingResult: action.payload, isProcessingMail: false };
+    case "SET_PROCESSING_MAIL":
+      return {
+        ...state,
+        isProcessingMail: action.payload,
+        ...(action.payload ? { processingResult: null } : {}),
+      };
     case "SET_KB_STATS":
       return { ...state, kbStats: action.payload };
     case "SET_KB_MAILS":
@@ -161,13 +243,28 @@ interface MailContextValue extends MailState {
   // 通知偏好
   fetchNotificationPrefs: () => Promise<void>;
   updateNotificationPrefs: (prefs: Partial<NotificationPreferences>) => Promise<void>;
+  pollNotifications: (
+    limit?: number,
+    horizonDays?: number,
+    options?: { silent?: boolean }
+  ) => Promise<MailNotificationPollResult | null>;
+
+  // 新邮件处理
+  runMailProcessing: (limit?: number, horizonDays?: number) => Promise<MailProcessingRunResult>;
+  syncCalendarDrafts: (items: MailCalendarDraft[]) => Promise<{
+    syncedIds: string[];
+    failedIds: string[];
+    createdCount: number;
+    deduplicatedCount: number;
+    failedCount: number;
+  }>;
 
   // 知识库
   fetchKbStats: () => Promise<void>;
   fetchKbMails: () => Promise<void>;
   fetchKbEvents: () => Promise<void>;
   fetchKbPersons: () => Promise<void>;
-  triggerSummarize: () => Promise<string | null>;
+  triggerSummarize: (options?: { windowDays?: number; limit?: number }) => Promise<string | null>;
 
   // 状态重置
   resetMailState: () => void;
@@ -220,6 +317,28 @@ async function apiFetch<T>(endpoint: string, options?: RequestInit): Promise<T> 
   return data as T;
 }
 
+function extractNotificationPreferences(
+  result: NotificationPreferences | MailNotificationPreferencesResult
+): NotificationPreferences {
+  if ("preferences" in result) {
+    return result.preferences;
+  }
+
+  return result;
+}
+
+function parseJsonData<T>(value: string | null | undefined): T | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
 // ========== Provider ==========
 
 interface MailProviderProps {
@@ -230,15 +349,28 @@ interface MailProviderProps {
 export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) {
   const [state, dispatch] = useReducer(mailReducer, initialState);
   const { isAuthenticated } = useAuth();
+  const stateRef = useRef(state);
+  const activeSourceIdRef = useRef<string | null>(state.activeSourceId);
+  const sourcesRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    stateRef.current = state;
+    activeSourceIdRef.current = state.activeSourceId;
+  }, [state]);
 
   // ========== 邮件源操作 ==========
 
   const fetchSources = useCallback(async () => {
+    const requestId = sourcesRequestIdRef.current + 1;
+    sourcesRequestIdRef.current = requestId;
     dispatch({ type: "SET_LOADING_SOURCES", payload: true });
     try {
       const data = await apiFetch<{ ok: boolean; result: { sources: MailSourceProfile[]; activeSourceId: string | null } }>(
         `${apiBase}/mail/sources`
       );
+      if (requestId !== sourcesRequestIdRef.current) {
+        return;
+      }
       if (data.ok) {
         dispatch({
           type: "SET_SOURCES",
@@ -246,6 +378,9 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
         });
       }
     } catch (err) {
+      if (requestId !== sourcesRequestIdRef.current) {
+        return;
+      }
       dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to fetch sources" });
       dispatch({ type: "SET_LOADING_SOURCES", payload: false });
     }
@@ -330,6 +465,7 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
       }
 
       let settled = false;
+      let closeFailureTimer: number | null = null;
       const timeout = window.setTimeout(() => {
         if (settled) {
           return;
@@ -346,15 +482,27 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
 
       const poll = window.setInterval(() => {
         if (!settled && popup.closed) {
-          settled = true;
-          cleanup();
-          reject(new Error("Microsoft 登录窗口已关闭，授权未完成。"));
+          if (closeFailureTimer !== null) {
+            return;
+          }
+          closeFailureTimer = window.setTimeout(() => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            cleanup();
+            reject(new Error("Microsoft 登录窗口已关闭，授权未完成。"));
+          }, 1200);
         }
       }, 500);
 
       const cleanup = () => {
         window.clearTimeout(timeout);
         window.clearInterval(poll);
+        if (closeFailureTimer !== null) {
+          window.clearTimeout(closeFailureTimer);
+          closeFailureTimer = null;
+        }
         window.removeEventListener("message", onMessage);
       };
 
@@ -407,6 +555,24 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
           return;
         }
 
+        if (payload.source || payload.sourceId || payload.activeSourceId) {
+          const existing = stateRef.current.sources;
+          const mergedSources = payload.source
+            ? [
+                payload.source,
+                ...existing.filter((source) => source.id !== payload.source?.id),
+              ]
+            : existing;
+          dispatch({
+            type: "SET_SOURCES",
+            payload: {
+              sources: mergedSources,
+              activeSourceId: payload.activeSourceId ?? payload.sourceId ?? stateRef.current.activeSourceId,
+            },
+          });
+          void fetchSources();
+        }
+
         resolve({
           status: payload.status || "connected",
           ready: Boolean(payload.ready),
@@ -422,7 +588,7 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
       window.addEventListener("message", onMessage);
       popup.focus();
     });
-  }, [apiBase]);
+  }, [apiBase, fetchSources]);
 
   // ========== 邮件操作 ==========
 
@@ -493,13 +659,12 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     try {
       await apiFetch(`${apiBase}/mail/calendar/sync`, {
         method: "POST",
-        body: JSON.stringify({ messageId, subject, type, dueAt }),
+        body: JSON.stringify({ messageId, subject, type, dueAt, sourceId: state.activeSourceId ?? undefined }),
       });
     } catch (err) {
-      dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to sync to calendar" });
       throw err;
     }
-  }, [apiBase]);
+  }, [apiBase, state.activeSourceId]);
 
   // ========== 问答 ==========
 
@@ -575,97 +740,449 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
   // ========== 通知偏好 ==========
 
   const fetchNotificationPrefs = useCallback(async () => {
+    const requestedSourceId = state.activeSourceId;
     try {
-      const data = await apiFetch<{ ok: boolean; result: NotificationPreferences }>(
-        `${apiBase}/mail/notifications/preferences`
+      const sourceQuery = requestedSourceId ? `?sourceId=${encodeURIComponent(requestedSourceId)}` : "";
+      const data = await apiFetch<{ ok: boolean; result: NotificationPreferences | MailNotificationPreferencesResult }>(
+        `${apiBase}/mail/notifications/preferences${sourceQuery}`
       );
       if (data.ok) {
-        dispatch({ type: "SET_NOTIFICATION_PREFS", payload: data.result });
+        if (activeSourceIdRef.current !== requestedSourceId) {
+          return;
+        }
+        dispatch({ type: "SET_NOTIFICATION_PREFS", payload: extractNotificationPreferences(data.result) });
       }
     } catch (err) {
       dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to fetch notification prefs" });
     }
-  }, [apiBase]);
+  }, [apiBase, state.activeSourceId]);
 
   const updateNotificationPrefs = useCallback(async (prefs: Partial<NotificationPreferences>) => {
     try {
+      const fallbackTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai";
       const current = state.notificationPrefs ?? {
         urgentPushEnabled: true,
         dailyDigestEnabled: true,
-        digestHour: 8,
+        digestHour: 20,
         digestMinute: 0,
-        digestTimeZone: "Asia/Shanghai",
+        digestTimeZone: fallbackTimeZone,
       };
       await apiFetch(`${apiBase}/mail/notifications/preferences`, {
         method: "POST",
-        body: JSON.stringify({ ...current, ...prefs }),
+        body: JSON.stringify({ ...current, ...prefs, sourceId: state.activeSourceId ?? undefined }),
       });
       await fetchNotificationPrefs();
     } catch (err) {
       dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to update notification prefs" });
       throw err;
     }
-  }, [apiBase, state.notificationPrefs, fetchNotificationPrefs]);
+  }, [apiBase, state.activeSourceId, state.notificationPrefs, fetchNotificationPrefs]);
+
+  const pollNotifications = useCallback(async (
+    limit = 40,
+    horizonDays = 7,
+    options?: { silent?: boolean }
+  ): Promise<MailNotificationPollResult | null> => {
+    const requestedSourceId = state.activeSourceId;
+    if (!requestedSourceId) {
+      dispatch({ type: "SET_NOTIFICATION_SNAPSHOT", payload: null });
+      return null;
+    }
+
+    dispatch({ type: "SET_POLLING_NOTIFICATIONS", payload: true });
+    try {
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai";
+      const params = new URLSearchParams({
+        sourceId: requestedSourceId,
+        limit: String(limit),
+        horizonDays: String(horizonDays),
+        tz: timeZone,
+      });
+      const data = await apiFetch<{ ok: boolean; result: MailNotificationPollResult }>(
+        `${apiBase}/mail/notifications/poll?${params.toString()}`
+      );
+
+      if (!data.ok) {
+        throw new Error("Notification poll failed");
+      }
+
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        dispatch({ type: "SET_POLLING_NOTIFICATIONS", payload: false });
+        return null;
+      }
+
+      dispatch({ type: "SET_NOTIFICATION_SNAPSHOT", payload: data.result });
+      return data.result;
+    } catch (err) {
+      dispatch({ type: "SET_POLLING_NOTIFICATIONS", payload: false });
+      if (!options?.silent) {
+        dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to poll notifications" });
+      }
+      return null;
+    }
+  }, [apiBase, state.activeSourceId]);
+
+  const syncCalendarDrafts = useCallback(async (items: MailCalendarDraft[]) => {
+    const sourceId = state.activeSourceId;
+    if (!sourceId || items.length === 0) {
+      return {
+        syncedIds: [],
+        failedIds: items.map((item) => item.messageId),
+        createdCount: 0,
+        deduplicatedCount: 0,
+        failedCount: items.length,
+      };
+    }
+
+    const syncedIds = new Set<string>();
+    const failedIds = new Set<string>();
+    let createdCount = 0;
+    let deduplicatedCount = 0;
+    let failedCount = 0;
+
+    for (let index = 0; index < items.length; index += 10) {
+      const chunk = items.slice(index, index + 10);
+      try {
+        const data = await apiFetch<{
+          ok: boolean;
+          result: {
+            createdCount: number;
+            deduplicatedCount: number;
+            failedCount: number;
+            items: Array<
+              | {
+                  messageId: string;
+                  ok: true;
+                }
+              | {
+                  messageId: string;
+                  ok: false;
+                }
+            >;
+          };
+        }>(`${apiBase}/mail/calendar/sync/batch`, {
+          method: "POST",
+          body: JSON.stringify({
+            sourceId,
+            items: chunk.map((item) => ({
+              messageId: item.messageId,
+              subject: item.subject,
+              type: item.type,
+              dueAt: item.dueAt,
+              dueDateLabel: item.dueDateLabel,
+              evidence: item.evidence,
+              timeZone: item.timeZone,
+            })),
+          }),
+        });
+
+        createdCount += data.result.createdCount;
+        deduplicatedCount += data.result.deduplicatedCount;
+        failedCount += data.result.failedCount;
+
+        for (const entry of data.result.items) {
+          if (entry.ok) {
+            syncedIds.add(entry.messageId);
+          } else {
+            failedIds.add(entry.messageId);
+          }
+        }
+      } catch {
+        failedCount += chunk.length;
+        for (const item of chunk) {
+          failedIds.add(item.messageId);
+        }
+      }
+    }
+
+    return {
+      syncedIds: Array.from(syncedIds),
+      failedIds: Array.from(failedIds),
+      createdCount,
+      deduplicatedCount,
+      failedCount,
+    };
+  }, [apiBase, state.activeSourceId]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !state.activeSourceId) {
+      dispatch({ type: "SET_NOTIFICATION_STREAM_STATUS", payload: "idle" });
+      dispatch({ type: "SET_NOTIFICATION_STREAM_ERROR", payload: null });
+      return;
+    }
+
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const requestedSourceId = state.activeSourceId;
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai";
+
+    if (typeof window.EventSource === "undefined") {
+      dispatch({ type: "SET_NOTIFICATION_STREAM_STATUS", payload: "idle" });
+      dispatch({ type: "SET_NOTIFICATION_STREAM_ERROR", payload: "当前浏览器不支持实时通知连接。" });
+      void pollNotifications(40, 7, { silent: true });
+      return;
+    }
+
+    dispatch({ type: "SET_NOTIFICATION_STREAM_STATUS", payload: "connecting" });
+    dispatch({ type: "SET_NOTIFICATION_STREAM_ERROR", payload: null });
+
+    const params = new URLSearchParams({
+      sourceId: requestedSourceId,
+      limit: "40",
+      horizonDays: "7",
+      tz: timeZone,
+    });
+    const eventSource = new EventSource(`${apiBase}/mail/notifications/stream?${params.toString()}`, {
+      withCredentials: true,
+    });
+    let fallbackPolled = false;
+
+    const ensureSourceStillActive = () => activeSourceIdRef.current === requestedSourceId;
+
+    eventSource.addEventListener("open", () => {
+      if (!ensureSourceStillActive()) {
+        return;
+      }
+      dispatch({ type: "SET_NOTIFICATION_STREAM_STATUS", payload: "connected" });
+      dispatch({ type: "SET_NOTIFICATION_STREAM_ERROR", payload: null });
+    });
+
+    eventSource.addEventListener("keepalive", () => {
+      if (!ensureSourceStillActive()) {
+        return;
+      }
+      dispatch({ type: "SET_NOTIFICATION_STREAM_STATUS", payload: "connected" });
+    });
+
+    eventSource.addEventListener("notification", (event) => {
+      if (!ensureSourceStillActive()) {
+        return;
+      }
+      const payload = parseJsonData<{ ok?: boolean; result?: MailNotificationPollResult }>(
+        (event as MessageEvent<string>).data
+      );
+      if (!payload?.ok || !payload.result || payload.result.sourceId !== requestedSourceId) {
+        return;
+      }
+      dispatch({ type: "SET_NOTIFICATION_SNAPSHOT", payload: payload.result });
+      dispatch({ type: "SET_NOTIFICATION_STREAM_STATUS", payload: "connected" });
+      dispatch({ type: "SET_NOTIFICATION_STREAM_ERROR", payload: null });
+    });
+
+    eventSource.addEventListener("notification_busy", () => {
+      if (!ensureSourceStillActive()) {
+        return;
+      }
+      dispatch({ type: "SET_NOTIFICATION_STREAM_STATUS", payload: "connected" });
+    });
+
+    eventSource.addEventListener("notification_error", (event) => {
+      if (!ensureSourceStillActive()) {
+        return;
+      }
+      const payload = parseJsonData<{ error?: string }>((event as MessageEvent<string>).data);
+      dispatch({ type: "SET_NOTIFICATION_STREAM_STATUS", payload: "error" });
+      dispatch({ type: "SET_NOTIFICATION_STREAM_ERROR", payload: payload?.error ?? "实时通知暂时不可用。" });
+    });
+
+    eventSource.addEventListener("session_expired", () => {
+      if (!ensureSourceStillActive()) {
+        return;
+      }
+      dispatch({ type: "SET_NOTIFICATION_STREAM_STATUS", payload: "error" });
+      dispatch({ type: "SET_NOTIFICATION_STREAM_ERROR", payload: "会话已过期，请重新登录。" });
+      eventSource.close();
+    });
+
+    eventSource.onerror = () => {
+      if (!ensureSourceStillActive()) {
+        return;
+      }
+      dispatch({ type: "SET_NOTIFICATION_STREAM_STATUS", payload: "error" });
+      dispatch({ type: "SET_NOTIFICATION_STREAM_ERROR", payload: "实时通知连接中断，正在等待恢复。" });
+      if (!fallbackPolled) {
+        fallbackPolled = true;
+        void pollNotifications(40, 7, { silent: true });
+      }
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, [apiBase, isAuthenticated, state.activeSourceId, pollNotifications]);
+
+  // ========== 新邮件处理 ==========
+
+  const runMailProcessing = useCallback(async (limit = 30, horizonDays = 14): Promise<MailProcessingRunResult> => {
+    dispatch({ type: "SET_PROCESSING_MAIL", payload: true });
+    try {
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai";
+      const data = await apiFetch<{ ok: boolean; result: MailProcessingRunResult }>(
+        `${apiBase}/mail/processing/run`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            limit,
+            horizonDays,
+            tz: timeZone,
+            sourceId: state.activeSourceId ?? undefined,
+          }),
+        }
+      );
+      if (!data.ok) {
+        throw new Error("Mail processing failed");
+      }
+      dispatch({ type: "SET_PROCESSING_RESULT", payload: data.result });
+      return data.result;
+    } catch (err) {
+      dispatch({ type: "SET_PROCESSING_MAIL", payload: false });
+      dispatch({ type: "SET_PROCESSING_RESULT", payload: null });
+      dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to process mail" });
+      throw err;
+    }
+  }, [apiBase, state.activeSourceId]);
 
   // ========== 知识库 ==========
 
   const fetchKbStats = useCallback(async () => {
+    const requestedSourceId = state.activeSourceId;
+    if (!requestedSourceId) {
+      return;
+    }
     try {
-      const data = await apiFetch<{ ok: boolean; stats: KnowledgeBaseStats }>(
-        `${apiBase}/mail-kb/stats`
+      const params = new URLSearchParams({ sourceId: requestedSourceId });
+      const data = await apiFetch<{
+        ok: boolean;
+        stats?: KnowledgeBaseStats;
+        result?: KnowledgeBaseStats | { stats?: KnowledgeBaseStats };
+      }>(
+        `${apiBase}/mail-kb/stats?${params.toString()}`
       );
-      if (data.ok) {
-        dispatch({ type: "SET_KB_STATS", payload: data.stats });
+      const stats =
+        data.stats ??
+        ("stats" in (data.result ?? {}) ? (data.result as { stats?: KnowledgeBaseStats }).stats ?? null : (data.result as KnowledgeBaseStats | undefined) ?? null);
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        return;
+      }
+      if (data.ok && stats) {
+        dispatch({ type: "SET_KB_STATS", payload: stats });
       }
     } catch (err) {
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        return;
+      }
       dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to fetch KB stats" });
     }
-  }, [apiBase]);
+  }, [apiBase, state.activeSourceId]);
 
   const fetchKbMails = useCallback(async () => {
+    const requestedSourceId = state.activeSourceId;
+    if (!requestedSourceId) {
+      return;
+    }
     try {
-      const data = await apiFetch<{ ok: boolean; mails: MailKnowledgeRecord[] }>(
-        `${apiBase}/mail-kb/mails?pageSize=50`
+      const params = new URLSearchParams({
+        pageSize: "50",
+        sourceId: requestedSourceId,
+      });
+      const data = await apiFetch<{
+        ok: boolean;
+        mails?: MailKnowledgeRecord[];
+        result?: { mails?: MailKnowledgeRecord[] };
+      }>(
+        `${apiBase}/mail-kb/mails?${params.toString()}`
       );
+      const mails = data.mails ?? data.result?.mails ?? [];
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        return;
+      }
       if (data.ok) {
-        dispatch({ type: "SET_KB_MAILS", payload: data.mails || [] });
+        dispatch({ type: "SET_KB_MAILS", payload: mails });
       }
     } catch (err) {
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        return;
+      }
       dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to fetch KB mails" });
     }
-  }, [apiBase]);
+  }, [apiBase, state.activeSourceId]);
 
   const fetchKbEvents = useCallback(async () => {
+    const requestedSourceId = state.activeSourceId;
+    if (!requestedSourceId) {
+      return;
+    }
     try {
-      const data = await apiFetch<{ ok: boolean; events: EventCluster[] }>(
-        `${apiBase}/mail-kb/events`
+      const params = new URLSearchParams({ sourceId: requestedSourceId });
+      const data = await apiFetch<{
+        ok: boolean;
+        events?: EventCluster[];
+        result?: { events?: EventCluster[] };
+      }>(
+        `${apiBase}/mail-kb/events?${params.toString()}`
       );
+      const events = data.events ?? data.result?.events ?? [];
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        return;
+      }
       if (data.ok) {
-        dispatch({ type: "SET_KB_EVENTS", payload: data.events || [] });
+        dispatch({ type: "SET_KB_EVENTS", payload: events });
       }
     } catch (err) {
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        return;
+      }
       dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to fetch KB events" });
     }
-  }, [apiBase]);
+  }, [apiBase, state.activeSourceId]);
 
   const fetchKbPersons = useCallback(async () => {
+    const requestedSourceId = state.activeSourceId;
+    if (!requestedSourceId) {
+      return;
+    }
     try {
-      const data = await apiFetch<{ ok: boolean; persons: PersonProfile[] }>(
-        `${apiBase}/mail-kb/persons`
+      const params = new URLSearchParams({ sourceId: requestedSourceId });
+      const data = await apiFetch<{
+        ok: boolean;
+        persons?: PersonProfile[];
+        result?: { persons?: PersonProfile[] };
+      }>(
+        `${apiBase}/mail-kb/persons?${params.toString()}`
       );
+      const persons = data.persons ?? data.result?.persons ?? [];
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        return;
+      }
       if (data.ok) {
-        dispatch({ type: "SET_KB_PERSONS", payload: data.persons || [] });
+        dispatch({ type: "SET_KB_PERSONS", payload: persons });
       }
     } catch (err) {
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        return;
+      }
       dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to fetch KB persons" });
     }
-  }, [apiBase]);
+  }, [apiBase, state.activeSourceId]);
 
-  const triggerSummarize = useCallback(async (): Promise<string | null> => {
+  const triggerSummarize = useCallback(async (options?: { windowDays?: number; limit?: number }): Promise<string | null> => {
     try {
+      const requestedSourceId = state.activeSourceId;
+      if (!requestedSourceId) {
+        throw new Error("No active mail source selected");
+      }
+      const params = new URLSearchParams({ sourceId: requestedSourceId });
       const data = await apiFetch<{ ok: boolean; jobId?: string; error?: string }>(
-        `${apiBase}/mail/knowledge-base/trigger`,
-        { method: "POST" }
+        `${apiBase}/mail/knowledge-base/trigger?${params.toString()}`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            ...(typeof options?.windowDays === "number" ? { windowDays: options.windowDays } : {}),
+            ...(typeof options?.limit === "number" ? { limit: options.limit } : {}),
+          }),
+        }
       );
       if (data.ok && data.jobId) {
         return data.jobId;
@@ -675,7 +1192,7 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
       dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to trigger summarize" });
       throw err;
     }
-  }, [apiBase]);
+  }, [apiBase, state.activeSourceId]);
 
   // ========== 状态重置 ==========
 
@@ -717,12 +1234,17 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
   useEffect(() => {
     if (isAuthenticated) {
       fetchSources();
-      fetchNotificationPrefs();
       fetchPriorityRules();
     } else {
       resetMailState();
     }
-  }, [isAuthenticated, fetchSources, fetchNotificationPrefs, fetchPriorityRules, resetMailState]);
+  }, [isAuthenticated, fetchSources, fetchPriorityRules, resetMailState]);
+
+  useEffect(() => {
+    if (isAuthenticated && state.activeSourceId) {
+      fetchNotificationPrefs();
+    }
+  }, [isAuthenticated, state.activeSourceId, fetchNotificationPrefs]);
 
   const value: MailContextValue = {
     ...state,
@@ -744,6 +1266,9 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     deletePriorityRule,
     fetchNotificationPrefs,
     updateNotificationPrefs,
+    pollNotifications,
+    runMailProcessing,
+    syncCalendarDrafts,
     fetchKbStats,
     fetchKbMails,
     fetchKbEvents,

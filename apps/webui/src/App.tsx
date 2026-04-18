@@ -8,17 +8,18 @@
  * - AppContext: 应用状态
  */
 
-import React, { useEffect, useState, useCallback, type FormEvent } from "react";
+import React, { useEffect, useState, useCallback, useRef, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { AuthProvider, MailProvider, ThemeProvider, AppProvider, useAuth, useMail, useApp, useTheme } from "./contexts";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { AgentChatPanel } from "./components/agent/AgentChatPanel";
+import { AgentWorkspaceWindow } from "./components/agent/AgentWorkspaceWindow";
 import { AuthScreen } from "./components/auth/AuthScreen";
 import { ContextAuthScreen } from "./components/auth/ContextAuthScreen";
 import { InboxView } from "./components/dashboard/InboxView";
 import { AllMailListView } from "./components/dashboard/AllMailListView";
 import { CalendarView } from "./components/dashboard/CalendarView";
 import { StatsView } from "./components/dashboard/StatsView";
+import { TutorialView } from "./components/dashboard/TutorialView";
 import { KnowledgeBaseView } from "./components/dashboard/knowledgebase/KnowledgeBaseView";
 import { SettingsView } from "./components/dashboard/SettingsView";
 import { MailDetailModal } from "./components/dashboard/MailDetailModal";
@@ -26,6 +27,7 @@ import { Sidebar } from "./components/layout/Sidebar";
 import { Header } from "./components/layout/Header";
 import { LoadingSpinner } from "./components/shared/LoadingSpinner";
 import type { TriageMailItem } from "@mail-agent/shared-types";
+import { isAgentWindowLocation } from "./utils/agentWindow";
 import { authMessages, type AuthLocale, type AuthMode } from "./types";
 
 // ========== API 客户端 ==========
@@ -233,9 +235,14 @@ function AuthScreenContainer() {
 
 // ========== 主布局 ==========
 
-function MainLayout() {
+function MainLayout({
+  tutorialCompleted,
+  onCompleteTutorial,
+}: {
+  tutorialCompleted: boolean;
+  onCompleteTutorial: () => void;
+}) {
   const { isLoading } = useAuth();
-  const { activeSourceId } = useMail();
   const { currentView, sidebarOpen, setSidebarOpen, isMobile } = useApp();
   const { resolvedTheme } = useTheme();
 
@@ -249,10 +256,14 @@ function MainLayout() {
 
   const renderView = () => {
     switch (currentView) {
+      case "tutorial":
+        return <TutorialView apiBase={API_BASE} onComplete={onCompleteTutorial} completed={tutorialCompleted} />;
       case "inbox":
         return <InboxView onViewMailDetail={() => {}} />;
       case "allmail":
         return <AllMailListView />;
+      case "agent":
+        return <AgentWorkspaceWindow apiBase={API_BASE} embedded />;
       case "calendar":
         return <CalendarView />;
       case "stats":
@@ -292,7 +303,7 @@ function MainLayout() {
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header onMenuToggle={() => setSidebarOpen(!sidebarOpen)} />
         <main className="flex-1 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-900">
-          <div className="mx-auto max-w-7xl">
+          <div className={currentView === "agent" ? "mx-auto w-full max-w-none" : "mx-auto max-w-7xl"}>
             <ErrorBoundary>
               {renderView()}
             </ErrorBoundary>
@@ -302,7 +313,6 @@ function MainLayout() {
 
       {/* 邮件详情弹窗 */}
       <MailDetailModal />
-      <AgentChatPanel apiBase={API_BASE} activeSourceId={activeSourceId} />
     </div>
   );
 }
@@ -340,9 +350,46 @@ function MailConnectionGuide() {
 // ========== App 内容 ==========
 
 function AppContent() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
   const { activeSourceId } = useMail();
   const { currentView, setCurrentView, setIsMobile } = useApp();
+  const agentWindowMode = typeof window !== "undefined" && isAgentWindowLocation(window.location);
+  const [tutorialCompleted, setTutorialCompleted] = useState(false);
+  const [tutorialHydrated, setTutorialHydrated] = useState(false);
+  const tutorialAutoOpenedRef = useRef(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    if (!user?.id) {
+      setTutorialCompleted(false);
+      setTutorialHydrated(false);
+      tutorialAutoOpenedRef.current = false;
+      return;
+    }
+    setTutorialCompleted(window.localStorage.getItem(`mail-agent-tutorial:${user.id}`) === "done");
+    setTutorialHydrated(true);
+  }, [user?.id]);
+
+  const completeTutorial = useCallback(() => {
+    if (typeof window !== "undefined" && user?.id) {
+      window.localStorage.setItem(`mail-agent-tutorial:${user.id}`, "done");
+    }
+    setTutorialCompleted(true);
+    setCurrentView(activeSourceId ? "inbox" : "settings");
+  }, [activeSourceId, setCurrentView, user?.id]);
+
+  useEffect(() => {
+    if (!isAuthenticated || agentWindowMode || !tutorialHydrated || tutorialCompleted) {
+      return;
+    }
+    if (tutorialAutoOpenedRef.current || currentView === "tutorial") {
+      return;
+    }
+    tutorialAutoOpenedRef.current = true;
+    setCurrentView("tutorial");
+  }, [agentWindowMode, currentView, isAuthenticated, setCurrentView, tutorialCompleted, tutorialHydrated]);
 
   // 检测移动端
   useEffect(() => {
@@ -367,14 +414,18 @@ function AppContent() {
     return <ContextAuthScreen />;
   }
 
+  if (agentWindowMode) {
+    return <AgentWorkspaceWindow apiBase={API_BASE} />;
+  }
+
   if (!activeSourceId) {
-    if (currentView === "settings") {
-      return <MainLayout />;
+    if (currentView === "settings" || currentView === "tutorial" || currentView === "agent") {
+      return <MainLayout tutorialCompleted={tutorialCompleted} onCompleteTutorial={completeTutorial} />;
     }
     return <MailConnectionGuide />;
   }
 
-  return <MainLayout />;
+  return <MainLayout tutorialCompleted={tutorialCompleted} onCompleteTutorial={completeTutorial} />;
 }
 
 // ========== 根 App ==========

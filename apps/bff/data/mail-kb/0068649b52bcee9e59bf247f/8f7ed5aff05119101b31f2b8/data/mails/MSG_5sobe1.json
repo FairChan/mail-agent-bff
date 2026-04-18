@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_5sobe1",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABg0niVwAAAA==",
+  "subject": "Responses API Increased Error Rates",
+  "personId": "PER_001008",
+  "eventId": "EVT_001076",
+  "importanceScore": 0.8,
+  "urgencyScore": 0.7,
+  "scoreScale": "ratio",
+  "quadrant": "urgent_important",
+  "summary": "OpenAI Responses API高错误率新事件：开始调查Responses API部分中断问题。",
+  "receivedAt": "2026-03-26T21:26:12.000Z",
+  "processedAt": "2026-04-18T05:31:39.095Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABg0niVwAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

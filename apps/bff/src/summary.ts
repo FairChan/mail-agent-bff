@@ -1,80 +1,43 @@
-/**
- * 邮件智能总结归纳系统
- *
- * 功能：
- * 1. 邮件唯一标识码生成 + 总结
- * 2. 邮件评分（重要性 + 紧急性）
- * 3. 事件聚类
- * 4. 发件人脸谱画像
- * 5. 自然语言触发总结 API
- */
-
-import { invokeTool } from "./gateway.js";
-import { env } from "./config.js";
-import {
-  type MailSourceContext,
-  type MailDetailResponse,
-  queryInboxMessagesForSource,
-  getMailMessageById,
-} from "./mail.js";
-import { getPrismaClient } from "./persistence.js";
 import type { FastifyBaseLogger } from "fastify";
-import { mailKnowledgeBase } from "./mail-kb-service.js";
+import { LlmGatewayService } from "./agent/llm-gateway.js";
+import type { TenantContext } from "./agent/types.js";
+import {
+  getMailMessageById,
+  queryInboxMessagesPageForSource,
+  type MailSourceContext,
+} from "./mail.js";
+import { getMailKnowledgeBaseStore } from "./mail-kb-store.js";
 
-// ---------------------------------------------------------------------------
-// 常量
-// ---------------------------------------------------------------------------
+const DEFAULT_MAX_MAILS_PER_BACKFILL = 250;
+const ANALYSIS_BATCH_SIZE = 6;
+const DEFAULT_BACKFILL_WINDOW_DAYS = 30;
+const ANALYSIS_BODY_CHAR_LIMIT = 1800;
+const ANALYSIS_MAX_TOKENS = 4096;
 
-const MAX_EMAILS_PER_BATCH = 30;   // 每次最多处理邮件数
-
-// ---------------------------------------------------------------------------
-// ID 生成器（基于内容哈希，稳定可复现）
-// ---------------------------------------------------------------------------
-
-/** 对字符串求稳定 hash，用于生成唯一标识码 */
 function stableHash(input: string): string {
-  let h = 5381;
-  for (let i = 0; i < input.length; i++) {
-    h = ((h << 5) + h) ^ input.charCodeAt(i);
-    h = h >>> 0;
+  let hash = 5381;
+  for (let index = 0; index < input.length; index += 1) {
+    hash = ((hash << 5) + hash) ^ input.charCodeAt(index);
+    hash >>>= 0;
   }
-  return h.toString(36);
+  return hash.toString(36);
 }
 
-/**
- * 邮件唯一标识码生成（身份证）
- * ID格式：MSG_{stableHash(sourceId + "::" + externalMsgId)}
- * 基于内容哈希，保证同一封邮件生成相同的ID
- */
 export function makeMailId(sourceId: string, externalMsgId: string): string {
-  return `MSG_${stableHash(sourceId + "::" + externalMsgId)}`;
+  return `MSG_${stableHash(`${sourceId}::${externalMsgId}`)}`;
 }
 
-/**
- * 事件唯一标识码
- * ID格式：EVT_{stableHash(userId + "::" + eventHash)}
- * eventHash 可以是事件标题的哈希或主题关键词
- */
 export function makeEventId(userId: string, eventHash: string): string {
-  return `EVT_${stableHash(userId + "::" + eventHash)}`;
+  return `EVT_${stableHash(`${userId}::${eventHash}`)}`;
 }
 
-/**
- * 发件人唯一标识码（脸谱画像ID）
- * ID格式：PER_{stableHash(userId + "::" + email)}
- * 邮箱小写后哈希，保证同一发件人始终生成相同ID
- */
 export function makeSenderId(userId: string, email: string): string {
-  return `PER_${stableHash(userId + "::" + email.toLowerCase())}`;
+  return `PER_${stableHash(`${userId}::${email.trim().toLowerCase()}`)}`;
 }
-
-// ---------------------------------------------------------------------------
-// 类型定义
-// ---------------------------------------------------------------------------
 
 interface OutlookMailItem {
-  mailId: string;  // 唯一标识码（身份证）
-  id: string;      // 邮件在 Outlook 中的原始 ID
+  mailId: string;
+  id: string;
   subject: string;
   fromAddress: string;
   fromName: string;
@@ -90,9 +53,9 @@ interface OutlookMailItem {
 interface MailAnalysis {
   mailId: string;
   summaryText: string;
-  importanceScore: number; // 0-1
-  urgencyScore: number;  // 0-1
-  quadrant: string;
+  importanceScore: number;
+  urgencyScore: number;
+  quadrant: "unprocessed" | "urgent_important" | "not_urgent_important" | "urgent_not_important" | "not_urgent_not_important";
   scoreReasoning: string;
   eventDecision: "reuse" | "new" | "none";
   eventId: string | null;
@@ -103,218 +66,9 @@ interface MailAnalysis {
   senderDecision: "reuse" | "new";
   senderId: string;
   senderSummary: string;
-  senderKeyInfo: Record<string, unknown>;
+  senderKeyInfo: Record<string, unknown> | null;
   senderSummaryUpdate: string | null;
 }
-
-// ---------------------------------------------------------------------------
-// 邮件数据获取
-// ---------------------------------------------------------------------------
-
-/** 从 Outlook 获取邮件列表（复用 mail.ts 的解析逻辑） */
-async function fetchMailList(
-  limit: number,
-  sourceContext?: MailSourceContext
-): Promise<OutlookMailItem[]> {
-  const messages = await queryInboxMessagesForSource(limit, sourceContext);
-  return messages.map(normalizeOutlookMessage);
-}
-
-/** 从 Outlook 获取单封邮件正文 */
-async function fetchMailBody(
-  messageId: string,
-  sourceContext?: MailSourceContext
-): Promise<string> {
-  try {
-    const msg = await getMailMessageById(messageId, sourceContext);
-    if (!msg) return "";
-    // 移除 HTML 标签
-    return msg.bodyContent.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 8000);
-  } catch {
-    return "";
-  }
-}
-
-/** 将 OutlookMessage 转为我们需要的格式 */
-function normalizeOutlookMessage(msg: { id?: string; subject?: string; from?: { emailAddress?: { address?: string; name?: string } }; bodyPreview?: string; body?: { content?: string }; receivedDateTime?: string; importance?: string; isRead?: boolean; hasAttachments?: boolean; webLink?: string }): OutlookMailItem {
-  const from = msg.from?.emailAddress;
-  const externalId = msg.id ?? "";
-  return {
-    mailId: `MSG_${stableHash(externalId)}`,
-    id: externalId,
-    subject: msg.subject ?? "(无主题)",
-    fromAddress: from?.address ?? "",
-    fromName: from?.name ?? from?.address ?? "未知发件人",
-    bodyPreview: msg.bodyPreview ?? "",
-    bodyContent: msg.body?.content ?? "",
-    receivedDateTime: msg.receivedDateTime ?? new Date().toISOString(),
-    importance: msg.importance ?? "normal",
-    isRead: msg.isRead ?? true,
-    hasAttachments: msg.hasAttachments ?? false,
-    webLink: msg.webLink ?? "",
-  };
-}
-
-// ---------------------------------------------------------------------------
-// OpenClaw Agent 分析（调用 LLM）
-// ---------------------------------------------------------------------------
-
-const ANALYSIS_PROMPT_TEMPLATE = (
-  mails: Array<{
-    mailId: string;
-    subject: string;
-    fromAddress: string;
-    fromName: string;
-    bodyPreview: string;
-    bodyContent: string;
-    receivedDateTime: string;
-    importance: string;
-    isRead: boolean;
-    hasAttachments: boolean;
-  }>,
-  existingEvents: Array<{ id: string; title: string; summaryText: string; keyInfo: string }>,
-  existingSenders: Array<{ id: string; email: string; displayName: string; summaryText: string; keyInfo: string }>
-): string => `你是一个邮件智能分析助手，代号 Mery。请对用户近一个月的 {N} 封邮件进行深度总结归纳。
-
-## 分析要求
-
-对每一封邮件，你需要输出以下信息：
-
-1. **邮件唯一标识码**：直接使用原始 mailId，不可更改
-2. **邮件归纳总结**：用中文总结这封邮件的核心内容
-3. **重要性评分**（0-1）：考虑发件人身份、邮件内容与用户工作的相关性
-4. **紧急性评分**（0-1）：考虑截止日期、催促语气、时效性等
-5. **象限分类**：
-   - urgent_important（紧急且重要）
-   - not_urgent_important（重要不紧急）
-   - urgent_not_important（紧急不重要）
-   - not_urgent_not_important（不紧急不重要）
-6. **打分理由**：简要说明评分依据
-
-## 事件聚类
-
-将相同话题/项目的邮件归为同一事件。若某封邮件与已有事件相关，请使用已有事件ID；否则创建新事件。
-
-**已有事件列表**：
-${existingEvents.length > 0 ? existingEvents.map(e => `- ${e.id}: ${e.title}（${e.summaryText.slice(0, 80)}...）`).join("\n") : "（暂无历史事件）"}
-
-对每封邮件判断：
-- 若与已有事件相关：返回已有事件ID，并在 eventSummaryUpdate 中提供该事件的最新总结更新
-- 若为全新事件：返回新事件ID（格式：EVT_xxxxxx）和 eventTitle、eventSummary、eventKeyInfo
-
-## 发件人画像
-
-**已有发件人列表**：
-${existingSenders.length > 0 ? existingSenders.map(s => `- ${s.id} (${s.email}): ${s.summaryText.slice(0, 60)}...`).join("\n") : "（暂无历史发件人画像）"}
-
-对每位发件人：
-- 若已存在：复用其ID，并更新 summaryText 和 keyInfo
-- 若为新发件人：返回新 senderId（格式：PER_xxxxxx）和 senderSummary、senderKeyInfo
-
-## 输出格式
-
-请严格输出以下 JSON（不要有任何额外文本）：
-
-\`\`\`json
-{
-  "analyses": [
-    {
-      "mailId": "原始mailId",
-      "summaryText": "中文归纳总结（50-200字）",
-      "importanceScore": 0.0-1.0,
-      "urgencyScore": 0.0-1.0,
-      "quadrant": "象限名称",
-      "scoreReasoning": "评分理由（20-50字）",
-      "eventDecision": "reuse|new|none",
-      "eventId": "事件ID或null",
-      "eventTitle": "新事件标题或null",
-      "eventSummary": "新事件总结（30-100字）或null",
-      "eventKeyInfo": {"key": "value"}或null,
-      "eventSummaryUpdate": "事件总结更新内容（若reuse则必填）或null",
-      "senderDecision": "reuse|new",
-      "senderId": "发件人ID",
-      "senderSummary": "发件人总结（30-100字）",
-      "senderKeyInfo": {"属性": "值"}或null,
-      "senderSummaryUpdate": "发件人总结更新内容（若reuse则必填）或null"
-    }
-  ]
-}
-\`\`\`
-
-## 邮件内容
-
-${mails.map((m, i) => `### 邮件 ${i + 1}（mailId: ${m.mailId}）
-- 主题：${m.subject}
-- 发件人：${m.fromName} <${m.fromAddress}>
-- 时间：${m.receivedDateTime}
-- 重要性标记：${m.importance}
-- 已读状态：${m.isRead ? "已读" : "未读"}
-- 有附件：${m.hasAttachments ? "是" : "否"}
-- 内容预览：${m.bodyPreview || "(无)"}
-- 正文内容：${(m.bodyContent || m.bodyPreview || "(无内容)").slice(0, 3000)}
-${"---"}`).join("\n")}
-`;
-
-/**
- * 调用 OpenClaw Agent 分析一批邮件
- */
-async function analyzeMailsWithAgent(
-  mails: OutlookMailItem[],
-  existingEvents: Array<{ id: string; title: string; summaryText: string; keyInfo: string }>,
-  existingSenders: Array<{ id: string; email: string; displayName: string; summaryText: string; keyInfo: string }>,
-  logger: FastifyBaseLogger,
-  _sessionKey?: string
-): Promise<MailAnalysis[]> {
-  const prompt = ANALYSIS_PROMPT_TEMPLATE(mails, existingEvents, existingSenders);
-
-  try {
-    const apiKey = env.siliconFlowApiKey;
-    const baseUrl = env.siliconFlowBaseUrl;
-    const model = env.siliconFlowModel;
-
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-        temperature: 0.2,
-        max_tokens: 8192,
-      }),
-    });
-
-    if (!response.ok) {
-      const status = response.status;
-      const text = await response.text();
-      throw new Error(`SiliconFlow API 错误 ${status}: ${text}`);
-    }
-
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const content = data?.choices?.[0]?.message?.content ?? "";
-    const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/);
-    const jsonStr = jsonMatch ? jsonMatch[1].trim() : content.trim();
-    const parsed = JSON.parse(jsonStr) as { analyses: MailAnalysis[] };
-    return parsed.analyses ?? [];
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error({ err: msg }, "SiliconFlow LLM summarization failed");
-    throw new Error(`邮件分析失败：${msg}`);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 核心总结流程
-// ---------------------------------------------------------------------------
 
 export interface SummarizeResult {
   processedCount: number;
@@ -340,23 +94,424 @@ export interface SummarizeProgressUpdate {
 
 export interface SummarizeMailInboxOptions {
   onProgress?: (update: SummarizeProgressUpdate) => void;
+  windowDays?: number;
 }
 
-/**
- * 对用户近30天邮件进行完整总结归纳
- */
+const ANALYSIS_PROMPT_TEMPLATE = (
+  mails: OutlookMailItem[],
+  existingEvents: Array<{ id: string; title: string; summaryText: string; keyInfo: string }>,
+  existingSenders: Array<{ id: string; email: string; displayName: string; summaryText: string; keyInfo: string }>
+): string => `你是一个邮件智能分析助手，代号 Mery。请用快速模式、直接输出结构化 JSON，对用户最近一段时间内的 ${mails.length} 封邮件完成总结归纳。不要展示推理过程，不要输出额外解释。
+
+## 分析要求
+
+对每一封邮件，你需要输出以下信息：
+
+1. **邮件唯一标识码**：直接使用原始 mailId，不可更改
+2. **邮件归纳总结**：用中文总结这封邮件的核心内容
+3. **重要性评分**（0-1）：考虑发件人身份、邮件内容与用户工作的相关性
+4. **紧急性评分**（0-1）：考虑截止日期、催促语气、时效性等
+5. **象限分类**：
+   - unprocessed（证据不足，先进入未处理）
+   - urgent_important（紧急且重要）
+   - not_urgent_important（重要不紧急）
+   - urgent_not_important（紧急不重要）
+   - not_urgent_not_important（不紧急不重要）
+6. **打分理由**：简要说明评分依据
+
+## 事件聚类
+
+将相同话题/项目的邮件归为同一事件。若某封邮件与已有事件相关，请使用已有事件ID；否则创建新事件。
+
+**已有事件列表**：
+${existingEvents.length > 0 ? existingEvents.map((event) => `- ${event.id}: ${event.title}（${event.summaryText.slice(0, 80)}...）`).join("\n") : "（暂无历史事件）"}
+
+对每封邮件判断：
+- 若与已有事件相关：返回已有事件ID，并在 eventSummaryUpdate 中提供该事件的最新总结更新
+- 若为全新事件：返回新事件ID（格式：EVT_xxxxxx）和 eventTitle、eventSummary、eventKeyInfo
+
+## 发件人画像
+
+**已有发件人列表**：
+${existingSenders.length > 0 ? existingSenders.map((sender) => `- ${sender.id} (${sender.email}): ${sender.summaryText.slice(0, 60)}...`).join("\n") : "（暂无历史发件人画像）"}
+
+对每位发件人：
+- 若已存在：复用其ID，并更新 summaryText 和 keyInfo
+- 若为新发件人：返回新 senderId（格式：PER_xxxxxx）和 senderSummary、senderKeyInfo
+
+## 输出格式
+
+请严格输出以下 JSON（不要有任何额外文本）：
+
+\`\`\`json
+{
+  "analyses": [
+    {
+      "mailId": "原始mailId",
+      "summaryText": "中文归纳总结（40-140字）",
+      "importanceScore": 0.0,
+      "urgencyScore": 0.0,
+      "quadrant": "urgent_important",
+      "scoreReasoning": "评分理由（20-50字）",
+      "eventDecision": "reuse|new|none",
+      "eventId": "事件ID或null",
+      "eventTitle": "新事件标题或null",
+      "eventSummary": "新事件总结（30-100字）或null",
+      "eventKeyInfo": {"key": "value"}或null,
+      "eventSummaryUpdate": "事件总结更新内容（若reuse则必填）或null",
+      "senderDecision": "reuse|new",
+      "senderId": "发件人ID",
+      "senderSummary": "发件人总结（30-100字）",
+      "senderKeyInfo": {"属性": "值"}或null,
+      "senderSummaryUpdate": "发件人总结更新内容（若reuse则必填）或null"
+    }
+  ]
+}
+\`\`\`
+
+## 邮件内容
+
+${mails.map((mail, index) => `### 邮件 ${index + 1}（mailId: ${mail.mailId}）
+- 主题：${mail.subject}
+- 发件人：${mail.fromName} <${mail.fromAddress}>
+- 时间：${mail.receivedDateTime}
+- 重要性标记：${mail.importance}
+- 已读状态：${mail.isRead ? "已读" : "未读"}
+- 有附件：${mail.hasAttachments ? "是" : "否"}
+- 内容预览：${mail.bodyPreview || "(无)"}
+- 正文内容：${(mail.bodyContent || mail.bodyPreview || "(无内容)").slice(0, ANALYSIS_BODY_CHAR_LIMIT)}
+---`).join("\n")}
+`;
+
+function sanitizeBodyContent(content: string): string {
+  return content.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 8000);
+}
+
+function normalizeAnalysisScore(value: number | undefined, fallback = 0.5): number {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(1, Number(value)));
+}
+
+function normalizeQuadrant(value: string | undefined, importanceScore: number, urgencyScore: number) {
+  if (
+    value === "unprocessed" ||
+    value === "urgent_important" ||
+    value === "not_urgent_important" ||
+    value === "urgent_not_important" ||
+    value === "not_urgent_not_important"
+  ) {
+    return value;
+  }
+  if (!Number.isFinite(importanceScore) || !Number.isFinite(urgencyScore)) {
+    return "unprocessed";
+  }
+  if (importanceScore <= 0 && urgencyScore <= 0) {
+    return "unprocessed";
+  }
+  const important = importanceScore >= 0.7;
+  const urgent = urgencyScore >= 0.7;
+  if (important && urgent) return "urgent_important";
+  if (important) return "not_urgent_important";
+  if (urgent) return "urgent_not_important";
+  return "not_urgent_not_important";
+}
+
+function keyInfoToList(value: Record<string, unknown> | null | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+  return Object.entries(value)
+    .map(([key, raw]) => {
+      if (raw === null || raw === undefined) {
+        return "";
+      }
+      if (Array.isArray(raw)) {
+        return `${key}: ${raw.join(", ")}`;
+      }
+      if (typeof raw === "object") {
+        return `${key}: ${JSON.stringify(raw)}`;
+      }
+      return `${key}: ${String(raw)}`;
+    })
+    .filter(Boolean);
+}
+
+function senderRoleFromKeyInfo(value: Record<string, unknown> | null | undefined): string {
+  if (!value) {
+    return "未标注";
+  }
+  const candidate = value.role;
+  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : "未标注";
+}
+
+function senderImportance(importanceScore: number, existingImportance?: number): number {
+  return Math.max(existingImportance ?? 0, normalizeAnalysisScore(importanceScore));
+}
+
+function normalizeWindowDays(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_BACKFILL_WINDOW_DAYS;
+  }
+  return Math.max(1, Math.min(90, Math.floor(Number(value))));
+}
+
+async function fetchMailBody(messageId: string, sourceContext?: MailSourceContext): Promise<string> {
+  try {
+    const detail = await getMailMessageById(messageId, sourceContext);
+    return sanitizeBodyContent(detail.bodyContent);
+  } catch {
+    return "";
+  }
+}
+
+function normalizeOutlookMessage(
+  message: {
+    id?: string;
+    subject?: string;
+    from?: { emailAddress?: { address?: string; name?: string } };
+    bodyPreview?: string;
+    body?: { content?: string };
+    receivedDateTime?: string;
+    importance?: string;
+    isRead?: boolean;
+    hasAttachments?: boolean;
+    webLink?: string;
+  },
+  sourceId: string
+): OutlookMailItem {
+  const from = message.from?.emailAddress;
+  const externalId = message.id?.trim() ?? "";
+  return {
+    mailId: makeMailId(sourceId, externalId),
+    id: externalId,
+    subject: message.subject?.trim() || "(无主题)",
+    fromAddress: from?.address?.trim() || "unknown@local.invalid",
+    fromName: from?.name?.trim() || from?.address?.trim() || "未知发件人",
+    bodyPreview: message.bodyPreview?.trim() || "",
+    bodyContent: sanitizeBodyContent(message.body?.content ?? ""),
+    receivedDateTime: message.receivedDateTime || new Date().toISOString(),
+    importance: message.importance || "normal",
+    isRead: message.isRead ?? true,
+    hasAttachments: message.hasAttachments ?? false,
+    webLink: message.webLink || "",
+  };
+}
+
+async function fetchRecentMailList(
+  sourceContext: MailSourceContext,
+  maxMessages: number,
+  windowDays: number,
+  onProgress?: (update: SummarizeProgressUpdate) => void
+): Promise<OutlookMailItem[]> {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - windowDays);
+  const cutoffIso = cutoff.toISOString();
+
+  const collected: OutlookMailItem[] = [];
+  let skip = 0;
+  while (collected.length < maxMessages) {
+    const page = await queryInboxMessagesPageForSource(
+      {
+        limit: Math.min(50, maxMessages - collected.length),
+        skip,
+        receivedAfter: cutoffIso,
+      },
+      sourceContext
+    );
+
+    if (page.length === 0) {
+      break;
+    }
+
+    for (const message of page) {
+      const normalized = normalizeOutlookMessage(message, sourceContext.sourceId);
+      const receivedAt = new Date(normalized.receivedDateTime);
+      if (!Number.isNaN(receivedAt.getTime()) && receivedAt < cutoff) {
+        return collected;
+      }
+      collected.push(normalized);
+      if (collected.length >= maxMessages) {
+        break;
+      }
+    }
+
+    onProgress?.({
+      phase: "fetch",
+      message: `已拉取 ${collected.length} 封近 ${windowDays} 天邮件...`,
+      processed: collected.length,
+      total: maxMessages,
+    });
+
+    if (page.length < Math.min(50, maxMessages - skip)) {
+      break;
+    }
+    skip += page.length;
+  }
+
+  return collected;
+}
+
+async function hydrateBatchBodies(
+  mails: OutlookMailItem[],
+  sourceContext: MailSourceContext
+): Promise<OutlookMailItem[]> {
+  return Promise.all(
+    mails.map(async (mail) => {
+      if (mail.bodyContent) {
+        return mail;
+      }
+      const bodyContent = await fetchMailBody(mail.id, sourceContext);
+      return {
+        ...mail,
+        bodyContent,
+      };
+    })
+  );
+}
+
+function parseAnalysisResponse(content: string): MailAnalysis[] {
+  const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/i);
+  const candidate = jsonMatch ? jsonMatch[1].trim() : content.trim();
+  const parsed = JSON.parse(candidate) as { analyses?: MailAnalysis[] };
+  return Array.isArray(parsed.analyses) ? parsed.analyses : [];
+}
+
+async function analyzeMailsWithAgent(
+  mails: OutlookMailItem[],
+  existingEvents: Array<{ id: string; title: string; summaryText: string; keyInfo: string }>,
+  existingSenders: Array<{ id: string; email: string; displayName: string; summaryText: string; keyInfo: string }>,
+  logger: FastifyBaseLogger,
+  llmGateway: LlmGatewayService,
+  tenant: TenantContext
+): Promise<MailAnalysis[]> {
+  const content = await llmGateway.generateText({
+    tenant,
+    messages: [
+      {
+        role: "user",
+        content: ANALYSIS_PROMPT_TEMPLATE(mails, existingEvents, existingSenders),
+      },
+    ],
+    timeoutMs: 30000,
+    temperature: 0,
+    maxTokens: ANALYSIS_MAX_TOKENS,
+    enableThinking: false,
+  });
+  try {
+    return parseAnalysisResponse(content);
+  } catch (error) {
+    logger.error(
+      {
+        message: error instanceof Error ? error.message : String(error),
+        preview: content.slice(0, 2000),
+      },
+      "Mail analysis response parsing failed"
+    );
+    throw new Error("邮件分析结果解析失败");
+  }
+}
+
+async function persistAnalyses(
+  userId: string,
+  sourceId: string,
+  mails: OutlookMailItem[],
+  analyses: MailAnalysis[],
+  result: SummarizeResult
+): Promise<void> {
+  const store = await getMailKnowledgeBaseStore(userId, sourceId);
+
+  for (const mail of mails) {
+    const analysis = analyses.find((item) => item.mailId === mail.mailId);
+    if (!analysis) {
+      result.errors.push(`邮件 ${mail.id}: 缺少 LLM 分析结果`);
+      continue;
+    }
+
+    const normalizedImportance = normalizeAnalysisScore(analysis.importanceScore);
+    const normalizedUrgency = normalizeAnalysisScore(analysis.urgencyScore);
+    const senderId = analysis.senderId || makeSenderId(userId, mail.fromAddress);
+    const existingPerson = store.getPersonByEmail(mail.fromAddress);
+    const personResult = store.upsertPerson({
+      personId: senderId,
+      email: mail.fromAddress,
+      name: mail.fromName,
+      profile: analysis.senderSummaryUpdate ?? analysis.senderSummary,
+      role: senderRoleFromKeyInfo(analysis.senderKeyInfo),
+      importance: senderImportance(normalizedImportance, existingPerson?.importance),
+      recentInteractions: (existingPerson?.recentInteractions ?? 0) + 1,
+      lastUpdated: mail.receivedDateTime,
+    });
+    if (personResult.created) {
+      result.newSenderCount += 1;
+    } else {
+      result.updatedSenderCount += 1;
+    }
+
+    let eventId: string | null = analysis.eventId;
+    if (eventId) {
+      const eventResult = store.upsertEvent({
+        eventId,
+        name: analysis.eventTitle ?? mail.subject,
+        summary: analysis.eventSummaryUpdate ?? analysis.eventSummary ?? analysis.summaryText,
+        keyInfo: keyInfoToList(analysis.eventKeyInfo),
+        relatedMailIds: [mail.mailId],
+        lastUpdated: mail.receivedDateTime,
+        tags: [analysis.quadrant],
+      });
+      if (eventResult.created) {
+        result.newEventCount += 1;
+      } else {
+        result.updatedEventCount += 1;
+      }
+    } else {
+      eventId = null;
+    }
+
+    const existingMail = store.getMailByRawId(mail.id);
+    const savedMail = store.upsertMail({
+      mailId: mail.mailId,
+      rawId: mail.id,
+      subject: mail.subject,
+      personId: personResult.record.personId,
+      eventId,
+      importanceScore: normalizedImportance,
+      urgencyScore: normalizedUrgency,
+      quadrant: normalizeQuadrant(analysis.quadrant, normalizedImportance, normalizedUrgency),
+      summary: analysis.summaryText,
+      receivedAt: mail.receivedDateTime,
+      processedAt: new Date().toISOString(),
+      webLink: mail.webLink,
+    });
+
+    if (savedMail.created && !existingMail) {
+      result.newMailCount += 1;
+    } else {
+      result.updatedMailCount += 1;
+    }
+  }
+}
+
 export async function summarizeMailInbox(
   userId: string,
   sourceContext: MailSourceContext,
   sessionKey: string,
   logger: FastifyBaseLogger,
-  limit = MAX_EMAILS_PER_BATCH,
+  limit = DEFAULT_MAX_MAILS_PER_BACKFILL,
   options?: SummarizeMailInboxOptions
 ): Promise<SummarizeResult> {
   const onProgress = options?.onProgress;
-  const prisma = await getPrismaClient(logger);
-  if (!prisma) throw new Error("Prisma 不可用，无法存储总结数据");
-
+  const windowDays = normalizeWindowDays(options?.windowDays);
+  const store = await getMailKnowledgeBaseStore(userId, sourceContext.sourceId);
+  const llmGateway = new LlmGatewayService(logger);
+  const tenant: TenantContext = {
+    ...sourceContext,
+    userId,
+    sourceId: sourceContext.sourceId,
+    sessionToken: sessionKey,
+    isLegacySession: false,
+  };
   const result: SummarizeResult = {
     processedCount: 0,
     newMailCount: 0,
@@ -366,107 +521,120 @@ export async function summarizeMailInbox(
     newSenderCount: 0,
     updatedSenderCount: 0,
     errors: [],
-    horizon: "30d",
+    horizon: `${windowDays}d`,
   };
 
-  // 1. 获取近30天邮件
   onProgress?.({
     phase: "fetch",
-    message: "正在拉取近30天邮件...",
+    message: `正在拉取近 ${windowDays} 天邮件...`,
     processed: 0,
-    total: 0,
+    total: limit,
   });
 
-  const rawMails = await fetchMailList(limit, sourceContext);
+  const recentMails = await fetchRecentMailList(sourceContext, limit, windowDays, onProgress);
+  if (recentMails.length === 0) {
+    onProgress?.({
+      phase: "done",
+      message: `近 ${windowDays} 天内没有可处理的邮件。`,
+      processed: 0,
+      total: 0,
+    });
+    return result;
+  }
+
+  const newMails = recentMails.filter((mail) => !store.getMailByRawId(mail.id));
+  result.processedCount = recentMails.length - newMails.length;
+
   onProgress?.({
     phase: "fetch",
-    message: `邮件拉取完成，共 ${rawMails.length} 封。`,
-    processed: rawMails.length,
-    total: rawMails.length,
-  });
-  if (rawMails.length === 0) return result;
-
-  // 2. 过滤掉已在数据库中处理过的邮件
-  const externalIds = rawMails.map(m => m.id);
-  const existingSummaries = await (prisma as any).mailSummary?.findMany({
-    where: { userId, externalMsgId: { in: externalIds } },
-    select: { externalMsgId: true },
-  }).catch(() => []);
-
-  const existingIds = new Set((existingSummaries ?? []).map((s: { externalMsgId: string }) => s.externalMsgId));
-  const newMails = rawMails.filter(m => !existingIds.has(m.id));
-  result.processedCount = rawMails.length - newMails.length;
-  const discoveredNewMailCount = newMails.length;
-  result.newMailCount = 0;
-  onProgress?.({
-    phase: "fetch",
-    message: `识别到 ${discoveredNewMailCount} 封未归档邮件，已归档 ${result.processedCount} 封。`,
+    message: `近 ${windowDays} 天共发现 ${recentMails.length} 封邮件，其中 ${newMails.length} 封需要新归纳。`,
     processed: result.processedCount,
-    total: rawMails.length,
+    total: recentMails.length,
   });
-  if (newMails.length === 0) return result;
 
-  // 3. 加载已有事件和发件人
-  const existingEvents = await (prisma as any).mailEvent?.findMany({
-    where: { userId },
-    select: { id: true, title: true, summaryText: true, keyInfo: true },
-  }).catch(() => []);
+  if (newMails.length === 0) {
+    onProgress?.({
+      phase: "done",
+      message: "旧有邮件已经全部归档，无需重复处理。",
+      processed: recentMails.length,
+      total: recentMails.length,
+    });
+    return result;
+  }
 
-  const existingSenders = await (prisma as any).senderProfile?.findMany({
-    where: { userId },
-    select: { id: true, email: true, displayName: true, summaryText: true, keyInfo: true },
-  }).catch(() => []);
-
-  // 4. 分批处理（每批最多 5 封，防止 LLM context 溢出）
-  const BATCH_SIZE = 5;
-  const batchTotal = Math.ceil(newMails.length / BATCH_SIZE);
-  for (let i = 0; i < newMails.length; i += BATCH_SIZE) {
-    const batch = newMails.slice(i, i + BATCH_SIZE);
-    const batchIndex = Math.floor(i / BATCH_SIZE) + 1;
+  const batchTotal = Math.ceil(newMails.length / ANALYSIS_BATCH_SIZE);
+  for (let index = 0; index < newMails.length; index += ANALYSIS_BATCH_SIZE) {
+    const batchIndex = Math.floor(index / ANALYSIS_BATCH_SIZE) + 1;
+    const rawBatch = newMails.slice(index, index + ANALYSIS_BATCH_SIZE);
+    const existingEvents = store.getAllEvents().map((event) => ({
+      id: event.eventId,
+      title: event.name,
+      summaryText: event.summary,
+      keyInfo: event.keyInfo.join("; "),
+    }));
+    const existingSenders = store.getAllPersons().map((person) => ({
+      id: person.personId,
+      email: person.email,
+      displayName: person.name,
+      summaryText: person.profile,
+      keyInfo: person.role,
+    }));
     onProgress?.({
       phase: "analyze",
-      message: `正在分析第 ${batchIndex}/${batchTotal} 批邮件（${batch.length} 封）...`,
-      processed: i,
+      message: `正在准备第 ${batchIndex}/${batchTotal} 批邮件正文...`,
+      processed: index,
       total: newMails.length,
       batchIndex,
       batchTotal,
       errors: result.errors.length,
     });
+
     try {
+      const batch = await hydrateBatchBodies(rawBatch, sourceContext);
+      onProgress?.({
+        phase: "analyze",
+        message: `正在分析第 ${batchIndex}/${batchTotal} 批邮件（${batch.length} 封）...`,
+        processed: index,
+        total: newMails.length,
+        batchIndex,
+        batchTotal,
+        errors: result.errors.length,
+      });
       const analyses = await analyzeMailsWithAgent(
         batch,
-        existingEvents as Array<{ id: string; title: string; summaryText: string; keyInfo: string }>,
-        existingSenders as Array<{ id: string; email: string; displayName: string; summaryText: string; keyInfo: string }>,
+        existingEvents,
+        existingSenders,
         logger,
-        sessionKey
+        llmGateway,
+        tenant
       );
       onProgress?.({
         phase: "persist",
-        message: `正在写入第 ${batchIndex}/${batchTotal} 批分析结果...`,
-        processed: i,
+        message: `正在写入第 ${batchIndex}/${batchTotal} 批结果...`,
+        processed: index,
         total: newMails.length,
         batchIndex,
         batchTotal,
         errors: result.errors.length,
       });
-      await persistAnalyses(userId, sourceContext.sourceId, batch, analyses, prisma as any, result);
+      await persistAnalyses(userId, sourceContext.sourceId, batch, analyses, result);
       onProgress?.({
         phase: "persist",
-        message: `第 ${batchIndex}/${batchTotal} 批完成，累计新增归档 ${result.newMailCount} 封。`,
-        processed: Math.min(i + batch.length, newMails.length),
+        message: `第 ${batchIndex}/${batchTotal} 批完成，累计归纳 ${result.newMailCount + result.updatedMailCount} 封。`,
+        processed: Math.min(index + batch.length, newMails.length),
         total: newMails.length,
         batchIndex,
         batchTotal,
         errors: result.errors.length,
       });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      result.errors.push(`批次 ${Math.floor(i / BATCH_SIZE) + 1}: ${msg}`);
-      logger.warn({ batch: Math.floor(i / BATCH_SIZE) + 1, error: msg }, "Mail batch analysis failed");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn({ batchIndex, message }, "Mail batch analysis failed");
+      result.errors.push(`批次 ${batchIndex}: ${message}`);
       onProgress?.({
         phase: "analyze",
-        message: `第 ${batchIndex}/${batchTotal} 批失败：${msg}`,
-        processed: Math.min(i + batch.length, newMails.length),
+        message: `第 ${batchIndex}/${batchTotal} 批失败：${message}`,
+        processed: Math.min(index + rawBatch.length, newMails.length),
         total: newMails.length,
         batchIndex,
         batchTotal,
@@ -477,18 +645,14 @@ export async function summarizeMailInbox(
 
   onProgress?.({
     phase: "done",
-    message: `邮件归纳完成：新增 ${result.newMailCount} 封，失败 ${result.errors.length} 封。`,
+    message: `旧邮件归纳完成：新增 ${result.newMailCount} 封，更新 ${result.updatedMailCount} 封，失败 ${result.errors.length} 封。`,
     processed: newMails.length,
     total: newMails.length,
     errors: result.errors.length,
   });
-
   return result;
 }
 
-/**
- * 处理单封新邮件（增量更新）
- */
 export async function summarizeSingleMail(
   userId: string,
   sourceId: string,
@@ -497,239 +661,68 @@ export async function summarizeSingleMail(
   logger: FastifyBaseLogger,
   sourceContext?: MailSourceContext
 ): Promise<void> {
-  const prisma = await getPrismaClient(logger);
-  if (!prisma) throw new Error("Prisma 不可用");
-
-  const bodyContent = await fetchMailBody(messageId, sourceContext);
-  const allMessages = await fetchMailList(1, sourceContext);
-  const mailItem: OutlookMailItem = allMessages.find(m => m.id === messageId) ?? {
-    mailId: `MSG_${stableHash(messageId)}`,
-    id: messageId,
-    subject: "(未知主题)",
-    fromAddress: "",
-    fromName: "未知",
-    bodyPreview: bodyContent.slice(0, 200),
-    bodyContent,
-    receivedDateTime: new Date().toISOString(),
-    importance: "normal",
-    isRead: true,
-    hasAttachments: false,
-    webLink: "",
+  const detail = await getMailMessageById(messageId, sourceContext);
+  const mailItem: OutlookMailItem = normalizeOutlookMessage(
+    {
+      id: detail.id,
+      subject: detail.subject,
+      from: {
+        emailAddress: {
+          address: detail.fromAddress,
+          name: detail.fromName,
+        },
+      },
+      bodyPreview: detail.bodyPreview,
+      body: { content: detail.bodyContent },
+      receivedDateTime: detail.receivedDateTime,
+      importance: detail.importance,
+      isRead: detail.isRead,
+      hasAttachments: detail.hasAttachments,
+      webLink: detail.webLink,
+    },
+    sourceId
+  );
+  const store = await getMailKnowledgeBaseStore(userId, sourceId);
+  const llmGateway = new LlmGatewayService(logger);
+  const tenant: TenantContext = {
+    ...(sourceContext ?? { sourceId }),
+    userId,
+    sourceId,
+    sessionToken: sessionKey,
+    isLegacySession: false,
   };
-
-  const existingEvents = await (prisma as any).mailEvent?.findMany({
-    where: { userId },
-    select: { id: true, title: true, summaryText: true, keyInfo: true },
-  }).catch(() => []);
-
-  const existingSenders = await (prisma as any).senderProfile?.findMany({
-    where: { userId },
-    select: { id: true, email: true, displayName: true, summaryText: true, keyInfo: true },
-  }).catch(() => []);
-
   const analyses = await analyzeMailsWithAgent(
     [mailItem],
-    existingEvents as Array<{ id: string; title: string; summaryText: string; keyInfo: string }>,
-    existingSenders as Array<{ id: string; email: string; displayName: string; summaryText: string; keyInfo: string }>,
+    store.getAllEvents().map((event) => ({
+      id: event.eventId,
+      title: event.name,
+      summaryText: event.summary,
+      keyInfo: event.keyInfo.join("; "),
+    })),
+    store.getAllPersons().map((person) => ({
+      id: person.personId,
+      email: person.email,
+      displayName: person.name,
+      summaryText: person.profile,
+      keyInfo: person.role,
+    })),
     logger,
-    sessionKey
+    llmGateway,
+    tenant
   );
-
   const dummyResult: SummarizeResult = {
-    processedCount: 0, newMailCount: 0, updatedMailCount: 0,
-    newEventCount: 0, updatedEventCount: 0, newSenderCount: 0, updatedSenderCount: 0,
-    errors: [], horizon: "30d",
+    processedCount: 0,
+    newMailCount: 0,
+    updatedMailCount: 0,
+    newEventCount: 0,
+    updatedEventCount: 0,
+    newSenderCount: 0,
+    updatedSenderCount: 0,
+    errors: [],
+    horizon: `${DEFAULT_BACKFILL_WINDOW_DAYS}d`,
   };
-
-  await persistAnalyses(userId, sourceId, [mailItem], analyses, prisma as any, dummyResult);
+  await persistAnalyses(userId, sourceId, [mailItem], analyses, dummyResult);
 }
-
-// ---------------------------------------------------------------------------
-// 持久化分析结果
-// ---------------------------------------------------------------------------
-
-async function persistAnalyses(
-  userId: string,
-  sourceId: string,
-  mails: OutlookMailItem[],
-  analyses: MailAnalysis[],
-  prisma: any,
-  result: SummarizeResult
-): Promise<void> {
-  for (const mail of mails) {
-    const analysis = analyses.find(a => a.mailId === mail.mailId);
-    if (!analysis) continue;
-
-    const mailId = mail.mailId;
-
-    try {
-      // --- 邮件总结 ---
-      await prisma.mailSummary.upsert({
-        where: { userId_externalMsgId: { userId, externalMsgId: mail.id } },
-        update: {
-          summaryText: analysis.summaryText,
-          importanceScore: analysis.importanceScore,
-          urgencyScore: analysis.urgencyScore,
-          eventId: analysis.eventId,
-          senderId: analysis.senderId,
-          processedAt: new Date(),
-        },
-        create: {
-          id: mailId,
-          userId,
-          sourceId,
-          externalMsgId: mail.id,
-          subject: mail.subject,
-          summaryText: analysis.summaryText,
-          importanceScore: analysis.importanceScore,
-          urgencyScore: analysis.urgencyScore,
-          eventId: analysis.eventId,
-          senderId: analysis.senderId,
-          processedAt: new Date(),
-          horizon: "30d",
-        },
-      });
-      result.newMailCount += 1;
-
-      // --- 邮件评分 ---
-      await prisma.mailScoreIndex.upsert({
-        where: { mailId },
-        update: {
-          importanceScore: analysis.importanceScore,
-          urgencyScore: analysis.urgencyScore,
-          quadrant: analysis.quadrant,
-          reasoning: analysis.scoreReasoning,
-          updatedAt: new Date(),
-        },
-        create: {
-          mailId,
-          importanceScore: analysis.importanceScore,
-          urgencyScore: analysis.urgencyScore,
-          quadrant: analysis.quadrant,
-          reasoning: analysis.scoreReasoning,
-        },
-      });
-
-      // --- 题目索引 ---
-      await prisma.subjectIndex.upsert({
-        where: { mailId },
-        update: { subject: mail.subject },
-        create: { mailId, subject: mail.subject },
-      });
-
-      // --- 发件人画像 ---
-      await upsertSender(prisma, userId, sourceId, mail, analysis, result);
-
-      // --- 事件聚类 ---
-      if (analysis.eventId && analysis.eventTitle) {
-        await upsertEvent(prisma, userId, sourceId, mail, analysis, result);
-      } else if (analysis.eventId && analysis.eventSummaryUpdate) {
-        await prisma.mailEvent.updateMany({
-          where: { id: analysis.eventId, userId },
-          data: {
-            summaryText: analysis.eventSummaryUpdate,
-            relatedMailCount: { increment: 1 },
-            lastMailAt: new Date(mail.receivedDateTime),
-            updatedAt: new Date(),
-          },
-        });
-        result.updatedEventCount += 1;
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      result.errors.push(`邮件 ${mail.id}: ${msg}`);
-    }
-  }
-}
-
-async function upsertSender(
-  prisma: any,
-  userId: string,
-  sourceId: string,
-  mail: OutlookMailItem,
-  analysis: MailAnalysis,
-  result: SummarizeResult
-): Promise<void> {
-  const senderId = makeSenderId(userId, mail.fromAddress);
-
-  if (analysis.senderDecision === "new") {
-    await prisma.senderProfile.upsert({
-      where: { userId_email: { userId, email: mail.fromAddress.toLowerCase() } },
-      update: {
-        summaryText: analysis.senderSummary,
-        keyInfo: JSON.stringify(analysis.senderKeyInfo ?? {}),
-        totalMailCount: { increment: 1 },
-        lastMailAt: new Date(mail.receivedDateTime),
-        updatedAt: new Date(),
-      },
-      create: {
-        id: senderId,
-        userId,
-        sourceId,
-        email: mail.fromAddress.toLowerCase(),
-        displayName: mail.fromName,
-        summaryText: analysis.senderSummary,
-        keyInfo: JSON.stringify(analysis.senderKeyInfo ?? {}),
-        totalMailCount: 1,
-        lastMailAt: new Date(mail.receivedDateTime),
-      },
-    });
-    result.newSenderCount += 1;
-  } else {
-    await prisma.senderProfile.updateMany({
-      where: { userId_email: { userId, email: mail.fromAddress.toLowerCase() } },
-      data: {
-        summaryText: analysis.senderSummaryUpdate ?? analysis.senderSummary,
-        totalMailCount: { increment: 1 },
-        lastMailAt: new Date(mail.receivedDateTime),
-        updatedAt: new Date(),
-      },
-    });
-    result.updatedSenderCount += 1;
-  }
-}
-
-async function upsertEvent(
-  prisma: any,
-  userId: string,
-  sourceId: string,
-  mail: OutlookMailItem,
-  analysis: MailAnalysis,
-  result: SummarizeResult
-): Promise<void> {
-  if (!analysis.eventId) return;
-
-  const isNew = analysis.eventDecision === "new";
-
-  await prisma.mailEvent.upsert({
-    where: { userId_id: { userId, id: analysis.eventId } },
-    update: {
-      summaryText: analysis.eventSummaryUpdate ?? analysis.eventSummary ?? "",
-      keyInfo: JSON.stringify(analysis.eventKeyInfo ?? {}),
-      relatedMailCount: { increment: 1 },
-      lastMailAt: new Date(mail.receivedDateTime),
-      updatedAt: new Date(),
-    },
-    create: {
-      id: analysis.eventId,
-      userId,
-      sourceId,
-      title: analysis.eventTitle ?? mail.subject,
-      summaryText: analysis.eventSummary ?? analysis.summaryText,
-      keyInfo: JSON.stringify(analysis.eventKeyInfo ?? {}),
-      relatedMailCount: 1,
-      lastMailAt: new Date(mail.receivedDateTime),
-      firstMailAt: new Date(mail.receivedDateTime),
-    },
-  });
-
-  if (isNew) result.newEventCount += 1;
-  else result.updatedEventCount += 1;
-}
-
-// ---------------------------------------------------------------------------
-// 数据查询 API（供前端读取）
-// ---------------------------------------------------------------------------
 
 export interface MailSummaryDoc {
   mailId: string;
@@ -750,44 +743,34 @@ export interface MailSummaryDoc {
 
 export async function queryMailSummaries(
   userId: string,
+  sourceId: string,
   limit = 50,
   quadrant?: string
 ): Promise<MailSummaryDoc[]> {
-  const prisma = await getPrismaClient(null as unknown as FastifyBaseLogger);
-  if (!prisma) return [];
-
-  const where: Record<string, unknown> = { userId };
-  if (quadrant) {
-    where.scoreRecord = { quadrant };
-  }
-
-  const records = await (prisma as any).mailSummary.findMany({
-    where,
-    include: {
-      scoreRecord: true,
-      sender: true,
-      event: { select: { id: true, title: true } },
-    },
-    orderBy: { processedAt: "desc" },
-    take: limit,
-  });
-
-  return records.map((r: any) => ({
-    mailId: r.id,
-    externalMsgId: r.externalMsgId,
-    subject: r.subject,
-    summaryText: r.summaryText,
-    importanceScore: r.importanceScore,
-    urgencyScore: r.urgencyScore,
-    quadrant: r.scoreRecord?.quadrant ?? "unknown",
-    senderId: r.sender?.id ?? "",
-    senderEmail: r.sender?.email ?? "",
-    senderName: r.sender?.displayName ?? "",
-    eventId: r.event?.id ?? null,
-    eventTitle: r.event?.title ?? null,
-    processedAt: r.processedAt,
-    webLink: r.webLink,
-  }));
+  const store = await getMailKnowledgeBaseStore(userId, sourceId);
+  return store
+    .getAllMails(limit)
+    .filter((mail) => (quadrant ? mail.quadrant === quadrant : true))
+    .map((mail) => {
+      const person = store.getPersonById(mail.personId);
+      const event = mail.eventId ? store.getEventById(mail.eventId) : null;
+      return {
+        mailId: mail.mailId,
+        externalMsgId: mail.rawId,
+        subject: mail.subject,
+        summaryText: mail.summary,
+        importanceScore: mail.importanceScore,
+        urgencyScore: mail.urgencyScore,
+        quadrant: mail.quadrant,
+        senderId: mail.personId,
+        senderEmail: person?.email ?? "",
+        senderName: person?.name ?? "",
+        eventId: mail.eventId,
+        eventTitle: event?.name ?? null,
+        processedAt: mail.processedAt,
+        ...(mail.webLink ? { webLink: mail.webLink } : {}),
+      };
+    });
 }
 
 export interface EventDoc {
@@ -801,24 +784,17 @@ export interface EventDoc {
 
 export async function queryEvents(
   userId: string,
+  sourceId: string,
   limit = 20
 ): Promise<EventDoc[]> {
-  const prisma = await getPrismaClient(null as unknown as FastifyBaseLogger);
-  if (!prisma) return [];
-
-  const records = await (prisma as any).mailEvent.findMany({
-    where: { userId },
-    orderBy: { lastMailAt: "desc" },
-    take: limit,
-  });
-
-  return records.map((r: any) => ({
-    eventId: r.id,
-    title: r.title,
-    summaryText: r.summaryText,
-    keyInfo: safeParseJson(r.keyInfo, {}),
-    relatedMailCount: r.relatedMailCount,
-    lastMailAt: r.lastMailAt,
+  const store = await getMailKnowledgeBaseStore(userId, sourceId);
+  return store.getAllEvents().slice(0, limit).map((event) => ({
+    eventId: event.eventId,
+    title: event.name,
+    summaryText: event.summary,
+    keyInfo: Object.fromEntries(event.keyInfo.map((line, index) => [`item_${index + 1}`, line])),
+    relatedMailCount: event.relatedMailIds.length,
+    lastMailAt: event.lastUpdated,
   }));
 }
 
@@ -834,32 +810,61 @@ export interface SenderDoc {
 
 export async function querySenderProfiles(
   userId: string,
+  sourceId: string,
   limit = 50
 ): Promise<SenderDoc[]> {
-  const prisma = await getPrismaClient(null as unknown as FastifyBaseLogger);
-  if (!prisma) return [];
-
-  const records = await (prisma as any).senderProfile.findMany({
-    where: { userId },
-    orderBy: { lastMailAt: "desc" },
-    take: limit,
-  });
-
-  return records.map((r: any) => ({
-    senderId: r.id,
-    email: r.email,
-    displayName: r.displayName,
-    summaryText: r.summaryText,
-    keyInfo: safeParseJson(r.keyInfo, {}),
-    totalMailCount: r.totalMailCount,
-    lastMailAt: r.lastMailAt,
+  const store = await getMailKnowledgeBaseStore(userId, sourceId);
+  return store.getAllPersons().slice(0, limit).map((person) => ({
+    senderId: person.personId,
+    email: person.email,
+    displayName: person.name,
+    summaryText: person.profile,
+    keyInfo: {
+      role: person.role,
+      importance: person.importance,
+    },
+    totalMailCount: person.recentInteractions,
+    lastMailAt: person.lastUpdated,
   }));
 }
 
-function safeParseJson(str: string, fallback: unknown): unknown {
-  try {
-    return str ? JSON.parse(str) : fallback;
-  } catch {
-    return fallback;
+export async function searchKnowledgeBaseMailSummaries(
+  userId: string,
+  sourceId: string,
+  query: string,
+  limit = 10
+): Promise<MailSummaryDoc[]> {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return [];
   }
+  const store = await getMailKnowledgeBaseStore(userId, sourceId);
+  const summaries = store.getAllMails().map((mail) => {
+    const person = store.getPersonById(mail.personId);
+    const event = mail.eventId ? store.getEventById(mail.eventId) : null;
+    return {
+      mailId: mail.mailId,
+      externalMsgId: mail.rawId,
+      subject: mail.subject,
+      summaryText: mail.summary,
+      importanceScore: mail.importanceScore,
+      urgencyScore: mail.urgencyScore,
+      quadrant: mail.quadrant,
+      senderId: mail.personId,
+      senderEmail: person?.email ?? "",
+      senderName: person?.name ?? "",
+      eventId: mail.eventId,
+      eventTitle: event?.name ?? null,
+      processedAt: mail.processedAt,
+      ...(mail.webLink ? { webLink: mail.webLink } : {}),
+    };
+  });
+  return summaries
+    .filter((mail) =>
+      [mail.subject, mail.summaryText, mail.senderEmail, mail.senderName, mail.eventTitle ?? ""]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedQuery)
+    )
+    .slice(0, limit);
 }

@@ -6,6 +6,7 @@ import {
   getMicrosoftEventById,
   getMicrosoftMessageById as getMicrosoftGraphMessageById,
   listMicrosoftInboxMessages,
+  listMicrosoftInboxMessagesPage,
   MicrosoftGraphHttpError,
 } from "./microsoft-graph.js";
 
@@ -107,6 +108,7 @@ export type MailSourceContext = {
 };
 
 export type MailQuadrant =
+  | "unprocessed"
   | "urgent_important"
   | "not_urgent_important"
   | "urgent_not_important"
@@ -1990,6 +1992,78 @@ export async function queryInboxMessagesForSource(
   return collected;
 }
 
+export async function queryInboxMessagesPageForSource(
+  options: {
+    limit: number;
+    skip?: number;
+    receivedAfter?: string;
+  },
+  sourceContext?: MailSourceContext
+): Promise<OutlookMessage[]> {
+  const requestedTop = Math.max(5, Math.min(options.limit, 100));
+  const skip = Math.max(0, Math.trunc(options.skip ?? 0));
+  const normalizedContext = normalizeSourceContext(sourceContext);
+
+  if (isDirectMicrosoftSourceContext(normalizedContext)) {
+    const messages = await listMicrosoftInboxMessagesPage(
+      normalizedContext.sessionToken,
+      normalizedContext.microsoftAccountId,
+      {
+        top: requestedTop,
+        skip,
+        receivedAfter: options.receivedAfter,
+        userId: normalizedContext.userId,
+      }
+    );
+    return messages.map((message) => outlookMessageSchema.parse(message));
+  }
+
+  const raw = await invokeTool({
+    tool: "COMPOSIO_MULTI_EXECUTE_TOOL",
+    args: composioMultiExecuteArgs(
+      [
+        {
+          tool_slug: "OUTLOOK_QUERY_EMAILS",
+          arguments: {
+            folder: "inbox",
+            top: requestedTop,
+            ...(skip > 0 ? { skip } : {}),
+            orderby: "receivedDateTime desc",
+            select: [
+              "id",
+              "subject",
+              "from",
+              "bodyPreview",
+              "receivedDateTime",
+              "importance",
+              "isRead",
+              "hasAttachments",
+              "webLink",
+            ],
+          },
+        },
+      ],
+      normalizedContext ?? sourceContext
+    ),
+  });
+
+  const payload = parseToolTextJson(raw);
+  const pageMessages = asMessagesFromMultiExecute(payload);
+  if (!options.receivedAfter?.trim()) {
+    return pageMessages;
+  }
+
+  const cutoff = new Date(options.receivedAfter);
+  if (Number.isNaN(cutoff.getTime())) {
+    return pageMessages;
+  }
+
+  return pageMessages.filter((message) => {
+    const received = message.receivedDateTime ? new Date(message.receivedDateTime) : null;
+    return received && !Number.isNaN(received.getTime()) ? received >= cutoff : true;
+  });
+}
+
 async function fetchInboxNormalized(
   limit: number,
   priorityRules: MailPriorityRule[] = [],
@@ -2030,6 +2104,7 @@ export async function triageInbox(
   const normalized = await fetchInboxNormalized(limit, priorityRules, sourceContext);
 
   const quadrants: Record<MailQuadrant, TriageMailItem[]> = {
+    unprocessed: [],
     urgent_important: [],
     not_urgent_important: [],
     urgent_not_important: [],
@@ -2044,6 +2119,7 @@ export async function triageInbox(
     generatedAt: new Date().toISOString(),
     total: normalized.length,
     counts: {
+      unprocessed: quadrants.unprocessed.length,
       urgent_important: quadrants.urgent_important.length,
       not_urgent_important: quadrants.not_urgent_important.length,
       urgent_not_important: quadrants.urgent_not_important.length,

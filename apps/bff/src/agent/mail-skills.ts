@@ -4,6 +4,12 @@ import type { FastifyBaseLogger } from "fastify";
 import { z } from "zod";
 import { env } from "../config.js";
 import {
+  type KnowledgeBaseJob,
+  getLatestKnowledgeBaseJob,
+  triggerMailSummary,
+} from "../knowledge-base-service.js";
+import { getMailKnowledgeBaseStore } from "../mail-kb-store.js";
+import {
   answerMailQuestion,
   buildMailInsights,
   createCalendarEventFromInsight,
@@ -12,6 +18,8 @@ import {
   type MailPriorityRule,
 } from "../mail.js";
 import { getPrismaClient } from "../persistence.js";
+import type { FileMemoryStore } from "../runtime/memory-store.js";
+import { searchKnowledgeBaseMailSummaries } from "../summary.js";
 import type { AgentSkillMetadata, TenantContext } from "./types.js";
 
 const insightTypeSchema = z.enum(["ddl", "meeting", "exam", "event"]);
@@ -50,6 +58,27 @@ export const MAIL_ASSISTANT_SKILLS: AgentSkillMetadata[] = [
     requiresConnection: true,
   },
   {
+    id: "summarizeMailboxHistory",
+    name: "Summarize mailbox history",
+    description:
+      "Build the 30-day historical mail knowledge base with mail IDs, subjects, scores, event clusters, sender profiles, and exported docs.",
+    enabled: true,
+  },
+  {
+    id: "knowledgeBaseStatus",
+    name: "Knowledge base status",
+    description:
+      "Check whether the historical mailbox knowledge base is ready and whether a backfill job is still running.",
+    enabled: true,
+  },
+  {
+    id: "searchMailKnowledgeBase",
+    name: "Search historical summaries",
+    description:
+      "Search the persisted historical mail knowledge base after the mailbox history backfill has run.",
+    enabled: true,
+  },
+  {
     id: "rememberPreference",
     name: "Remember preference",
     description: "Store a lightweight preference scoped to the current user and mailbox source.",
@@ -61,6 +90,7 @@ export type MailToolOptions = {
   priorityRules?: MailPriorityRule[];
   timeZone?: string;
   logger: FastifyBaseLogger;
+  memoryStore?: FileMemoryStore;
 };
 
 function defineMailTool(config: any) {
@@ -77,6 +107,71 @@ function truncateText(value: string, maxChars: number): string {
 
 function sanitizePreferenceValue(value: string): string {
   return truncateText(value.trim(), 1200);
+}
+
+function serializeKnowledgeBaseJob(job: KnowledgeBaseJob | undefined) {
+  if (!job) {
+    return null;
+  }
+
+  return {
+    jobId: job.jobId,
+    sourceId: job.sourceId,
+    status: job.status,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt,
+    completedAt: job.completedAt,
+    error: job.error,
+    progress: job.progress,
+  };
+}
+
+async function appendPreferenceToFileMemory(
+  tenant: TenantContext,
+  options: MailToolOptions,
+  key: string,
+  value: string
+): Promise<{ ok: true; id: string } | { ok: false }> {
+  if (!options.memoryStore) {
+    return { ok: false };
+  }
+
+  try {
+    const record = await options.memoryStore.append(
+      { userId: tenant.userId, sourceId: tenant.sourceId },
+      {
+        kind: "preference",
+        content: `${key}: ${sanitizePreferenceValue(value)}`,
+        tags: ["preference", key.slice(0, 40)],
+        metadata: { key },
+      }
+    );
+    return { ok: true, id: record.id };
+  } catch (error) {
+    options.logger.warn(
+      {
+        userId: tenant.userId,
+        sourceId: tenant.sourceId,
+        message: error instanceof Error ? error.message : String(error),
+      },
+      "Failed to persist preference to file memory"
+    );
+    return { ok: false };
+  }
+}
+
+async function safeGetAgentPrisma(logger: FastifyBaseLogger): Promise<any | null> {
+  try {
+    return (await getPrismaClient(logger)) as any;
+  } catch (error) {
+    logger.warn(
+      {
+        message: error instanceof Error ? error.message : String(error),
+      },
+      "Preference persistence falling back to file memory"
+    );
+    return null;
+  }
 }
 
 export async function createMailAssistantTools(
@@ -214,6 +309,109 @@ export async function createMailAssistantTools(
         };
       },
     }),
+    summarizeMailboxHistory: defineMailTool({
+      id: "summarizeMailboxHistory",
+      description:
+        "Start the 30-day mailbox history backfill job. Use when the user asks to summarize, archive, classify, or fully organize older mail.",
+      inputSchema: z.object({
+        limit: z.number().int().min(30).max(400).optional(),
+        windowDays: z.number().int().min(1).max(90).optional(),
+      }),
+      execute: async ({ limit, windowDays }: any) => {
+        if (tenant.isLegacySession || tenant.userId.startsWith("legacy:")) {
+          return {
+            ok: false,
+            error: "KNOWLEDGE_BASE_UNAVAILABLE_FOR_LEGACY_SESSION",
+          };
+        }
+
+        const { jobId } = await triggerMailSummary({
+          userId: tenant.userId,
+          sourceId: tenant.sourceId,
+          sourceContext: tenant,
+          sessionKey: tenant.sessionToken,
+          logger: options.logger,
+          limit: limit ?? 250,
+          ...(typeof windowDays === "number" ? { windowDays } : {}),
+        });
+        const latestJob = getLatestKnowledgeBaseJob(tenant.userId, tenant.sourceId);
+
+        return {
+          ok: true,
+          jobId,
+          status: latestJob?.status ?? "pending",
+          message:
+            "旧邮件归纳任务已经启动。你可以继续提问，我会在知识库完成后直接基于归纳结果回答。",
+          latestJob: serializeKnowledgeBaseJob(latestJob),
+        };
+      },
+    }),
+    knowledgeBaseArtifacts: defineMailTool({
+      id: "knowledgeBaseArtifacts",
+      description:
+        "Inspect the locally exported mailbox knowledge-base artifacts, including subject index, score index, summary corpus, event clusters, and sender profiles.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const store = await getMailKnowledgeBaseStore(tenant.userId, tenant.sourceId);
+        const paths = store.getPaths();
+        return {
+          ok: true,
+          baselineStatus: store.readBaselineStatus(),
+          artifacts: [
+            { key: "mailIds", label: "邮件标识码清单", path: paths.mailIdsDocPath },
+            { key: "subjects", label: "邮件题目索引", path: paths.mailSubjectDocPath, count: store.getAllSubjectIndexes().length },
+            { key: "scores", label: "邮件评分索引", path: paths.mailScoreDocPath, count: store.getAllScoreIndexes().length },
+            { key: "summaries", label: "邮件总结正文库", path: paths.mailSummaryDocPath, count: store.getAllMails().length },
+            { key: "events", label: "事件聚类索引", path: paths.eventDocPath, count: store.getAllEvents().length },
+            { key: "senders", label: "发件人画像索引", path: paths.senderDocPath, count: store.getAllPersons().length },
+          ],
+        };
+      },
+    }),
+    knowledgeBaseStatus: defineMailTool({
+      id: "knowledgeBaseStatus",
+      description:
+        "Check whether the historical mailbox knowledge base is ready, how many mails/events/persons have been indexed, and whether a job is running.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const store = await getMailKnowledgeBaseStore(tenant.userId, tenant.sourceId);
+        const baselineStatus = store.readBaselineStatus();
+        const stats = store.getStats();
+        const latestJob = getLatestKnowledgeBaseJob(tenant.userId, tenant.sourceId);
+        return {
+          ok: true,
+          ready: Boolean(baselineStatus?.backfillCompleted),
+          stats,
+          baselineStatus,
+          latestJob: serializeKnowledgeBaseJob(latestJob),
+        };
+      },
+    }),
+    searchMailKnowledgeBase: defineMailTool({
+      id: "searchMailKnowledgeBase",
+      description:
+        "Search the historical knowledge base built from the mailbox backfill. Prefer this over live inbox search when the user is asking about older mail history.",
+      inputSchema: z.object({
+        query: z.string().trim().min(1).max(300),
+        limit: z.number().int().min(1).max(50).optional(),
+      }),
+      execute: async ({ query, limit }: any) => {
+        const store = await getMailKnowledgeBaseStore(tenant.userId, tenant.sourceId);
+        const baselineStatus = store.readBaselineStatus();
+        const matches = await searchKnowledgeBaseMailSummaries(
+          tenant.userId,
+          tenant.sourceId,
+          query,
+          limit ?? 8
+        );
+        return {
+          ok: true,
+          ready: Boolean(baselineStatus?.backfillCompleted),
+          totalIndexedMails: store.getStats().totalMails,
+          matches,
+        };
+      },
+    }),
     rememberPreference: defineMailTool({
       id: "rememberPreference",
       description:
@@ -230,44 +428,73 @@ export async function createMailAssistantTools(
           };
         }
 
-        const prisma = (await getPrismaClient(options.logger)) as any;
-        if (!prisma?.agentMemory?.upsert) {
+        const fileMemory = await appendPreferenceToFileMemory(tenant, options, key, value);
+        if (!fileMemory.ok) {
           return {
             ok: false,
             error: "MEMORY_STORE_UNAVAILABLE",
           };
         }
 
-        const now = new Date();
-        await prisma.agentMemory.upsert({
-          where: {
-            userId_sourceId_key: {
+        const prisma = await safeGetAgentPrisma(options.logger);
+        if (!prisma?.agentMemory?.upsert) {
+          return {
+            ok: true,
+            key,
+            storage: "file",
+            memoryId: fileMemory.id,
+          };
+        }
+
+        try {
+          const now = new Date();
+          await prisma.agentMemory.upsert({
+            where: {
+              userId_sourceId_key: {
+                userId: tenant.userId,
+                sourceId: tenant.sourceId,
+                key,
+              },
+            },
+            create: {
               userId: tenant.userId,
               sourceId: tenant.sourceId,
               key,
+              value: sanitizePreferenceValue(value),
+              kind: "preference",
+              tags: [],
+              createdAt: now,
+              updatedAt: now,
             },
-          },
-          create: {
-            userId: tenant.userId,
-            sourceId: tenant.sourceId,
-            key,
-            value: sanitizePreferenceValue(value),
-            kind: "preference",
-            tags: [],
-            createdAt: now,
-            updatedAt: now,
-          },
-          update: {
-            value: sanitizePreferenceValue(value),
-            kind: "preference",
-            updatedAt: now,
-          },
-        });
+            update: {
+              value: sanitizePreferenceValue(value),
+              kind: "preference",
+              updatedAt: now,
+            },
+          });
 
-        return {
-          ok: true,
-          key,
-        };
+          return {
+            ok: true,
+            key,
+            storage: "file+database",
+            memoryId: fileMemory.id,
+          };
+        } catch (error) {
+          options.logger.warn(
+            {
+              userId: tenant.userId,
+              sourceId: tenant.sourceId,
+              message: error instanceof Error ? error.message : String(error),
+            },
+            "Preference persistence mirrored to file memory but database upsert failed"
+          );
+          return {
+            ok: true,
+            key,
+            storage: "file",
+            memoryId: fileMemory.id,
+          };
+        }
       },
     }),
   };
