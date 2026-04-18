@@ -71,13 +71,30 @@ export function InboxView({ onViewMailDetail }: InboxViewProps) {
     }
   }, [triage, prefetchMailBodies]);
 
-  useEffect(() => {
-    setSyncingDraftIds(new Set());
-    setSyncedDraftIds(new Set());
-    setDraftSyncMessage(null);
-    setDraftSyncError(null);
-    setIsBatchSyncingDrafts(false);
-  }, [processingResult?.completedAt, activeSourceId]);
+	  useEffect(() => {
+	    setSyncingDraftIds(new Set());
+	    const autoSyncedIds = new Set(
+	      (processingResult?.calendarSync?.items ?? [])
+	        .filter((item) => item.ok)
+	        .map((item) => item.messageId)
+	    );
+	    setSyncedDraftIds(autoSyncedIds);
+	    if (processingResult?.calendarSync && autoSyncedIds.size > 0) {
+	      const result = processingResult.calendarSync;
+	      const suffix = result.deduplicatedCount > 0
+	        ? locale === "zh"
+	          ? `，其中 ${result.deduplicatedCount} 项已存在`
+	          : `, ${result.deduplicatedCount} already existed`
+	        : "";
+	      setDraftSyncMessage(locale === "zh"
+	        ? `自动写入日历 ${autoSyncedIds.size} 项${suffix}。`
+	        : `Automatically added ${autoSyncedIds.size} items to calendar${suffix}.`);
+	    } else {
+	      setDraftSyncMessage(null);
+	    }
+	    setDraftSyncError(null);
+	    setIsBatchSyncingDrafts(false);
+	  }, [activeSourceId, locale, processingResult]);
 
   const handleRefresh = useCallback(() => {
     if (activeSourceId) {

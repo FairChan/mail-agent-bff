@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "userId": "d5d42116-53cd-498d-9f52-36ed9ce53ff7",
+  "activeSourceId": "mem_outlook-ssemaster-outloo_f97d45",
+  "sources": [
+    {
+      "id": "mem_outlook-ssemaster-outloo_f97d45",
+      "externalId": "outlook-ssemaster-outloo_d05998",
+      "userId": "d5d42116-53cd-498d-9f52-36ed9ce53ff7",
+      "label": "Outlook ssemaster@outlook.com",
+      "provider": "outlook",
+      "connectionType": "microsoft",
+      "emailHint": "ssemaster@outlook.com",
+      "mailboxUserId": "ssemaster@outlook.com",
+      "connectedAccountId": null,
+      "microsoftAccountId": "3438192c33f3079d",
+      "connectionTrustedAt": "2026-04-18T12:33:47.941Z",
+      "connectionTrustSource": "microsoft_direct_session",
+      "connectionTrustDetailsJson": "{\"reason\":\"Microsoft direct OAuth account connected in the current session\"}",
+      "routingVerifiedAt": "2026-04-18T12:33:48.486Z",
+      "routingStatusJson": "{\"verifiedAt\":\"2026-04-18T12:33:48.486Z\",\"routingVerified\":true,\"failFast\":false,\"message\":\"Direct Microsoft mailbox access verified.\",\"mailbox\":{\"required\":true,\"status\":\"verified\",\"verified\":true,\"message\":\"Microsoft Graph /me and /me/messages probes succeeded.\"},\"connectedAccount\":{\"required\":false,\"status\":\"skipped\",\"verified\":true,\"message\":\"Direct Microsoft auth does not use Composio connectedAccountId.\"}}",
+      "enabled": true,
+      "createdAt": "2026-04-18T12:33:47.941Z",
+      "updatedAt": "2026-04-18T12:33:48.486Z"
+    }
+  ]
+}

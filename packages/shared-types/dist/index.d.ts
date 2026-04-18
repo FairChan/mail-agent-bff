@@ -199,6 +199,7 @@ export type MailCalendarBatchSyncResult = {
         error: string;
     }>;
 };
+export type MailProcessingTrigger = "manual" | "poll" | "webhook";
 export type MailQaReference = {
     messageId: string;
     subject: string;
@@ -262,6 +263,10 @@ export type MailKnowledgeRecord = {
     receivedAt: string;
     processedAt: string;
     webLink?: string;
+    knowledgeCard?: {
+        savedAt: string;
+        tags: string[];
+    };
 };
 export type EventCluster = {
     eventId: string;
@@ -445,6 +450,7 @@ export type MailNotificationPollResult = MailNotificationPreferencesResult & {
 };
 export type MailProcessingRunResult = {
     status: "completed" | "partial";
+    trigger?: MailProcessingTrigger;
     warnings: string[];
     sourceId: string;
     startedAt: string;
@@ -473,6 +479,14 @@ export type MailProcessingRunResult = {
     };
     dailyDigest: MailDailyDigestNotification | null;
     calendarDrafts: MailCalendarDraft[];
+    calendarSync?: MailCalendarBatchSyncResult | null;
+    automation?: {
+        triggeredBy: MailProcessingTrigger;
+        windowDays: number | null;
+        newMailDetected: boolean;
+        calendarAutoSyncEnabled: boolean;
+        calendarAutoSyncThreshold: number | null;
+    };
 };
 export declare const quadrantMeta: Record<MailQuadrant, {
     tone: string;

@@ -142,8 +142,13 @@ export async function exportMailKnowledgeBaseDocuments(
       `生成时间：${nowIso}`,
       "",
       toMarkdownTable(
-        ["标识码", "题目", "接收时间"],
-        mailRows.map((mail) => [mail.mailId, sanitizeMarkdownText(mail.subject), mail.receivedAt])
+        ["标识码", "题目", "接收时间", "知识卡片"],
+        mailRows.map((mail) => [
+          mail.mailId,
+          sanitizeMarkdownText(mail.subject),
+          mail.receivedAt,
+          mail.knowledgeCard ? "是" : "否",
+        ])
       ),
       "",
     ].join("\n")
@@ -191,6 +196,8 @@ export async function exportMailKnowledgeBaseDocuments(
         `- 紧急性：${formatScoreForExport(mail.urgencyScore, resolveScoreScale(mail))}`,
         `- 象限：${mail.quadrant}`,
         `- 接收时间：${mail.receivedAt}`,
+        `- 知识卡片：${mail.knowledgeCard ? "已保存" : "未保存"}`,
+        `- 知识标签：${mail.knowledgeCard?.tags.map((tag) => sanitizeMarkdownText(tag)).join(", ") || "无"}`,
         "",
         sanitizeMarkdownText(mail.summary),
         "",

@@ -278,3 +278,22 @@ Google 自 2024 年起逐步淘汰 App Passwords，Gmail SMTP 发送需要使用
 - Task: final backend audit of `apps/bff/src/server.ts`, `apps/bff/src/summary.ts`, and `apps/bff/src/agent/llm-gateway.ts` after fixes for KB summarization routing, export failure signaling, routing-independent KB reads, and API key decrypt fallback.
 - Deliverable: review only; no code changes requested beyond this log entry.
 - Audit: N/A (no code changes)
+
+### 2026-04-18T19:39:52+08:00 — Non-code
+
+- Task: audited `apps/bff/src/server.ts`, `apps/bff/src/microsoft-graph.ts`, `apps/bff/src/mail-source-service.ts`, `apps/bff/src/outlook-sync-store.ts`, and `apps/bff/src/runtime/json-file-store.ts`, focusing on durable Outlook sync, Microsoft account persistence, webhook validation, and file-backed fallback state handling.
+- Deliverable: review findings only; no code changes requested beyond this log entry.
+- Audit: N/A (no code changes)
+
+### 2026-04-18T20:18:40+08:00 — Code
+
+- Task: completed the remaining durable Outlook new-mail processing path by hardening webhook state updates, source mutation races, Graph subscription lifecycle handling, background stale snapshot handling, and foreground/background calendar dedupe scoping.
+- Deliverable: guarded durable runtime state writes, strict live webhook `clientState` validation, reset-on-rebind durable state, atomic source mutation locking, background non-authoritative upsert protections, and durable timezone hints.
+- Validation: `npm --workspace apps/bff run check`, `npm --workspace apps/bff run build`, `git diff --check`, local BFF restart, and `/health` check passed for `llm.ok`, `microsoft.ok`, and `outlookSync.ok`.
+- Audit: independent sub-agent audit completed with no remaining Critical/High findings. Evidence: `.harness/audit/2026-04-18-durable-outlook-sync-followup.md`.
+
+### 2026-04-18T19:52:03+0800 — Non-code
+
+- Task: re-audited `apps/bff/src/server.ts` after the latest fixes, focusing on durable Outlook sync state, stale-state writeback, Microsoft-account rebinding, and webhook `clientState` validation.
+- Deliverable: concrete findings only; no code changes requested beyond this log entry.
+- Audit: N/A (no code changes)

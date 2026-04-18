@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "state": {
+    "userId": "d5d42116-53cd-498d-9f52-36ed9ce53ff7",
+    "sourceId": "mem_outlook-ssemaster-outloo_f97d45",
+    "microsoftAccountId": "3438192c33f3079d",
+    "mailboxUserId": "ssemaster@outlook.com",
+    "connectionType": "microsoft",
+    "label": "Outlook ssemaster@outlook.com",
+    "emailHint": "ssemaster@outlook.com",
+    "timeZone": "Asia/Shanghai",
+    "enabled": true,
+    "mode": "poll",
+    "initializedAt": "2026-04-18T12:33:47.993Z",
+    "updatedAt": "2026-04-18T13:08:00.336Z",
+    "subscriptionId": null,
+    "clientState": null,
+    "resource": "/me/mailFolders('inbox')/messages",
+    "notificationUrl": null,
+    "lifecycleNotificationUrl": null,
+    "subscriptionExpirationDateTime": null,
+    "subscriptionStatus": "idle",
+    "deltaLink": "https://graph.microsoft.com/v1.0/me/mailFolders('inbox')/messages/delta?$deltatoken=RHPQF3dIsG5nHVbNBdnrkvRPEMNN5EsAdurKZl7eLtzfI-F_Omq8GgNSAGCtWm7tb_AozIKKFvjRkcnVReAzwee0PK8F7CnrrCYonIxaBKjFUm9e5uL5G_Iyn5MCKGK1N6P_JMFm0teyPCNV6KRd5cUVGSRP4FwSGv7Larhf4bKC93_vwknopS7nPf5dASR1epMW2Yuh8irQO_oPY9JqAfxpLb3jAi5KDl-V3P2QxXILXW561n1S8CLBKhoolll5d_v2CzHoyIdCnBf46wfU7sMDmKXSThl7WT-Bn6a2oqhgpV1uIBChK_X0USuDYzx6b2ZNKL6IA8mST6z9NlVBqgNmuF71sUN_LbUm9tx_x7SIlGxPDamvcnSs1CRJl7QP5nYdX54VQqrjzE3397dJV-HNu_bO4e7BV2Uk3atnp4w.JaQKRyCsPEm8fAB9DQ5cx22PiTZ7QgUM78doxJr5hUI",
+    "nextDeltaLink": null,
+    "lastDeltaSyncAt": "2026-04-18T12:33:49.559Z",
+    "lastWebhookAt": null,
+    "lastProcessingAt": null,
+    "lastSeenMessageId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABkn6lVQAAAA==",
+    "lastSeenReceivedDateTime": "2026-04-18T09:09:07Z",
+    "lastError": null,
+    "dirtyReason": "initial_sync"
+  }
+}

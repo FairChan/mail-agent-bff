@@ -1,7 +1,10 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { join } from "node:path";
 import type { FastifyBaseLogger } from "fastify";
 import { env } from "./config.js";
 import { getPrismaClient } from "./persistence.js";
+import { runtimePaths } from "./runtime/paths.js";
+import { listJsonFiles, readJsonFile, writeJsonFile } from "./runtime/json-file-store.js";
 
 export type DbMailSourceConnectionType = "composio" | "microsoft";
 export type DbMailSourceProvider = "outlook";
@@ -91,10 +94,143 @@ type MemoryMailSourceRow = {
   updatedAt: Date;
 };
 
+type MemoryMailSourceRowSnapshot = {
+  id: string;
+  externalId: string;
+  userId: string;
+  label: string;
+  provider: DbMailSourceProvider;
+  connectionType: DbMailSourceConnectionType;
+  emailHint: string;
+  mailboxUserId: string | null;
+  connectedAccountId: string | null;
+  microsoftAccountId: string | null;
+  connectionTrustedAt: string | null;
+  connectionTrustSource: string | null;
+  connectionTrustDetailsJson: string | null;
+  routingVerifiedAt: string | null;
+  routingStatusJson: string | null;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type FileMailSourceSnapshot = {
+  version: 1;
+  userId: string;
+  activeSourceId: string | null;
+  sources: MemoryMailSourceRowSnapshot[];
+};
+
 const memoryMailSourcesByUser = new Map<string, Map<string, MemoryMailSourceRow>>();
 const memoryActiveMailSourceByUser = new Map<string, string>();
 const maxMemoryMailSourceUsers = 5000;
 const maxMemoryMailSourcesPerUser = 20;
+const mailSourceFileStoreDir = join(runtimePaths.dataDir, "mail-sources");
+
+function fileScopeKey(userId: string): string {
+  return createHash("sha256").update(userId).digest("hex").slice(0, 24);
+}
+
+function fileStorePathForUser(userId: string): string {
+  return join(mailSourceFileStoreDir, `${fileScopeKey(userId)}.json`);
+}
+
+function serializeMemoryRow(row: MemoryMailSourceRow): MemoryMailSourceRowSnapshot {
+  return {
+    id: row.id,
+    externalId: row.externalId,
+    userId: row.userId,
+    label: row.label,
+    provider: row.provider,
+    connectionType: row.connectionType,
+    emailHint: row.emailHint,
+    mailboxUserId: row.mailboxUserId,
+    connectedAccountId: row.connectedAccountId,
+    microsoftAccountId: row.microsoftAccountId,
+    connectionTrustedAt: row.connectionTrustedAt ? row.connectionTrustedAt.toISOString() : null,
+    connectionTrustSource: row.connectionTrustSource,
+    connectionTrustDetailsJson: row.connectionTrustDetailsJson,
+    routingVerifiedAt: row.routingVerifiedAt ? row.routingVerifiedAt.toISOString() : null,
+    routingStatusJson: row.routingStatusJson,
+    enabled: row.enabled,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+function deserializeMemoryRow(row: MemoryMailSourceRowSnapshot): MemoryMailSourceRow | null {
+  if (!row?.id || !row.userId || !row.label) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    externalId: row.externalId,
+    userId: row.userId,
+    label: row.label,
+    provider: row.provider === "outlook" ? "outlook" : "outlook",
+    connectionType: row.connectionType === "microsoft" ? "microsoft" : "composio",
+    emailHint: row.emailHint ?? "",
+    mailboxUserId: row.mailboxUserId ?? null,
+    connectedAccountId: row.connectedAccountId ?? null,
+    microsoftAccountId: row.microsoftAccountId ?? null,
+    connectionTrustedAt: row.connectionTrustedAt ? new Date(row.connectionTrustedAt) : null,
+    connectionTrustSource: row.connectionTrustSource ?? null,
+    connectionTrustDetailsJson: row.connectionTrustDetailsJson ?? null,
+    routingVerifiedAt: row.routingVerifiedAt ? new Date(row.routingVerifiedAt) : null,
+    routingStatusJson: row.routingStatusJson ?? null,
+    enabled: Boolean(row.enabled),
+    createdAt: new Date(row.createdAt),
+    updatedAt: new Date(row.updatedAt),
+  };
+}
+
+async function hydrateMemorySourceStoreForUser(userId: string): Promise<void> {
+  if (memoryMailSourcesByUser.has(userId)) {
+    return;
+  }
+
+  const snapshot = await readJsonFile<FileMailSourceSnapshot | null>(
+    fileStorePathForUser(userId),
+    null
+  );
+  if (!snapshot || snapshot.userId !== userId || !Array.isArray(snapshot.sources)) {
+    return;
+  }
+
+  const store = new Map<string, MemoryMailSourceRow>();
+  for (const row of snapshot.sources) {
+    const parsed = deserializeMemoryRow(row);
+    if (parsed) {
+      store.set(parsed.id, parsed);
+    }
+  }
+
+  if (store.size > 0) {
+    memoryMailSourcesByUser.set(userId, store);
+    enforceMapLimit(memoryMailSourcesByUser, maxMemoryMailSourceUsers);
+  }
+
+  const activeSourceId = cleanOptionalText(snapshot.activeSourceId ?? undefined);
+  if (activeSourceId) {
+    memoryActiveMailSourceByUser.set(userId, activeSourceId);
+  }
+}
+
+async function persistMemorySourceStoreForUser(userId: string): Promise<void> {
+  const store = getMemorySourceStore(userId, false);
+  const snapshot: FileMailSourceSnapshot = {
+    version: 1,
+    userId,
+    activeSourceId: cleanOptionalText(memoryActiveMailSourceByUser.get(userId) ?? undefined) ?? null,
+    sources: [...store.values()]
+      .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime())
+      .map(serializeMemoryRow),
+  };
+
+  await writeJsonFile(fileStorePathForUser(userId), snapshot);
+}
 
 function cleanOptionalText(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -391,6 +527,7 @@ export class MailSourceService {
   async listForUser(userId: string): Promise<DbMailSourceSnapshot> {
     const prisma = await prismaOrNull(this.logger);
     if (!prisma) {
+      await hydrateMemorySourceStoreForUser(userId);
       return memorySnapshotForUser(userId);
     }
 
@@ -411,6 +548,7 @@ export class MailSourceService {
   async resolveForUser(userId: string, requestedSourceId?: string): Promise<DbMailSourceProfileView | null> {
     const prisma = await prismaOrNull(this.logger);
     if (!prisma) {
+      await hydrateMemorySourceStoreForUser(userId);
       const sourceId = cleanOptionalText(requestedSourceId) ?? resolveMemoryActiveSourceId(userId);
       if (!sourceId) {
         return null;
@@ -434,6 +572,7 @@ export class MailSourceService {
   async getOwnedSource(userId: string, sourceId: string): Promise<DbMailSourceProfileView | null> {
     const prisma = await prismaOrNull(this.logger);
     if (!prisma) {
+      await hydrateMemorySourceStoreForUser(userId);
       const row = getMemorySourceStore(userId, false).get(sourceId);
       return row ? profileFromRow(row) : null;
     }
@@ -471,6 +610,7 @@ export class MailSourceService {
     }
 
     if (!prisma) {
+      await hydrateMemorySourceStoreForUser(userId);
       const normalized = validateMemorySourceInput({
         connectionType,
         mailboxUserId,
@@ -510,6 +650,7 @@ export class MailSourceService {
       if (!resolveMemoryActiveSourceId(userId)) {
         memoryActiveMailSourceByUser.set(userId, row.id);
       }
+      await persistMemorySourceStoreForUser(userId);
 
       return {
         ...memorySnapshotForUser(userId),
@@ -557,6 +698,7 @@ export class MailSourceService {
   async updateForUser(userId: string, input: MailSourceUpdateInput): Promise<DbMailSourceSnapshot & { source: DbMailSourceProfileView }> {
     const prisma = await prismaOrNull(this.logger);
     if (!prisma) {
+      await hydrateMemorySourceStoreForUser(userId);
       const store = getMemorySourceStore(userId, false);
       const current = store.get(input.id);
       if (!current) {
@@ -602,6 +744,7 @@ export class MailSourceService {
         memoryActiveMailSourceByUser.delete(userId);
         resolveMemoryActiveSourceId(userId);
       }
+      await persistMemorySourceStoreForUser(userId);
 
       return {
         ...memorySnapshotForUser(userId),
@@ -700,6 +843,7 @@ export class MailSourceService {
   async deleteForUser(userId: string, sourceId: string): Promise<DbMailSourceSnapshot & { deleted: true; id: string }> {
     const prisma = await prismaOrNull(this.logger);
     if (!prisma) {
+      await hydrateMemorySourceStoreForUser(userId);
       const store = getMemorySourceStore(userId, false);
       if (!store.has(sourceId)) {
         throw new Error("MAIL_SOURCE_NOT_FOUND");
@@ -710,6 +854,7 @@ export class MailSourceService {
         resolveMemoryActiveSourceId(userId);
       }
       pruneEmptyMemorySourceStore(userId);
+      await persistMemorySourceStoreForUser(userId);
       return {
         ...memorySnapshotForUser(userId),
         id: sourceId,
@@ -738,11 +883,13 @@ export class MailSourceService {
   async selectForUser(userId: string, sourceId: string): Promise<DbMailSourceSnapshot> {
     const prisma = await prismaOrNull(this.logger);
     if (!prisma) {
+      await hydrateMemorySourceStoreForUser(userId);
       const current = getMemorySourceStore(userId, false).get(sourceId);
       if (!current?.enabled) {
         throw new Error("MAIL_SOURCE_NOT_FOUND");
       }
       memoryActiveMailSourceByUser.set(userId, current.id);
+      await persistMemorySourceStoreForUser(userId);
       return memorySnapshotForUser(userId);
     }
 
@@ -761,6 +908,7 @@ export class MailSourceService {
   async saveRoutingStatus(userId: string, sourceId: string, routingStatus: DbMailSourceRoutingStatus): Promise<void> {
     const prisma = await prismaOrNull(this.logger);
     if (!prisma) {
+      await hydrateMemorySourceStoreForUser(userId);
       const current = getMemorySourceStore(userId, false).get(sourceId);
       if (!current) {
         return;
@@ -768,6 +916,7 @@ export class MailSourceService {
       current.routingVerifiedAt = new Date(routingStatus.verifiedAt);
       current.routingStatusJson = JSON.stringify(routingStatus);
       current.updatedAt = new Date();
+      await persistMemorySourceStoreForUser(userId);
       return;
     }
 
@@ -790,6 +939,7 @@ export class MailSourceService {
   }): Promise<DbMailSourceSnapshot & { source: DbMailSourceProfileView }> {
     const prisma = await prismaOrNull(this.logger);
     if (!prisma) {
+      await hydrateMemorySourceStoreForUser(input.userId);
       const mailboxUserId = cleanOptionalText(input.mailboxUserIdHint) ?? "me";
       const label =
         cleanOptionalText(input.label) ??
@@ -847,6 +997,7 @@ export class MailSourceService {
       store.set(row.id, row);
       enforceMapLimit(store, maxMemoryMailSourcesPerUser);
       memoryActiveMailSourceByUser.set(input.userId, row.id);
+      await persistMemorySourceStoreForUser(input.userId);
       return {
         ...memorySnapshotForUser(input.userId),
         source: profileFromRow(row),
@@ -920,5 +1071,49 @@ export class MailSourceService {
       ...(await this.listForUser(input.userId)),
       source: profileFromRow(row),
     };
+  }
+
+  async listReadyMicrosoftSourcesForBackground(): Promise<Array<{ userId: string; source: DbMailSourceProfileView }>> {
+    const prisma = await prismaOrNull(this.logger);
+    if (!prisma) {
+      const files = await listJsonFiles(mailSourceFileStoreDir);
+      const results: Array<{ userId: string; source: DbMailSourceProfileView }> = [];
+      for (const fileName of files) {
+        const snapshot = await readJsonFile<FileMailSourceSnapshot | null>(
+          join(mailSourceFileStoreDir, fileName),
+          null
+        );
+        if (!snapshot?.userId || !Array.isArray(snapshot.sources)) {
+          continue;
+        }
+        for (const row of snapshot.sources) {
+          const parsed = deserializeMemoryRow(row);
+          if (!parsed) {
+            continue;
+          }
+          const profile = profileFromRow(parsed);
+          if (profile.enabled && profile.connectionType === "microsoft" && profile.ready) {
+            results.push({ userId: snapshot.userId, source: profile });
+          }
+        }
+      }
+      return results;
+    }
+
+    const rows = await prisma.mailSource.findMany({
+      where: {
+        enabled: true,
+        connectionType: "microsoft",
+        connectionTrustedAt: { not: null },
+      },
+      orderBy: [{ userId: "asc" }, { createdAt: "asc" }],
+    });
+
+    return rows
+      .map((row: any) => ({
+        userId: row.userId,
+        source: profileFromRow(row),
+      }))
+      .filter((item: { userId: string; source: DbMailSourceProfileView }) => item.source.ready);
   }
 }

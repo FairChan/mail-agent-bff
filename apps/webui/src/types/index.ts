@@ -628,6 +628,12 @@ export const mailKnowledgeRecordSchema = z.object({
   receivedAt: z.string(),
   processedAt: z.string(),
   webLink: z.string().optional(),
+  knowledgeCard: z
+    .object({
+      savedAt: z.string(),
+      tags: z.array(z.string()),
+    })
+    .optional(),
 });
 
 export const eventClusterSchema = z.object({

@@ -4618,3 +4618,151 @@ cp .env.example .env
 - Validation completed:
 - Checked BFF Prisma configuration references including `PRISMA_AUTH_ENABLED`, `DATABASE_URL`, `getPrismaClient()`, and health reporting paths.
 - Audit: `N/A (no code changes)`
+
+## 2026-04-18T18:01:58+08:00
+
+- Scope: Implemented proactive new-mail processing after Outlook connection, reusing the historical mail KB pipeline and adding fallback polling plus lower-left urgent popup delivery.
+- Task type: `Code`
+- Implementation completed:
+- BFF now exposes a reusable source-locked mail processing pipeline for manual, poll, and future webhook triggers; the pipeline refreshes KB exports, computes four-quadrant triage, extracts calendar drafts, auto-syncs high-confidence reminders, and emits urgent-important results.
+- SSE notification streams now trigger automatic processing on the active mailbox, with per-source throttling and `mail_processing` events for the WebUI.
+- Frontend now listens for automatic processing results, displays urgent-important mail in a lower-left popup, and supports saving those mails as knowledge cards.
+- EventSource fallback now repeatedly calls the same automatic processing route with `trigger: poll` and a short window, so browsers without a realtime stream still process new mail promptly.
+- KB store/export/query types now preserve knowledge-card metadata and make tags searchable for future agent answers.
+- Validation completed:
+- `npm --workspace packages/shared-types run typecheck` passed.
+- `npm --workspace apps/bff run check` passed.
+- `npm --workspace apps/webui run check` passed.
+- `npm --workspace apps/bff run build` passed.
+- `npm --workspace apps/webui run build` passed.
+- `npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts` passed (`16 passed`).
+- `git diff --check` passed.
+- Audit: independent sub-agent audit found 1 High fallback-polling issue and 1 Low manual-toast behavior note. The High issue was fixed and validated; the Low note is accepted because manual processing already surfaces urgent results in the workbench. Evidence: `.harness/audit/2026-04-18-new-mail-auto-processing.md`.
+
+## 2026-04-18T18:54:44+08:00
+
+- Scope: Continued the new-mail processing work by adding a BFF-side background sweep so logged-in sessions keep best-effort automatic preprocessing even when the current page is not actively holding an SSE stream.
+- Task type: `Code`
+- Implementation completed:
+- Added a shared automatic-processing helper in `apps/bff/src/server.ts` so the SSE path, `trigger=poll` API path, and background sweep now reuse the same lock, throttle, and result-caching behavior.
+- Added active SSE stream counting per session/source so the background sweep yields to foreground realtime streams instead of fighting them.
+- Added a background timer in the BFF that scans live logged-in sessions, hydrates source snapshots if needed, and runs automatic preprocessing for ready sources when no realtime stream is active.
+- Updated the WebUI fallback polling path to silently ignore the normal `Mail processing already in progress` race produced by shared backend locking.
+- Restarted the local BFF preview on `http://127.0.0.1:8787` after rebuilding; `/health` now reports `llm.ok=true`, `microsoft.ok=true`, and the same known deferred `prisma.ok=false`.
+- Validation completed:
+- `npm --workspace apps/bff run check` passed.
+- `npm --workspace apps/webui run check` passed.
+- `npm --workspace apps/bff run build` passed.
+- `npm --workspace apps/webui run build` passed.
+- `npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts` passed (`16 passed`).
+- `git diff --check` passed.
+- Audit: independent sub-agent audit reported `No findings`. Evidence: `.harness/audit/2026-04-18-background-mail-processing-audit.md`.
+
+## 2026-04-18T18:59:23+08:00
+
+- Scope: Reviewed completion status for the "how to process new mail" workflow and mapped the original requirements to the current implementation.
+- Task type: `Non-code`
+- Implementation status:
+- Confirmed that new mail now reuses the historical KB pipeline, including persisted message IDs, subject index, scoring, event clustering, sender profiles, summaries, calendar candidates, and knowledge-card storage for future agent retrieval.
+- Confirmed that automatic preprocessing currently runs through foreground SSE, frontend fallback polling, and a BFF-side best-effort background sweep for logged-in sessions.
+- Confirmed that urgent-important mail can surface as a lower-left popup in the WebUI after automatic processing.
+- Remaining gap explicitly noted for future deployment work: the current solution is not yet a durable Microsoft Graph webhook plus persistent worker/queue architecture across restarts or multi-instance deployments.
+- Audit: `N/A (no code changes)`
+
+## 2026-04-18T19:07:57+08:00
+
+- Scope: Explored the BFF codebase for existing mail source persistence, session persistence, notification/subscription handling, and webhook/background-worker stubs to identify concrete extension points for durable Outlook new-mail subscriptions.
+- Task type: `Non-code`
+- Findings:
+- Confirmed that auth sessions already have an optional Redis-backed persistence layer, while mail sources and Microsoft accounts have Prisma-backed persistence with in-memory fallbacks.
+- Confirmed that the current new-mail automation path is durable only at the auth-session layer; notification streams, auto-processing throttles, and background sweep state remain in-process maps tied to a live BFF instance.
+- Confirmed that `apps/bff/src/webhook-handler.ts` contains a prototype webhook/subscription implementation for Composio and Microsoft Graph, but it is not wired into the active `server.ts` runtime and still relies on in-memory subscription/session maps.
+- Confirmed that there is no persisted Microsoft Graph subscription entity, renewal scheduler, delta token store, or restart-safe worker yet; those are the core missing pieces for production-grade Outlook push ingestion.
+- Audit: `N/A (no code changes)`
+
+## 2026-04-18T19:10:04+08:00
+
+- Scope: Inspected the current frontend/backend new-mail flow end to end, from Outlook source activation through SSE and fallback polling, and identified where a true Microsoft webhook plus persistent worker can be integrated without breaking the current WebUI behavior.
+- Task type: `Non-code`
+- Findings:
+- Confirmed that the active Outlook direct-auth path is `SettingsView -> MailContext.launchOutlookAuth -> /api/mail/connections/outlook/direct/start -> /api/mail/connections/outlook/direct/callback -> upsertMicrosoftSourceForSession`, after which the source is made active immediately and a background routing verification is queued.
+- Confirmed that the active frontend realtime path starts only after `activeSourceId` becomes available; `MailContext` opens `/api/mail/notifications/stream` when `EventSource` exists and falls back to `/api/mail/processing/run` polling every 45 seconds when realtime is unavailable.
+- Confirmed that the active backend SSE route in `apps/bff/src/server.ts` is not a push-webhook stream; it is a server-held interval loop that emits both `notification` snapshots and `mail_processing` results by reusing the current polling and processing pipeline.
+- Confirmed that the true event-driven webhook prototype lives separately in `apps/bff/src/routes/webhook.ts` and `apps/bff/src/webhook-handler.ts`, but it is not registered into the current `server.ts` runtime and would currently conflict in responsibility with the existing `/api/mail/notifications/stream` owner if wired in unchanged.
+- Confirmed that the safest future integration seam is backend-side: keep the WebUI event contract unchanged, provision Microsoft subscriptions asynchronously after source activation, and move durable new-mail execution behind the existing processing helpers instead of changing the frontend transport first.
+- Audit: `N/A (no code changes)`
+
+## 2026-04-18T20:18:40+08:00
+
+- Scope: Completed the remaining deployment-grade Outlook new-mail processing work by hardening durable background sync, webhook handling, source mutation races, and local restart-safe fallback state.
+- Task type: `Code`
+- Changes:
+- Added guarded durable Outlook runtime state writes so older poll/webhook workers cannot overwrite newer source bindings, disabled state, or newer webhook lifecycle state.
+- Reset durable sync state on Microsoft account/mailbox rebinding and best-effort deletes the previous Microsoft Graph subscription.
+- Tightened Outlook webhook handling to require a live enabled subscription, matching binding, active subscription id, and exact `clientState` before accepting a notification.
+- Serialized source update/delete with the durable Outlook lock, made mutation lock acquisition atomic, and prevented stale background source snapshots from re-enabling disabled durable state.
+- Reused user/source calendar dedupe scope across foreground and durable background paths, and persisted a durable timezone hint for background processing.
+- Validation:
+- `npm --workspace apps/bff run check` passed.
+- `npm --workspace apps/bff run build` passed.
+- `git diff --check` passed.
+- Local BFF restarted from `apps/bff/dist/server.js`; `/health` returned `llm.ok=true`, `microsoft.ok=true`, and `outlookSync.ok=true`.
+- Note: `/health` still reports `prisma.ok=false`; this remains intentionally deferred for the later deployment/database pass.
+- Audit: independent sub-agent audits iterated over all Critical/High findings. Final audit reported no remaining Critical/High. Evidence: `.harness/audit/2026-04-18-durable-outlook-sync-followup.md`.
+- Deferred Medium risks: process-local calendar dedupe persistence and session-scoped custom priority rules are documented in the audit file with owner `backend/deployment` or `backend/product` and target date `2026-04-25`.
+
+## 2026-04-18T20:31:17+08:00
+
+- Scope: Deployed the current local stack for manual inspection.
+- Task type: `Non-code`
+- Deployment:
+- BFF is running from `apps/bff/dist/server.js` at `http://127.0.0.1:8787`.
+- WebUI is running through Vite dev server at `http://127.0.0.1:4173`, with `/api`, `/health`, `/ready`, and `/live` proxied to the BFF.
+- Agent window route verified at `http://127.0.0.1:4173/?window=agent`.
+- Health: `/health` via WebUI proxy returned `llm.ok=true`, `microsoft.ok=true`, and `outlookSync.ok=true`; `prisma.ok=false` remains intentionally deferred for the later deployment/database pass.
+- Audit: `N/A (no code changes)`.
+
+## 2026-04-18T20:47:22+08:00
+
+- Scope: Installed and enabled RTK for future local Codex conversations, and updated standing audit guidance.
+- Task type: `Non-code`
+- RTK:
+- Installed `rtk 0.37.0` via the official quick install script after Homebrew stalled while downloading the bottle.
+- Verified `~/.local/bin/rtk --version`, `rtk gain`, `rtk git status`, and `rtk ls .`.
+- Ran `rtk init -g --codex` and `rtk init --codex`, which created global/local `RTK.md` files and added Codex `AGENTS.md` references.
+- Added workspace memory/rule notes to prefer RTK for noisy commands while preserving raw output when precision is needed.
+- Audit policy:
+- Updated `AGENTS.md` and `MEMORY.md` so sub-agent audit is capped at 3 rounds per task, with each round comprehensive, truthful, and concise/token-efficient.
+- Audit: `N/A (no code changes)`.
+
+## 2026-04-18T20:48:15+08:00
+
+- Scope: Reviewed the current end-to-end mail-agent flow to summarize privacy protections and compare the project architecture against the repository's legacy OpenClaw-centered path.
+- Task type: `Non-code`
+- Findings:
+- Confirmed that the current production direction is Microsoft Direct OAuth + Microsoft Graph through the BFF, with OpenClaw retained as a legacy fallback instead of the primary privacy/control plane.
+- Confirmed that privacy controls are layered across HttpOnly session cookies, server-side provider credentials, encrypted Microsoft/LLM secrets, user/source-scoped mail sources, KB, Agent memory, LLM usage, jobs, notification streams, and webhook state.
+- Confirmed that source readiness, routing verification, Microsoft account ownership checks, exact Outlook webhook `clientState` matching, frontend stale-source guards, and KB artifact scoping together make the full flow coherent outside the still-deferred Azure/database deployment work.
+- Compared advantages against the local OpenClaw legacy mode: fewer mailbox intermediaries on the main path, stronger tenant/source isolation, a narrower mail-specific tool surface, first-party Microsoft token ownership, better evidence/auditability, and a smoother product workflow.
+- Audit: `N/A (no code changes)`.
+
+## 2026-04-18T20:52:00+08:00
+
+- Scope: Summarized how multi-user privacy isolation is enforced in the current stack and what practical advantages that isolation model provides.
+- Task type: `Non-code`
+- Findings:
+- Confirmed that the active isolation model is not only account-level but `userId + sourceId` scoped across request routing, mail-source ownership, Microsoft account ownership, KB stores, Agent memory, LLM usage, notification streams, and job access.
+- Confirmed that browser-side state is intentionally weak authority: the BFF resolves the authenticated user, validates owned source membership, blocks unrouted/unverified sources, and never exposes provider secrets to the browser.
+- Confirmed that durable artifacts are partitioned by hashed user/source paths or scoped DB keys, while realtime updates and background processing both reject stale or cross-source payloads before they reach the UI.
+- Confirmed that this model gives concrete advantages in multi-user and multi-mailbox scenarios: lower cross-tenant leakage risk, safer debugging/auditing, cleaner future RLS/DB migration alignment, and better support for one user owning multiple mailbox sources without data mixing.
+- Audit: `N/A (no code changes)`.
+
+## 2026-04-18T21:02:26+08:00
+
+- Scope: Explained how the current web version prevents agent access to unauthorized files, and outlined a mobile-safe file authorization model for future Android/iOS releases.
+- Task type: `Non-code`
+- Findings:
+- Confirmed that the current web agent does not have generic filesystem tools; the active Mastra runtime only receives the mail-specific toolset exposed by `createMailAssistantTools`, while browser requests stay inside authenticated `/api` routes and source-scoped tenant guards.
+- Confirmed that risky gateway tool invocation is additionally reduced by `ALLOWED_TOOLS` matching and an explicit denylist for high-risk Composio management/multi-execute entrypoints.
+- Concluded that future mobile file access should use a brokered capability model instead of raw paths: user-selected folders only, OS-scoped handles/bookmarks, app-side path canonicalization, traversal/symlink rejection, mode-limited file APIs, revocable permissions, and no broad storage entitlements.
+- Audit: `N/A (no code changes)`.

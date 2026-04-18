@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_2muhex",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABkn6lVQAAAA==",
+  "subject": "[FairChan/mail-agent-bff] Run failed: CI - master (5e0cda8)",
+  "personId": "PER_002",
+  "eventId": "EVT_001001",
+  "importanceScore": 0.8,
+  "urgencyScore": 0.7,
+  "scoreScale": "ratio",
+  "quadrant": "urgent_important",
+  "summary": "GitHub仓库mail-agent-bff的CI工作流在master分支运行失败，verify任务在47秒后报错，需排查代码或配置问题。",
+  "receivedAt": "2026-04-18T09:09:07.000Z",
+  "processedAt": "2026-04-18T12:35:07.606Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABkn6lVQAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

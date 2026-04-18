@@ -1,8 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
 
 test.describe("webui smoke", () => {
-  async function mockAuthenticatedApp(page: Page, options?: { tutorialCompleted?: boolean }) {
+  async function mockAuthenticatedApp(
+    page: Page,
+    options?: { tutorialCompleted?: boolean; autoProcessingEvent?: boolean; eventSourceSupported?: boolean }
+  ) {
     const tutorialCompleted = options?.tutorialCompleted ?? true;
+    const autoProcessingEvent = options?.autoProcessingEvent ?? false;
+    const eventSourceSupported = options?.eventSourceSupported ?? true;
     let activeSourceIdState = "smoke-source";
     const sourcesState = [
       {
@@ -127,8 +132,96 @@ test.describe("webui smoke", () => {
         lastDigestSentAt: "2026-04-17T08:00:00.000Z",
       },
     };
+    const autoProcessingPayload = {
+      status: "completed",
+      trigger: "poll",
+      warnings: [],
+      sourceId: "smoke-source",
+      startedAt: "2026-04-17T00:00:00.000Z",
+      completedAt: "2026-04-17T00:01:00.000Z",
+      limit: 20,
+      horizonDays: 14,
+      timeZone: "Asia/Shanghai",
+      knowledgeBase: {
+        status: "completed",
+        processedCount: 0,
+        newMailCount: 1,
+        updatedMailCount: 0,
+        newEventCount: 1,
+        updatedEventCount: 0,
+        newSenderCount: 1,
+        updatedSenderCount: 0,
+        errors: [],
+      },
+      triage: {
+        total: 1,
+        counts: {
+          unprocessed: 0,
+          urgent_important: 1,
+          not_urgent_important: 0,
+          urgent_not_important: 0,
+          not_urgent_not_important: 0,
+        },
+      },
+      urgent: {
+        totalUrgentImportant: 1,
+        newItems: [
+          {
+            messageId: "auto-urgent-1",
+            subject: "New scholarship deadline",
+            fromName: "Graduate Office",
+            fromAddress: "grad@example.com",
+            receivedDateTime: "2026-04-17T00:05:00.000Z",
+            webLink: "https://outlook.example/messages/auto-urgent-1",
+            reasons: ["deadline", "important"],
+          },
+        ],
+      },
+      dailyDigest: null,
+      calendarDrafts: [
+        {
+          messageId: "auto-urgent-1",
+          subject: "New scholarship deadline",
+          type: "ddl",
+          dueAt: "2026-04-18T10:00:00.000Z",
+          dueDateLabel: "2026年4月18日 10:00",
+          confidence: 0.92,
+        },
+      ],
+      calendarSync: {
+        sourceId: "smoke-source",
+        total: 1,
+        createdCount: 1,
+        deduplicatedCount: 0,
+        failedCount: 0,
+        items: [
+          {
+            key: "auto-urgent-1|ddl|2026-04-18T10:00:00.000Z",
+            messageId: "auto-urgent-1",
+            type: "ddl",
+            dueAt: "2026-04-18T10:00:00.000Z",
+            ok: true,
+            deduplicated: false,
+            result: {
+              eventId: "calendar-auto-1",
+              eventSubject: "[MailAgent:DDL] New scholarship deadline",
+              eventWebLink: "https://outlook.example/calendar/calendar-auto-1",
+              start: { dateTime: "2026-04-18T09:30:00", timeZone: "Asia/Shanghai" },
+              end: { dateTime: "2026-04-18T10:00:00", timeZone: "Asia/Shanghai" },
+            },
+          },
+        ],
+      },
+      automation: {
+        triggeredBy: "poll",
+        windowDays: 2,
+        newMailDetected: true,
+        calendarAutoSyncEnabled: true,
+        calendarAutoSyncThreshold: 0.72,
+      },
+    };
 
-    await page.addInitScript(({ payload, tutorialCompleted: seededTutorialCompleted }) => {
+    await page.addInitScript(({ payload, autoPayload, eventSourceAvailable, tutorialCompleted: seededTutorialCompleted }) => {
       if (seededTutorialCompleted) {
         window.localStorage.setItem("mail-agent-tutorial:smoke-user", "done");
       } else {
@@ -160,6 +253,15 @@ test.describe("webui smoke", () => {
                 result: payload,
               }),
             });
+            if (autoPayload) {
+              this.emit("mail_processing", {
+                data: JSON.stringify({
+                  ok: true,
+                  sourceId: "smoke-source",
+                  result: autoPayload,
+                }),
+              });
+            }
           }, 0);
         }
 
@@ -186,10 +288,12 @@ test.describe("webui smoke", () => {
       Object.defineProperty(window, "EventSource", {
         configurable: true,
         writable: true,
-        value: MockEventSource,
+        value: eventSourceAvailable ? MockEventSource : undefined,
       });
     }, {
       payload: notificationSnapshot,
+      autoPayload: autoProcessingEvent ? autoProcessingPayload : null,
+      eventSourceAvailable: eventSourceSupported,
       tutorialCompleted,
     });
 
@@ -412,7 +516,7 @@ test.describe("webui smoke", () => {
 
     await page.route("**/api/mail/processing/run", async (route) => {
       const body = route.request().postDataJSON() as
-        | { sourceId?: string; limit?: number; horizonDays?: number; tz?: string }
+        | { sourceId?: string; limit?: number; horizonDays?: number; tz?: string; trigger?: "manual" | "poll" }
         | null;
       expect(body?.sourceId).toBe(activeSourceIdState);
       await route.fulfill({
@@ -423,12 +527,13 @@ test.describe("webui smoke", () => {
           sourceId: "smoke-source",
           result: {
             status: "completed",
+            trigger: body?.trigger ?? "manual",
             warnings: [],
             sourceId: "smoke-source",
             startedAt: "2026-04-17T00:00:00.000Z",
             completedAt: "2026-04-17T00:01:00.000Z",
-            limit: 30,
-            horizonDays: 14,
+            limit: body?.limit ?? 30,
+            horizonDays: body?.horizonDays ?? 14,
             timeZone: "Asia/Shanghai",
             knowledgeBase: {
               status: "completed",
@@ -465,19 +570,43 @@ test.describe("webui smoke", () => {
                 },
               ],
             },
-            dailyDigest: null,
-            calendarDrafts: [
-              {
+	            dailyDigest: null,
+	            calendarDrafts: [
+	              {
                 messageId: "urgent-1",
                 subject: "Urgent lab deadline",
                 type: "ddl",
                 dueAt: "2026-04-18T10:00:00.000Z",
                 dueDateLabel: "2026年4月18日 10:00",
-                confidence: 0.92,
-              },
-            ],
-          },
-        }),
+	                confidence: 0.92,
+	              },
+	            ],
+	            calendarSync: {
+	              sourceId: "smoke-source",
+	              total: 1,
+	              createdCount: 1,
+	              deduplicatedCount: 0,
+	              failedCount: 0,
+	              items: [
+	                {
+	                  key: "urgent-1|ddl|2026-04-18T10:00:00.000Z",
+	                  messageId: "urgent-1",
+	                  type: "ddl",
+	                  dueAt: "2026-04-18T10:00:00.000Z",
+	                  ok: true,
+	                  deduplicated: false,
+	                  result: {
+	                    eventId: "calendar-1",
+	                    eventSubject: "[MailAgent:DDL] Urgent lab deadline",
+	                    eventWebLink: "https://outlook.example/calendar/calendar-1",
+	                    start: { dateTime: "2026-04-18T09:30:00", timeZone: "Asia/Shanghai" },
+	                    end: { dateTime: "2026-04-18T10:00:00", timeZone: "Asia/Shanghai" },
+	                  },
+	                },
+	              ],
+	            },
+	          },
+	        }),
       });
     });
 
@@ -513,8 +642,8 @@ test.describe("webui smoke", () => {
       });
     });
 
-    await page.route("**/api/mail-kb/mails**", async (route) => {
-      const sourceId = new URL(route.request().url()).searchParams.get("sourceId");
+	    await page.route("**/api/mail-kb/mails**", async (route) => {
+	      const sourceId = new URL(route.request().url()).searchParams.get("sourceId");
       expect(sourceId).toBeTruthy();
       expect(sourcesState.some((source) => source.id === sourceId)).toBe(true);
       await route.fulfill({
@@ -529,10 +658,45 @@ test.describe("webui smoke", () => {
             offset: 0,
           },
         }),
-      });
-    });
+	      });
+	    });
 
-    await page.route("**/api/mail-kb/events**", async (route) => {
+	    await page.route("**/api/mail-kb/knowledge-card", async (route) => {
+	      const body = route.request().postDataJSON() as { sourceId?: string; messageId?: string; tags?: string[] };
+	      expect(body.sourceId).toBe("smoke-source");
+	      expect(body.messageId).toBeTruthy();
+	      await route.fulfill({
+	        status: 200,
+	        contentType: "application/json",
+	        body: JSON.stringify({
+	          ok: true,
+	          result: {
+	            sourceId: "smoke-source",
+	            mail: {
+	              mailId: "MAIL_CARD_1",
+	              rawId: body.messageId,
+	              subject: "New scholarship deadline",
+	              personId: "PERSON_1",
+	              eventId: "EVENT_1",
+	              importanceScore: 0.95,
+	              urgencyScore: 0.92,
+	              scoreScale: "ratio",
+	              quadrant: "urgent_important",
+	              summary: "Scholarship deadline requires immediate action.",
+	              receivedAt: "2026-04-17T00:05:00.000Z",
+	              processedAt: "2026-04-17T00:06:00.000Z",
+	              webLink: "https://outlook.example/messages/auto-urgent-1",
+	              knowledgeCard: {
+	                savedAt: "2026-04-17T00:07:00.000Z",
+	                tags: ["knowledge-card", ...(body.tags ?? [])],
+	              },
+	            },
+	          },
+	        }),
+	      });
+	    });
+
+	    await page.route("**/api/mail-kb/events**", async (route) => {
       const sourceId = new URL(route.request().url()).searchParams.get("sourceId");
       expect(sourceId).toBeTruthy();
       expect(sourcesState.some((source) => source.id === sourceId)).toBe(true);
@@ -766,8 +930,9 @@ test.describe("webui smoke", () => {
     await expect(page.getByText("日历候选")).toBeVisible();
     await expect(page.getByRole("link", { name: "Urgent lab deadline" })).toBeVisible();
     await expect(page.getByText("日历确认")).toBeVisible();
+    await expect(page.getByText(/自动写入日历 1 项/)).toBeVisible();
     await page.getByRole("button", { name: "全部写入日历" }).click();
-    await expect(page.getByText(/已写入日历 1 项/)).toBeVisible();
+    await expect(page.getByText("这些事项已经写入日历。")).toBeVisible();
   });
 
   test("renders urgent notifications and daily digest in the header center", async ({ page }) => {
@@ -783,6 +948,28 @@ test.describe("webui smoke", () => {
     await expect(page.getByRole("link", { name: "Urgent lab deadline" })).toBeVisible();
     await expect(page.getByText("今天 3 封邮件，1 封紧急重要")).toBeVisible();
     await expect(page.getByText("Project sync meeting · 4月18日 14:00")).toBeVisible();
+  });
+
+  test("shows lower-left urgent toast after automatic mail processing", async ({ page }) => {
+    await mockAuthenticatedApp(page, { autoProcessingEvent: true });
+
+    await page.goto("/");
+    const toast = page.locator("section").filter({ hasText: "紧急重要邮件" });
+    await expect(toast).toBeVisible({ timeout: 15000 });
+    await expect(toast.getByRole("link", { name: "New scholarship deadline" })).toBeVisible();
+    await expect(toast.getByText("自动预处理已完成")).toBeVisible();
+    await toast.getByRole("button", { name: "存为知识卡片" }).click();
+    await expect(toast.getByRole("button", { name: "已存为知识卡片" })).toBeVisible();
+  });
+
+  test("falls back to automatic processing when realtime stream is unavailable", async ({ page }) => {
+    await mockAuthenticatedApp(page, { eventSourceSupported: false });
+
+    await page.goto("/");
+    const toast = page.locator("section").filter({ hasText: "紧急重要邮件" });
+    await expect(toast).toBeVisible({ timeout: 15000 });
+    await expect(toast.getByRole("link", { name: "Urgent lab deadline" })).toBeVisible();
+    await expect(toast.getByText("自动预处理已完成")).toBeVisible();
   });
 
   test("saves notification preferences from settings", async ({ page }) => {

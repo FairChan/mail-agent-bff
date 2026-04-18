@@ -1,0 +1,533 @@
+{
+  "EVT_001": {
+    "eventId": "EVT_001",
+    "name": "AirAsia RedRun: Fly, run, repeat 🏃‍♂️☀️",
+    "summary": "AirAsia再次发送RedRun活动推广，强调名额紧张，催促用户注册。",
+    "keyInfo": [
+      "activity: AirAsia RedRun",
+      "action: Register Now"
+    ],
+    "relatedMailIds": [
+      "MSG_1s3ht8x"
+    ],
+    "lastUpdated": "2026-04-17T06:33:56.000Z",
+    "tags": [
+      "not_urgent_not_important",
+      "urgent_not_important"
+    ]
+  },
+  "EVT_002": {
+    "eventId": "EVT_002",
+    "name": "[FairChan/mail-agent-bff] Run failed: .github/workflows/codeql.yml - master (bc350e9)",
+    "summary": "CodeQL工作流再次运行失败，CI异常问题仍在持续。",
+    "keyInfo": [
+      "repo: FairChan/mail-agent-bff",
+      "branch: master",
+      "status: failed"
+    ],
+    "relatedMailIds": [
+      "MSG_noqj2c",
+      "MSG_m4q6le",
+      "MSG_kxrmhf",
+      "MSG_115lw76"
+    ],
+    "lastUpdated": "2026-04-16T12:27:25.000Z",
+    "tags": [
+      "urgent_important",
+      "not_urgent_important"
+    ]
+  },
+  "EVT_003": {
+    "eventId": "EVT_003",
+    "name": "Anda telah menerima kupon 1",
+    "summary": "Cotti Coffee再次发放RM5.9任意饮品优惠券，持续提醒用户在APP内使用。",
+    "keyInfo": [
+      "coupon_count: 2",
+      "coupon_example: RM5.9 for any drink",
+      "action: Use in APP"
+    ],
+    "relatedMailIds": [
+      "MSG_a9ohec",
+      "MSG_1i7baij",
+      "MSG_2u72ey"
+    ],
+    "lastUpdated": "2026-04-05T23:41:41.000Z",
+    "tags": [
+      "urgent_not_important",
+      "not_urgent_not_important"
+    ]
+  },
+  "EVT_004": {
+    "eventId": "EVT_004",
+    "name": "连接到 Microsoft 帐户的新应用",
+    "summary": "Microsoft账户再次提示Mery Secretary应用授权，需用户尽快确认安全性。",
+    "keyInfo": [
+      "app: Mery Secretary",
+      "account: ss**r@outlook.com",
+      "risk: Unauthorized access"
+    ],
+    "relatedMailIds": [
+      "MSG_8po4xe"
+    ],
+    "lastUpdated": "2026-04-17T03:12:18.000Z",
+    "tags": [
+      "urgent_important"
+    ]
+  },
+  "EVT_005": {
+    "eventId": "EVT_005",
+    "name": "您 Steam 愿望单上的 Psychonauts 2 及另外 2 个项目正在特卖！",
+    "summary": "Steam愿望单游戏特卖持续中，包含《意航员2》等3款游戏，优惠截至5月1日。",
+    "keyInfo": [
+      "game_example: Psychonauts 2",
+      "max_discount: 80%",
+      "deadline: May 1st"
+    ],
+    "relatedMailIds": [
+      "MSG_uaiqxx"
+    ],
+    "lastUpdated": "2026-04-16T22:42:57.000Z",
+    "tags": [
+      "not_urgent_not_important"
+    ]
+  },
+  "EVT_001001": {
+    "eventId": "EVT_001001",
+    "name": "[FairChan/mail-agent-bff] Run failed: Load Tests - master (4d8a543)",
+    "summary": "Load Tests工作流再次失败，k6负载测试任务于16秒后失败，CI问题持续。",
+    "keyInfo": [
+      "repo: FairChan/mail-agent-bff",
+      "branch: master",
+      "status: failed"
+    ],
+    "relatedMailIds": [
+      "MSG_2muhex",
+      "MSG_1o8whq1",
+      "MSG_1nwxgz0",
+      "MSG_noqj2c"
+    ],
+    "lastUpdated": "2026-04-17T06:07:19.000Z",
+    "tags": [
+      "urgent_important"
+    ]
+  },
+  "EVT_001002": {
+    "eventId": "EVT_001002",
+    "name": "您 Steam 愿望单上的 超阈限空间 Superliminal 正在特卖！",
+    "summary": "Steam愿望单游戏促销持续，新增《超阈限空间》6折特卖，截至4月25日。",
+    "keyInfo": [
+      "platform: Steam",
+      "deadline: 2026-04-28T01:00:00Z"
+    ],
+    "relatedMailIds": [
+      "MSG_luei07",
+      "MSG_1aqh7g1"
+    ],
+    "lastUpdated": "2026-04-10T19:40:15.000Z",
+    "tags": [
+      "not_urgent_not_important"
+    ]
+  },
+  "EVT_001003": {
+    "eventId": "EVT_001003",
+    "name": "11AM SATURDAY 11 APR: A Minor Tussle? Or A Major Problem?​",
+    "summary": "Capital Dynamics将于4月11日周六首播新视频，探讨马来西亚社会争议及责任归属问题。",
+    "keyInfo": [
+      "speaker: Tan Teng Boo",
+      "premiere_time: 2026-04-18T11:00:00Z"
+    ],
+    "relatedMailIds": [
+      "MSG_8fcgc7",
+      "MSG_1o5j941"
+    ],
+    "lastUpdated": "2026-04-10T17:57:16.000Z",
+    "tags": [
+      "urgent_not_important"
+    ]
+  },
+  "EVT_001004": {
+    "eventId": "EVT_001004",
+    "name": "Shop Sell-Out Styles Here!",
+    "summary": "SHEIN继续推送促销，新增当季热销爆款商品推荐，强调库存紧张催促购买。",
+    "keyInfo": [
+      "type: promotion",
+      "season: Spring"
+    ],
+    "relatedMailIds": [
+      "MSG_6hfsxt",
+      "MSG_1xd4ox7",
+      "MSG_1mvy1yi",
+      "MSG_1mlmddb",
+      "MSG_8kp2tz",
+      "MSG_budzat"
+    ],
+    "lastUpdated": "2026-04-05T10:17:21.000Z",
+    "tags": [
+      "not_urgent_not_important"
+    ]
+  },
+  "EVT_006": {
+    "eventId": "EVT_006",
+    "name": "GET /v1/responses endpoint is currently down and unable to serve requests",
+    "summary": "Responses API端点新发宕机事件，正在调查中，组件出现部分中断。",
+    "keyInfo": [
+      "platform: OpenAI",
+      "affected_module: Java SDK Responses API Streaming",
+      "status: Investigating"
+    ],
+    "relatedMailIds": [
+      "MSG_gvgp9x",
+      "MSG_tma20b",
+      "MSG_r01on0",
+      "MSG_14f3qb0"
+    ],
+    "lastUpdated": "2026-04-06T10:14:39.000Z",
+    "tags": [
+      "urgent_important"
+    ]
+  },
+  "EVT_007": {
+    "eventId": "EVT_007",
+    "name": "Ends soon: Save 40% off new courses and new skills",
+    "summary": "Coursera限时6折促销即将结束，继续催促用户购买新课程。",
+    "keyInfo": [
+      "discount: 40% off",
+      "content: new courses and skills"
+    ],
+    "relatedMailIds": [
+      "MSG_ycto5f"
+    ],
+    "lastUpdated": "2026-04-16T16:59:54.000Z",
+    "tags": [
+      "urgent_not_important"
+    ]
+  },
+  "EVT_008": {
+    "eventId": "EVT_008",
+    "name": "Welcome to the Microsoft 365 Developer Program - please take the next step!",
+    "summary": "已成功加入Microsoft 365开发者计划，可申请E5订阅及参与研究小组。",
+    "keyInfo": [
+      "program: Microsoft 365 Developer Program",
+      "benefit: E5 developer subscription"
+    ],
+    "relatedMailIds": [
+      "MSG_c4ahyj"
+    ],
+    "lastUpdated": "2026-04-16T13:56:32.000Z",
+    "tags": [
+      "not_urgent_important"
+    ]
+  },
+  "EVT_009": {
+    "eventId": "EVT_009",
+    "name": "为国泰航空投下您的一票",
+    "summary": "国泰航空除账户安全提醒外，新增邀请会员参与Skytrax全球航空公司大奖投票。",
+    "keyInfo": [
+      "account: 188 XXXX 524",
+      "risk: 里数及礼遇被不当使用"
+    ],
+    "relatedMailIds": [
+      "MSG_nqjuj6",
+      "MSG_1q4dz5r"
+    ],
+    "lastUpdated": "2026-04-08T11:36:19.000Z",
+    "tags": [
+      "urgent_important",
+      "not_urgent_not_important"
+    ]
+  },
+  "EVT_010000": {
+    "eventId": "EVT_010000",
+    "name": "💬 陳兊，与Osman Ismail成为好友",
+    "summary": "领英继续推送人脉推荐，本期推荐Osman Ismail，提示用户拓展职业网络。",
+    "keyInfo": [
+      "platform: LinkedIn",
+      "type: recommendation"
+    ],
+    "relatedMailIds": [
+      "MSG_15pnos",
+      "MSG_lzr4hz"
+    ],
+    "lastUpdated": "2026-04-10T10:11:26.000Z",
+    "tags": [
+      "not_urgent_not_important"
+    ]
+  },
+  "EVT_010001": {
+    "eventId": "EVT_010001",
+    "name": "Elevated 401 errors for API endpoints",
+    "summary": "OpenAI API端点401错误异常升高，官方已开始调查，可能影响接口正常调用。",
+    "keyInfo": [
+      "error_type: 401",
+      "status: Investigating",
+      "start_time: 2026-04-12T20:40:00Z"
+    ],
+    "relatedMailIds": [
+      "MSG_1mrrnzw",
+      "MSG_6co08",
+      "MSG_1lseobc"
+    ],
+    "lastUpdated": "2026-04-12T20:44:50.000Z",
+    "tags": [
+      "urgent_important"
+    ]
+  },
+  "EVT_010002": {
+    "eventId": "EVT_010002",
+    "name": "AirAsia低价机票限时促销",
+    "summary": "AirAsia推送低价机票促销活动，强调时间紧迫，活动将于4月14日截止。",
+    "keyInfo": [
+      "deadline: 2026-04-14",
+      "type: flight_promo"
+    ],
+    "relatedMailIds": [
+      "MSG_1jy2n97"
+    ],
+    "lastUpdated": "2026-04-13T04:18:08.000Z",
+    "tags": [
+      "urgent_not_important"
+    ]
+  },
+  "EVT_010003": {
+    "eventId": "EVT_010003",
+    "name": "Apple全新MacBook系列发售推广",
+    "summary": "Apple宣布全新MacBook Neo及Air、Pro新机型正式发售，推送产品广告邮件。",
+    "keyInfo": [
+      "products: MacBook Neo, MacBook Air, MacBook Pro",
+      "type: product_launch"
+    ],
+    "relatedMailIds": [
+      "MSG_bs2y19"
+    ],
+    "lastUpdated": "2026-04-13T02:36:42.000Z",
+    "tags": [
+      "not_urgent_not_important"
+    ]
+  },
+  "EVT_010004": {
+    "eventId": "EVT_010004",
+    "name": "Bolt出行安全功能宣传",
+    "summary": "Bolt平台向用户宣传其安全团队及乘车安全功能，提醒用户注意核对行程细节。",
+    "keyInfo": [
+      "topic: safety",
+      "type: promotion"
+    ],
+    "relatedMailIds": [
+      "MSG_1xe4ycd"
+    ],
+    "lastUpdated": "2026-04-13T01:10:38.000Z",
+    "tags": [
+      "not_urgent_not_important"
+    ]
+  },
+  "EVT_010005": {
+    "eventId": "EVT_010005",
+    "name": "TED Recommends每周精选资讯",
+    "summary": "TED推送每周精选Newsletter，本期聚焦网络安全与诚实问责主题，提供相关观点内容。",
+    "keyInfo": [
+      "topic: 网络安全与问责",
+      "frequency: 每周"
+    ],
+    "relatedMailIds": [
+      "MSG_196kbpb"
+    ],
+    "lastUpdated": "2026-04-12T10:17:41.000Z",
+    "tags": [
+      "not_urgent_not_important"
+    ]
+  },
+  "EVT_010006": {
+    "eventId": "EVT_010006",
+    "name": "Some users may experience empty response from ChatGPT in web",
+    "summary": "ChatGPT网页端空回复问题已实施缓解措施，正监控恢复，对话组件降级。",
+    "keyInfo": [
+      "service: ChatGPT",
+      "status: Investigating",
+      "startTime: 2026-04-11T01:04:00Z"
+    ],
+    "relatedMailIds": [
+      "MSG_wmadyg",
+      "MSG_1o6hbrd",
+      "MSG_1arfa3d",
+      "MSG_4ibyun",
+      "MSG_11s63a2"
+    ],
+    "lastUpdated": "2026-04-06T08:02:50.000Z",
+    "tags": [
+      "urgent_important",
+      "not_urgent_not_important",
+      "urgent_not_important",
+      "not_urgent_important"
+    ]
+  },
+  "EVT_010007": {
+    "eventId": "EVT_010007",
+    "name": "GitHub仓库proofofvault协作邀请",
+    "summary": "用户被AR307邀请协作GitHub仓库proofofvault，需在7天内决定接受或拒绝。",
+    "keyInfo": [
+      "inviter: AR307",
+      "repo: AR307/proofofvault",
+      "expires_in: 7 days"
+    ],
+    "relatedMailIds": [
+      "MSG_144ozkg"
+    ],
+    "lastUpdated": "2026-04-10T08:05:36.000Z",
+    "tags": [
+      "urgent_important"
+    ]
+  },
+  "EVT_001005": {
+    "eventId": "EVT_001005",
+    "name": "SEA-CICSIC 2026创新大赛说明会邀请",
+    "summary": "中国国际大学生创新大赛东南亚赛区将举办第三场线上说明会，分享赛事信息及备赛建议。",
+    "keyInfo": [
+      "competition: SEA-CICSIC 2026",
+      "date: 2026-04-09",
+      "time: 19:30-20:30 (MYT)",
+      "platform: Microsoft Teams"
+    ],
+    "relatedMailIds": [
+      "MSG_1u7bdeh"
+    ],
+    "lastUpdated": "2026-04-09T00:06:25.000Z",
+    "tags": [
+      "urgent_important"
+    ]
+  },
+  "EVT_001006": {
+    "eventId": "EVT_001006",
+    "name": "Mery账号注册验证",
+    "summary": "用户注册Mery账号，系统发送时效性验证码，需在30分钟内完成验证。",
+    "keyInfo": [
+      "code: 707159",
+      "validity: 30 mins"
+    ],
+    "relatedMailIds": [
+      "MSG_j2y4tr"
+    ],
+    "lastUpdated": "2026-04-08T10:59:10.000Z",
+    "tags": [
+      "urgent_important"
+    ]
+  },
+  "EVT_001007": {
+    "eventId": "EVT_001007",
+    "name": "Yay, your Order 504174159864607 is confirmed!",
+    "summary": "Lazada新订单504174159864607已确认，商品为Schweppes饮料，预计4月7-10日送达。",
+    "keyInfo": [
+      "orderId: 504174159864607",
+      "amount: RM34.32",
+      "returnDeadline: 30天"
+    ],
+    "relatedMailIds": [
+      "MSG_g780cb",
+      "MSG_tbqy6b"
+    ],
+    "lastUpdated": "2026-04-05T16:48:35.000Z",
+    "tags": [
+      "not_urgent_not_important",
+      "not_urgent_important"
+    ]
+  },
+  "EVT_001008": {
+    "eventId": "EVT_001008",
+    "name": "[TRAE] Meet the New SOLO (Beta Early Access)",
+    "summary": "TRAE推出SOLO独立AI代理Beta版，新增代码与MTC双模式，需邀请码或Ultra订阅体验。",
+    "keyInfo": [
+      "product: SOLO",
+      "modes: Code, MTC",
+      "eventLink: https://luma.com/trae"
+    ],
+    "relatedMailIds": [
+      "MSG_5nw35r",
+      "MSG_1u5i24r"
+    ],
+    "lastUpdated": "2026-04-04T13:03:12.000Z",
+    "tags": [
+      "not_urgent_not_important",
+      "not_urgent_important"
+    ]
+  },
+  "EVT_001009": {
+    "eventId": "EVT_001009",
+    "name": "Bohrium AI Mentor新功能发布",
+    "summary": "Bohrium推出AI Mentor功能，主打思考后检索，解决AI虚构论文引用问题，提升科研效率。",
+    "keyInfo": [
+      "product: AI Mentor",
+      "feature: think before search"
+    ],
+    "relatedMailIds": [
+      "MSG_g9942y"
+    ],
+    "lastUpdated": "2026-04-06T07:17:57.000Z",
+    "tags": [
+      "not_urgent_not_important"
+    ]
+  },
+  "EVT_001010": {
+    "eventId": "EVT_001010",
+    "name": "ZUS Coffee蜂蜜吐司搭配折扣促销",
+    "summary": "ZUS Coffee推出饮品搭配蜂蜜吐司8折促销活动，引导用户通过APP下单。",
+    "keyInfo": [
+      "discount: 20% OFF",
+      "item: Honey Toast + 指定饮品"
+    ],
+    "relatedMailIds": [
+      "MSG_1f784y2"
+    ],
+    "lastUpdated": "2026-04-06T04:41:10.000Z",
+    "tags": [
+      "not_urgent_not_important"
+    ]
+  },
+  "EVT_001011": {
+    "eventId": "EVT_001011",
+    "name": "Lazada订单取消及退款通知",
+    "summary": "Lazada订单因系统原因被自动取消，已发起全额退款，需关注退款进度。",
+    "keyInfo": [
+      "order_id: #500930055064607",
+      "refund_time: 5-15个工作日"
+    ],
+    "relatedMailIds": [
+      "MSG_fwowib"
+    ],
+    "lastUpdated": "2026-04-05T21:49:06.000Z",
+    "tags": [
+      "urgent_important"
+    ]
+  },
+  "EVT_001012": {
+    "eventId": "EVT_001012",
+    "name": "Did You Forget Something?",
+    "summary": "SEAGM再次提醒用户有TNG充值订单未完成，催促尽快结账以免失效。",
+    "keyInfo": [
+      "item: TNG Reload Pin MYR 100",
+      "price: MYR 100"
+    ],
+    "relatedMailIds": [
+      "MSG_ht9gjw",
+      "MSG_4e7evw"
+    ],
+    "lastUpdated": "2026-04-05T16:42:01.000Z",
+    "tags": [
+      "urgent_not_important"
+    ]
+  },
+  "EVT_001013": {
+    "eventId": "EVT_001013",
+    "name": "Lazada购物体验满意度调查",
+    "summary": "Lazada邀请用户参与近期购物体验的满意度调查，评估推荐意愿以改进服务。",
+    "keyInfo": [
+      "type: survey",
+      "platform: Lazada"
+    ],
+    "relatedMailIds": [
+      "MSG_p9g0yt"
+    ],
+    "lastUpdated": "2026-04-05T09:10:10.000Z",
+    "tags": [
+      "not_urgent_not_important"
+    ]
+  }
+}

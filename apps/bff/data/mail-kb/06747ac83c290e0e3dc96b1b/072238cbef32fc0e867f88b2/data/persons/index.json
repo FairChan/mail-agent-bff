@@ -1,0 +1,222 @@
+{
+  "PER_001": {
+    "personId": "PER_001",
+    "email": "no-reply@promo.airasia.com",
+    "name": "AirAsia MOVE",
+    "profile": "除RedRun活动推广外，同时发送低价机票限时促销邮件，催促用户购票。",
+    "role": "未标注",
+    "importance": 0.2,
+    "recentInteractions": 3,
+    "lastUpdated": "2026-04-13T04:18:08.000Z"
+  },
+  "PER_002": {
+    "personId": "PER_002",
+    "email": "noreply@github.com",
+    "name": "AR307",
+    "profile": "除CI失败通知外，新增推送代码仓库协作邀请通知，需用户及时处理。",
+    "role": "未标注",
+    "importance": 0.8,
+    "recentInteractions": 10,
+    "lastUpdated": "2026-04-10T08:05:36.000Z"
+  },
+  "PER_003": {
+    "personId": "PER_003",
+    "email": "cotticoffee@send.cotticoffee.com",
+    "name": "COTTI COFFEE",
+    "profile": "继续发送优惠券到账及到期提醒，最新发放RM5.9任意饮品优惠券。",
+    "role": "未标注",
+    "importance": 0.3,
+    "recentInteractions": 4,
+    "lastUpdated": "2026-04-05T23:41:41.000Z"
+  },
+  "PER_004": {
+    "personId": "PER_004",
+    "email": "account-security-noreply@accountprotection.microsoft.com",
+    "name": "Microsoft 帐户团队",
+    "profile": "继续发送账户应用授权安全通知，提示新应用获取数据访问权限。",
+    "role": "未标注",
+    "importance": 0.9,
+    "recentInteractions": 2,
+    "lastUpdated": "2026-04-17T03:12:18.000Z"
+  },
+  "PER_005": {
+    "personId": "PER_005",
+    "email": "noreply@steampowered.com",
+    "name": "Steam",
+    "profile": "继续推送愿望单游戏打折信息，新增《超阈限空间》特卖通知。",
+    "role": "未标注",
+    "importance": 0.2,
+    "recentInteractions": 4,
+    "lastUpdated": "2026-04-10T19:40:15.000Z"
+  },
+  "PER_001003": {
+    "personId": "PER_001003",
+    "email": "enquiries@email.icapital.biz",
+    "name": "Capital Dynamics",
+    "profile": "继续发布宏观经济与社会观点视频预告，引导用户观看YouTube首播。",
+    "role": "未标注",
+    "importance": 0.3,
+    "recentInteractions": 2,
+    "lastUpdated": "2026-04-10T17:57:16.000Z"
+  },
+  "PER_001004": {
+    "personId": "PER_001004",
+    "email": "shein@email.shein.com",
+    "name": "SHEIN",
+    "profile": "继续推送营销内容，新增当季热销爆款商品推荐，强调库存紧张催促购买。",
+    "role": "未标注",
+    "importance": 0.1,
+    "recentInteractions": 6,
+    "lastUpdated": "2026-04-05T10:17:21.000Z"
+  },
+  "PER_006": {
+    "personId": "PER_006",
+    "email": "no-reply@status.incident.io",
+    "name": "OpenAI (via incident.io)",
+    "profile": "报告ChatGPT网页端空回复问题，已实施缓解措施并监控恢复。",
+    "role": "未标注",
+    "importance": 0.8,
+    "recentInteractions": 13,
+    "lastUpdated": "2026-04-06T08:02:50.000Z"
+  },
+  "PER_007": {
+    "personId": "PER_007",
+    "email": "coursera@m.learn.coursera.org",
+    "name": "Coursera",
+    "profile": "继续推送限时6折促销活动，强调活动即将结束。",
+    "role": "未标注",
+    "importance": 0.2,
+    "recentInteractions": 2,
+    "lastUpdated": "2026-04-16T16:59:54.000Z"
+  },
+  "PER_008": {
+    "personId": "PER_008",
+    "email": "m365dev@microsoft.com",
+    "name": "Microsoft 365 Developer Program",
+    "profile": "发送开发者计划欢迎邮件，提示申请E5订阅及加入研究小组。",
+    "role": "未标注",
+    "importance": 0.7,
+    "recentInteractions": 2,
+    "lastUpdated": "2026-04-16T13:56:32.000Z"
+  },
+  "PER_009": {
+    "personId": "PER_009",
+    "email": "cathay-noreply@e.cathaypacific.com",
+    "name": "Cathay",
+    "profile": "国泰航空官方通知邮箱，新增发送Skytrax奖项投票邀请及品牌宣传。",
+    "role": "未标注",
+    "importance": 0.8,
+    "recentInteractions": 2,
+    "lastUpdated": "2026-04-08T11:36:19.000Z"
+  },
+  "PER_010000": {
+    "personId": "PER_010000",
+    "email": "messages-noreply@linkedin.com",
+    "name": "领英",
+    "profile": "继续推送人脉推荐及社交互动提醒，新增Osman Ismail的好友建议。",
+    "role": "未标注",
+    "importance": 0.2,
+    "recentInteractions": 2,
+    "lastUpdated": "2026-04-10T10:11:26.000Z"
+  },
+  "PER_010001": {
+    "personId": "PER_010001",
+    "email": "news@insideapple.apple.com",
+    "name": "Apple",
+    "profile": "Apple官方新闻及推广邮箱，主要用于发送新品发布、产品促销等广告信息。",
+    "role": "未标注",
+    "importance": 0.2,
+    "recentInteractions": 1,
+    "lastUpdated": "2026-04-13T02:36:42.000Z"
+  },
+  "PER_010002": {
+    "personId": "PER_010002",
+    "email": "malaysia@rides-promotions.bolt.eu",
+    "name": "Bolt Global",
+    "profile": "Bolt出行平台推广邮箱，主要用于发送乘车促销及安全功能宣传信息。",
+    "role": "未标注",
+    "importance": 0.2,
+    "recentInteractions": 1,
+    "lastUpdated": "2026-04-13T01:10:38.000Z"
+  },
+  "PER_010003": {
+    "personId": "PER_010003",
+    "email": "recommends@ted.com",
+    "name": "TED Recommends",
+    "profile": "TED推荐资讯邮箱，定期推送每周精选Newsletter，涵盖科技、社会等主题演讲及观点。",
+    "role": "未标注",
+    "importance": 0.3,
+    "recentInteractions": 1,
+    "lastUpdated": "2026-04-12T10:17:41.000Z"
+  },
+  "PER_001005": {
+    "personId": "PER_001005",
+    "email": "innocompetition@xmu.edu.my",
+    "name": "Innovation Competition",
+    "profile": "厦门大学马来西亚分校创新大赛组委会邮箱，负责发送赛事通知及说明会邀请。",
+    "role": "未标注",
+    "importance": 0.8,
+    "recentInteractions": 1,
+    "lastUpdated": "2026-04-09T00:06:25.000Z"
+  },
+  "PER_001006": {
+    "personId": "PER_001006",
+    "email": "mery.secretary@gmail.com",
+    "name": "Sec. Mery",
+    "profile": "Mery应用官方安全/系统邮箱，用于发送账号验证码及安全相关通知。",
+    "role": "未标注",
+    "importance": 0.9,
+    "recentInteractions": 1,
+    "lastUpdated": "2026-04-08T10:59:10.000Z"
+  },
+  "PER_001007": {
+    "personId": "PER_001007",
+    "email": "noreply@support.lazada.com.my",
+    "name": "Lazada Customer Care",
+    "profile": "除订单状态通知外，新增发送购物体验满意度调查问卷邀请。",
+    "role": "未标注",
+    "importance": 0.7,
+    "recentInteractions": 4,
+    "lastUpdated": "2026-04-05T09:10:10.000Z"
+  },
+  "PER_001008": {
+    "personId": "PER_001008",
+    "email": "notify@mail.trae.ai",
+    "name": "TRAE",
+    "profile": "发送SOLO独立AI代理Beta版发布通知，介绍代码与MTC双模式及邀请码获取方式。",
+    "role": "未标注",
+    "importance": 0.5,
+    "recentInteractions": 2,
+    "lastUpdated": "2026-04-04T13:03:12.000Z"
+  },
+  "PER_001009": {
+    "personId": "PER_001009",
+    "email": "userservice@support.dp.tech",
+    "name": "Bohrium",
+    "profile": "Bohrium科研平台官方服务邮箱，用于发送产品更新、新功能发布及科研工具推广信息。",
+    "role": "未标注",
+    "importance": 0.4,
+    "recentInteractions": 1,
+    "lastUpdated": "2026-04-06T07:17:57.000Z"
+  },
+  "PER_001010": {
+    "personId": "PER_001010",
+    "email": "lydia@zuscoffee.com",
+    "name": "Lydia from ZUS Coffee",
+    "profile": "ZUS Coffee官方营销邮箱，主要用于发送咖啡饮品促销活动及APP下单优惠推广信息。",
+    "role": "未标注",
+    "importance": 0.1,
+    "recentInteractions": 1,
+    "lastUpdated": "2026-04-06T04:41:10.000Z"
+  },
+  "PER_001011": {
+    "personId": "PER_001011",
+    "email": "tigoo@mail.seagm.com",
+    "name": "SEAGM",
+    "profile": "继续发送购物车遗弃提醒，催促用户完成TNG充值订单支付。",
+    "role": "未标注",
+    "importance": 0.3,
+    "recentInteractions": 2,
+    "lastUpdated": "2026-04-05T16:42:01.000Z"
+  }
+}

@@ -739,6 +739,10 @@ export interface MailSummaryDoc {
   eventTitle: string | null;
   processedAt: string;
   webLink?: string;
+  knowledgeCard?: {
+    savedAt: string;
+    tags: string[];
+  };
 }
 
 export async function queryMailSummaries(
@@ -769,6 +773,7 @@ export async function queryMailSummaries(
         eventTitle: event?.name ?? null,
         processedAt: mail.processedAt,
         ...(mail.webLink ? { webLink: mail.webLink } : {}),
+        ...(mail.knowledgeCard ? { knowledgeCard: mail.knowledgeCard } : {}),
       };
     });
 }
@@ -841,8 +846,8 @@ export async function searchKnowledgeBaseMailSummaries(
   const store = await getMailKnowledgeBaseStore(userId, sourceId);
   const summaries = store.getAllMails().map((mail) => {
     const person = store.getPersonById(mail.personId);
-    const event = mail.eventId ? store.getEventById(mail.eventId) : null;
-    return {
+      const event = mail.eventId ? store.getEventById(mail.eventId) : null;
+      return {
       mailId: mail.mailId,
       externalMsgId: mail.rawId,
       subject: mail.subject,
@@ -853,15 +858,23 @@ export async function searchKnowledgeBaseMailSummaries(
       senderId: mail.personId,
       senderEmail: person?.email ?? "",
       senderName: person?.name ?? "",
-      eventId: mail.eventId,
-      eventTitle: event?.name ?? null,
-      processedAt: mail.processedAt,
-      ...(mail.webLink ? { webLink: mail.webLink } : {}),
-    };
-  });
+        eventId: mail.eventId,
+        eventTitle: event?.name ?? null,
+        processedAt: mail.processedAt,
+        ...(mail.webLink ? { webLink: mail.webLink } : {}),
+        ...(mail.knowledgeCard ? { knowledgeCard: mail.knowledgeCard } : {}),
+      };
+    });
   return summaries
     .filter((mail) =>
-      [mail.subject, mail.summaryText, mail.senderEmail, mail.senderName, mail.eventTitle ?? ""]
+      [
+        mail.subject,
+        mail.summaryText,
+        mail.senderEmail,
+        mail.senderName,
+        mail.eventTitle ?? "",
+        ...(mail.knowledgeCard?.tags ?? []),
+      ]
         .join(" ")
         .toLowerCase()
         .includes(normalizedQuery)

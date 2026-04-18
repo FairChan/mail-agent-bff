@@ -276,6 +276,7 @@ export class FileMailKnowledgeBaseStore {
       this.mails.get(input.mailId) ??
       (input.rawId ? this.getMailByRawId(input.rawId) : null);
     const processedAt = normalizeDate(input.processedAt);
+    const knowledgeCard = input.knowledgeCard ?? existingMail?.knowledgeCard;
     const record: MailKnowledgeRecord = {
       mailId: existingMail?.mailId ?? input.mailId,
       rawId: input.rawId,
@@ -290,12 +291,38 @@ export class FileMailKnowledgeBaseStore {
       receivedAt: normalizeDate(input.receivedAt),
       processedAt,
       ...(input.webLink ? { webLink: input.webLink } : {}),
+      ...(knowledgeCard ? { knowledgeCard } : {}),
     };
 
     this.mails.set(record.mailId, record);
     this.mailIdByRawId.set(record.rawId, record.mailId);
     this.saveMails();
     return { record, created: !existingMail };
+  }
+
+  markKnowledgeCard(
+    mailIdOrRawId: string,
+    tags: string[],
+    savedAt = new Date().toISOString()
+  ): MailKnowledgeRecord | null {
+    const existing =
+      this.mails.get(mailIdOrRawId) ??
+      this.getMailByRawId(mailIdOrRawId);
+    if (!existing) {
+      return null;
+    }
+
+    const record: MailKnowledgeRecord = normalizeMailRecord({
+      ...existing,
+      knowledgeCard: {
+        savedAt: normalizeDate(savedAt),
+        tags: dedupeStrings([...(existing.knowledgeCard?.tags ?? []), ...tags]),
+      },
+    });
+    this.mails.set(record.mailId, record);
+    this.mailIdByRawId.set(record.rawId, record.mailId);
+    this.saveMails();
+    return record;
   }
 
   upsertEvent(input: EventUpsertInput): { record: EventCluster; created: boolean } {

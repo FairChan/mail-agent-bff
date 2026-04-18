@@ -27,13 +27,25 @@ import {
   beginMicrosoftDirectAuth,
   completeMicrosoftDirectAuth,
   consumeMicrosoftDirectAuthState,
+  createMicrosoftMessageSubscription,
+  deleteMicrosoftSubscription,
+  deltaMicrosoftInboxMessages,
   getMicrosoftAccountView,
   isMicrosoftDirectAuthConfigured,
   persistMicrosoftAccountForUser,
+  renewMicrosoftSubscription,
   MicrosoftDirectAuthSessionInactiveError,
   verifyMicrosoftMailboxAccess,
 } from "./microsoft-graph.js";
 import { MailSourceService } from "./mail-source-service.js";
+import {
+  createOutlookSyncState,
+  findOutlookSyncStateBySubscriptionId,
+  getOutlookSyncState,
+  saveOutlookSyncState,
+  updateOutlookSyncState,
+  type OutlookSyncState,
+} from "./outlook-sync-store.js";
 import { getPrismaClient, isPrismaUniqueConstraintError } from "./persistence.js";
 import { createRedisAuthSessionStore } from "./redis-session-store.js";
 import { getDefaultMemoryStore, type AgentMemoryRecord } from "./runtime/memory-store.js";
@@ -209,7 +221,10 @@ type SessionNotificationState = {
 };
 const notificationPrefsBySession = new Map<string, SessionNotificationPreferences>();
 const notificationStateBySession = new Map<string, SessionNotificationState>();
+const activeNotificationStreamsBySession = new Map<string, number>();
 const notificationPollLocksBySession = new Set<string>();
+const mailProcessingLocksBySession = new Set<string>();
+const autoMailProcessingLastRunBySession = new Map<string, number>();
 const outlookConnectionSessionsBySession = new Map<string, Set<string>>();
 const aiSummaryCache = new Map<string, { expiresAt: number; summary: string }>();
 const sessionCookieName = "bff_session";
@@ -259,8 +274,66 @@ const aiSummaryResponseSchema = z
       .max(aiSummaryBatchSize),
   })
   .strict();
-const notificationStreamIntervalMs = 60000;
+function boundedIntegerEnv(name: string, fallback: number, min: number, max: number): number {
+  const parsed = Number.parseInt(process.env[name] ?? "", 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function boundedNumberEnv(name: string, fallback: number, min: number, max: number): number {
+  const parsed = Number.parseFloat(process.env[name] ?? "");
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, parsed));
+}
+
+const notificationStreamIntervalMs = boundedIntegerEnv("MAIL_NOTIFICATION_STREAM_INTERVAL_MS", 45000, 15000, 300000);
 const notificationStreamKeepaliveMs = 20000;
+const mailAutoProcessingIntervalMs = boundedIntegerEnv(
+  "MAIL_AUTO_PROCESSING_INTERVAL_MS",
+  notificationStreamIntervalMs,
+  15000,
+  300000
+);
+const mailAutoProcessingLimit = boundedIntegerEnv("MAIL_AUTO_PROCESSING_LIMIT", 20, 5, 60);
+const mailAutoProcessingWindowDays = boundedIntegerEnv("MAIL_AUTO_PROCESSING_WINDOW_DAYS", 2, 1, 30);
+const mailAutoProcessingHorizonDays = boundedIntegerEnv("MAIL_AUTO_PROCESSING_HORIZON_DAYS", 14, 1, 30);
+const mailAutoCalendarMaxItems = boundedIntegerEnv("MAIL_AUTO_CALENDAR_MAX_ITEMS", 8, 1, 10);
+const mailAutoCalendarMinConfidence = boundedNumberEnv("MAIL_AUTO_CALENDAR_MIN_CONFIDENCE", 0.72, 0.58, 0.99);
+const durableMailSyncIntervalMs = boundedIntegerEnv(
+  "MAIL_DURABLE_SYNC_INTERVAL_MS",
+  60000,
+  15000,
+  300000
+);
+const durableMailDeltaTop = boundedIntegerEnv("MAIL_DURABLE_DELTA_TOP", 25, 5, 100);
+const durableMailInitialLookbackMinutes = boundedIntegerEnv(
+  "MAIL_DURABLE_INITIAL_LOOKBACK_MINUTES",
+  10,
+  1,
+  180
+);
+const durableMailSubscriptionRenewSkewMs = boundedIntegerEnv(
+  "MAIL_DURABLE_SUBSCRIPTION_RENEW_SKEW_MS",
+  6 * 60 * 60 * 1000,
+  5 * 60 * 1000,
+  24 * 60 * 60 * 1000
+);
+const durableMailSubscriptionLifetimeMinutes = boundedIntegerEnv(
+  "MAIL_DURABLE_SUBSCRIPTION_LIFETIME_MINUTES",
+  6 * 24 * 60,
+  45,
+  10080
+);
+const durableMailMutationWaitMs = boundedIntegerEnv(
+  "MAIL_DURABLE_MUTATION_WAIT_MS",
+  30000,
+  1000,
+  120000
+);
 const batchSyncRateLimitPerMin = 8;
 const batchDeleteRateLimitPerMin = 12;
 const mailTriageRateLimitPerMin = 36;
@@ -296,6 +369,7 @@ let lastBatchRouteSweepAt = 0;
 let lastCalendarSyncSweepAt = 0;
 let lastAiSummarySweepAt = 0;
 let lastPendingRegistrationSweepAt = 0;
+const durableOutlookSyncLocks = new Set<string>();
 
 await server.register(cors, {
   origin: env.corsOrigins,
@@ -340,7 +414,20 @@ function sourceScopedSessionKey(sessionToken: string, sourceId: string): string 
   return `${sessionToken}${sourceScopeSeparator}${sourceId}`;
 }
 
+function durableMailScopeKey(userId: string, sourceId: string): string {
+  return `${userId}${sourceScopeSeparator}${sourceId}`;
+}
+
 function clearSessionScopedMapEntries<V>(map: Map<string, V>, sessionToken: string) {
+  const prefix = `${sessionToken}${sourceScopeSeparator}`;
+  for (const key of map.keys()) {
+    if (key.startsWith(prefix)) {
+      map.delete(key);
+    }
+  }
+}
+
+function clearSessionScopedCountEntries(map: Map<string, number>, sessionToken: string) {
   const prefix = `${sessionToken}${sourceScopeSeparator}`;
   for (const key of map.keys()) {
     if (key.startsWith(prefix)) {
@@ -1251,7 +1338,11 @@ function clearSessionState(sessionToken: string) {
   clearSessionScopedMapEntries(customPriorityRulesBySession, sessionToken);
   clearSessionScopedMapEntries(notificationPrefsBySession, sessionToken);
   clearSessionScopedMapEntries(notificationStateBySession, sessionToken);
+  clearSessionScopedCountEntries(activeNotificationStreamsBySession, sessionToken);
   clearSessionScopedSetEntries(notificationPollLocksBySession, sessionToken);
+  clearSessionScopedSetEntries(mailProcessingLocksBySession, sessionToken);
+  clearSessionScopedMapEntries(autoMailProcessingLastRunBySession, sessionToken);
+  clearSessionScopedMapEntries(latestAutomaticMailProcessingResultBySession, sessionToken);
   defaultOutlookRoutingHintsBySession.delete(sessionToken);
   outlookConnectionSessionsBySession.delete(sessionToken);
   clearCalendarSyncStateBySession(sessionToken);
@@ -3208,6 +3299,27 @@ async function upsertMicrosoftSourceForSession(
   enforceMapLimit(sourceRoutingStatusBySession, maxMailSourceRoutingSessionEntries);
   await mailSourceService.saveRoutingStatus(userId, sourceResult.source.id, optimisticRoutingStatus);
   await hydrateMailSourcesForSession(sessionToken);
+  const durableState = await upsertDurableOutlookSyncStateFromSource({
+    userId,
+    source: {
+      id: sourceResult.source.id,
+      name: sourceResult.source.name,
+      emailHint: sourceResult.source.emailHint,
+      timeZone: getNotificationPreferencesBySession(
+        sessionToken,
+        sourceResult.source.id,
+        true
+      ).digestTimeZone,
+      enabled: sourceResult.source.enabled,
+      microsoftAccountId: sourceResult.source.microsoftAccountId,
+      mailboxUserId: sourceResult.source.mailboxUserId,
+    },
+  });
+  if (durableState) {
+    queueMicrotask(() => {
+      void runDurableOutlookProcessingForState(durableState, "poll");
+    });
+  }
   queueMicrotask(() => {
     void verifySourceRoutingForSession(sessionToken, sourceResult.source.id).catch((error) => {
       server.log.warn(
@@ -3323,6 +3435,31 @@ function buildTenantContextForRequest(
     return null;
   }
 
+  const sourceContext = buildMailSourceContext(sessionToken, sourceId);
+  return {
+    ...sourceContext,
+    userId,
+    sessionToken,
+    sourceId,
+    ...(legacyApiKeySessions.has(sessionToken) ? { isLegacySession: true } : {}),
+  };
+}
+
+function buildTenantContextForSession(
+  sessionToken: string,
+  requestedSourceId?: string
+): TenantContext | null {
+  const resolved = resolveSourceIdForSession(sessionToken, requestedSourceId);
+  if (!resolved.ok || !resolved.sourceId) {
+    return null;
+  }
+
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId) {
+    return null;
+  }
+
+  const sourceId = resolved.sourceId;
   const sourceContext = buildMailSourceContext(sessionToken, sourceId);
   return {
     ...sourceContext,
@@ -3906,9 +4043,16 @@ function calendarInsightKey(input: { messageId: string; type: string; dueAt: str
 function calendarSyncScopedDedupKey(
   sessionToken: string,
   sourceId: string,
-  input: { messageId: string; type: string; dueAt: string }
+  input: { messageId: string; type: string; dueAt: string },
+  sourceContext?: MailSourceContext
 ): string {
-  return `${sourceScopedSessionKey(sessionToken, sourceId)}${sourceScopeSeparator}${calendarInsightKey(input)}`;
+  const userId =
+    cleanOptionalText(sourceContext?.userId) ??
+    cleanOptionalText(getUserIdForSessionToken(sessionToken) ?? undefined);
+  const scopeKey = userId
+    ? durableMailScopeKey(userId, sourceId)
+    : sourceScopedSessionKey(sessionToken, sourceId);
+  return `${scopeKey}${sourceScopeSeparator}${calendarInsightKey(input)}`;
 }
 
 function toNotificationStateView(state: SessionNotificationState): {
@@ -4187,6 +4331,1123 @@ function failedKnowledgeBaseProcessingView(error: unknown) {
   };
 }
 
+function processingWarningMessage(stage: string, error: unknown): string {
+  return `${stage}: ${error instanceof Error ? error.message : String(error)}`;
+}
+
+function calendarDraftsFromInsights(
+  insights: Awaited<ReturnType<typeof buildMailInsights>>,
+  limit: number,
+  timeZone: string
+): CalendarDraftForProcessing[] {
+  return insights.upcoming.slice(0, limit).map((item) => ({
+    messageId: item.messageId,
+    subject: item.subject,
+    type: item.type,
+    dueAt: item.dueAt,
+    dueDateLabel: item.dueDateLabel,
+    evidence: item.evidence,
+    timeZone,
+    ...(item.confidence === undefined ? {} : { confidence: item.confidence }),
+  }));
+}
+
+async function syncCalendarDraftsForProcessing(
+  sessionToken: string,
+  sourceId: string,
+  drafts: CalendarDraftForProcessing[],
+  maxItems: number,
+  minConfidence: number,
+  sourceContext?: MailSourceContext
+): Promise<MailProcessingCalendarSyncResult | null> {
+  const eligible = drafts
+    .filter((draft) => {
+      const dueAt = Date.parse(draft.dueAt);
+      if (!Number.isFinite(dueAt) || dueAt < Date.now() - staleCalendarSyncWindowMs) {
+        return false;
+      }
+      return (draft.confidence ?? 0.7) >= minConfidence;
+    })
+    .slice(0, maxItems);
+
+  if (eligible.length === 0) {
+    return null;
+  }
+
+  let createdCount = 0;
+  let deduplicatedCount = 0;
+  let failedCount = 0;
+  const items: MailProcessingCalendarSyncResult["items"] = [];
+
+  for (const draft of eligible) {
+    const key = calendarInsightKey(draft);
+    try {
+      const execution = await runCalendarSyncWithDedupe(
+        sessionToken,
+        sourceId,
+        draft,
+        sourceContext
+      );
+      if (execution.deduplicated) {
+        deduplicatedCount += 1;
+      } else {
+        createdCount += 1;
+      }
+      items.push({
+        key,
+        messageId: draft.messageId,
+        type: draft.type,
+        dueAt: draft.dueAt,
+        ok: true,
+        deduplicated: execution.deduplicated,
+        ...(execution.verified === undefined ? {} : { verified: execution.verified }),
+        result: execution.result,
+      });
+    } catch (error) {
+      failedCount += 1;
+      const errorCode =
+        error instanceof GatewayHttpError
+          ? `CALENDAR_SYNC_GATEWAY_${error.status}`
+          : "CALENDAR_SYNC_FAILED";
+      server.log.warn(
+        {
+          sourceId,
+          messageId: draft.messageId,
+          key,
+          message: error instanceof Error ? error.message : String(error),
+          errorCode,
+        },
+        "Automatic mail processing calendar sync item failed"
+      );
+      items.push({
+        key,
+        messageId: draft.messageId,
+        type: draft.type,
+        dueAt: draft.dueAt,
+        ok: false,
+        error: errorCode,
+      });
+    }
+  }
+
+  return {
+    sourceId,
+    total: eligible.length,
+    createdCount,
+    deduplicatedCount,
+    failedCount,
+    items,
+  };
+}
+
+async function runMailProcessingPipeline(input: MailProcessingPipelineInput) {
+  const { sessionToken, tenant, limit, horizonDays, timeZone } = input;
+  const startedAt = new Date().toISOString();
+  const priorityRules = getPriorityRulesSnapshotBySession(sessionToken, tenant.sourceId);
+  const durableSession = isDurableSessionToken(sessionToken);
+
+  let knowledgeBase;
+  try {
+    const summary = await summarizeMailInbox(
+      tenant.userId,
+      tenant,
+      tenant.sessionToken,
+      server.log,
+      limit,
+      input.windowDays === undefined ? undefined : { windowDays: input.windowDays }
+    );
+    try {
+      const store = await getMailKnowledgeBaseStore(tenant.userId, tenant.sourceId);
+      const baselineStatus = store.readBaselineStatus();
+      const backfillCompleted = Boolean(baselineStatus?.backfillCompleted);
+      await exportMailKnowledgeBaseDocuments({
+        userId: tenant.userId,
+        sourceId: tenant.sourceId,
+        logger: server.log,
+        backfillCompleted,
+        note:
+          baselineStatus?.note ??
+          (backfillCompleted
+            ? "旧有邮件信息已完成归档，可直接用于问答检索。"
+            : "当前仅完成文档刷新，历史邮件归纳任务尚未确认全部完成。"),
+      });
+    } catch (exportError) {
+      const exportMessage =
+        exportError instanceof Error ? exportError.message : String(exportError);
+      summary.errors.push(`知识库文档导出失败: ${exportMessage}`);
+      server.log.warn(
+        { userId: tenant.userId, sourceId: tenant.sourceId, message: exportMessage },
+        "Mail processing knowledge-base export failed"
+      );
+    }
+    knowledgeBase = knowledgeBaseProcessingView(summary);
+  } catch (error) {
+    server.log.warn(
+      { userId: tenant.userId, sourceId: tenant.sourceId, message: error instanceof Error ? error.message : String(error) },
+      "Mail processing knowledge-base update failed"
+    );
+    knowledgeBase = failedKnowledgeBaseProcessingView(error);
+  }
+
+  const warnings: string[] = [];
+  let triage: {
+    total: number;
+    counts: Awaited<ReturnType<typeof triageInbox>>["counts"];
+  } = {
+    total: 0,
+    counts: {
+      unprocessed: 0,
+      urgent_important: 0,
+      not_urgent_important: 0,
+      urgent_not_important: 0,
+      not_urgent_not_important: 0,
+    },
+  };
+  let urgent: NotificationPollResult["urgent"] = {
+    totalUrgentImportant: 0,
+    newItems: [],
+  };
+  let dailyDigest: NotificationPollResult["dailyDigest"] = null;
+  let calendarDrafts: CalendarDraftForProcessing[] = [];
+  let calendarSync: MailProcessingCalendarSyncResult | null = null;
+
+  if (!durableSession) {
+    try {
+      const notificationComputation = await runNotificationPollWithLock(
+        sessionToken,
+        {
+          sourceId: tenant.sourceId,
+          limit,
+          horizonDays,
+          tz: timeZone,
+        },
+        false
+      );
+      if (!notificationComputation) {
+        warnings.push("notification: another processing run is already polling notifications");
+      } else {
+        notificationComputation.commit();
+        triage = notificationComputation.result.triage;
+        urgent = notificationComputation.result.urgent;
+        dailyDigest = notificationComputation.result.dailyDigest;
+      }
+    } catch (error) {
+      warnings.push(processingWarningMessage("notification", error));
+      server.log.warn(
+        { sourceId: tenant.sourceId, message: error instanceof Error ? error.message : String(error) },
+        "Mail processing notification stage failed"
+      );
+    }
+  }
+
+  if (triage.total === 0) {
+    try {
+      const triageResult = await triageInbox(limit, priorityRules, tenant);
+      triage = {
+        total: triageResult.total,
+        counts: triageResult.counts,
+      };
+      if (durableSession) {
+        urgent = {
+          totalUrgentImportant: triageResult.counts.urgent_important,
+          newItems: [],
+        };
+      }
+    } catch (error) {
+      warnings.push(processingWarningMessage("triage", error));
+      server.log.warn(
+        { sourceId: tenant.sourceId, message: error instanceof Error ? error.message : String(error) },
+        "Mail processing triage fallback failed"
+      );
+    }
+  }
+
+  try {
+    const insights = await buildMailInsights(
+      limit,
+      horizonDays,
+      timeZone,
+      priorityRules,
+      tenant
+    );
+    calendarDrafts = calendarDraftsFromInsights(insights, 12, timeZone);
+  } catch (error) {
+    warnings.push(processingWarningMessage("insights", error));
+    server.log.warn(
+      { sourceId: tenant.sourceId, message: error instanceof Error ? error.message : String(error) },
+      "Mail processing insights stage failed"
+    );
+  }
+
+  if (input.autoSyncCalendar && calendarDrafts.length > 0) {
+    try {
+      calendarSync = await syncCalendarDraftsForProcessing(
+        sessionToken,
+        tenant.sourceId,
+        calendarDrafts,
+        input.calendarSyncMaxItems,
+        input.calendarSyncConfidenceThreshold,
+        tenant
+      );
+      if (calendarSync && calendarSync.failedCount > 0) {
+        warnings.push(`calendar_sync: ${calendarSync.failedCount} item(s) failed to write to calendar`);
+      }
+    } catch (error) {
+      warnings.push(processingWarningMessage("calendar_sync", error));
+      server.log.warn(
+        { sourceId: tenant.sourceId, message: error instanceof Error ? error.message : String(error) },
+        "Mail processing calendar sync stage failed"
+      );
+    }
+  }
+
+  return {
+    status: warnings.length > 0 || knowledgeBase.status === "failed" ? "partial" : "completed",
+    trigger: input.trigger,
+    warnings: [...(knowledgeBase.status === "failed" ? knowledgeBase.errors : []), ...warnings].slice(0, 20),
+    sourceId: tenant.sourceId,
+    startedAt,
+    completedAt: new Date().toISOString(),
+    limit,
+    horizonDays,
+    timeZone,
+    knowledgeBase,
+    triage,
+    urgent,
+    dailyDigest,
+    calendarDrafts,
+    calendarSync,
+    automation: {
+      triggeredBy: input.trigger,
+      windowDays: input.windowDays ?? null,
+      newMailDetected: knowledgeBase.newMailCount > 0 || knowledgeBase.updatedMailCount > 0,
+      calendarAutoSyncEnabled: input.autoSyncCalendar,
+      calendarAutoSyncThreshold: input.autoSyncCalendar ? input.calendarSyncConfidenceThreshold : null,
+    },
+  };
+}
+
+async function runMailProcessingPipelineWithLock(
+  input: MailProcessingPipelineInput,
+  allowSkipWhenBusy: boolean
+): Promise<Awaited<ReturnType<typeof runMailProcessingPipeline>> | null> {
+  const scopeKey = durableMailScopeKey(input.tenant.userId, input.tenant.sourceId);
+  if (mailProcessingLocksBySession.has(scopeKey)) {
+    if (allowSkipWhenBusy) {
+      return null;
+    }
+    throw new MailProcessingInProgressError();
+  }
+
+  mailProcessingLocksBySession.add(scopeKey);
+  try {
+    return await runMailProcessingPipeline(input);
+  } finally {
+    mailProcessingLocksBySession.delete(scopeKey);
+  }
+}
+
+function shouldEmitAutomaticProcessingResult(
+  result: Awaited<ReturnType<typeof runMailProcessingPipeline>>
+): boolean {
+  return (
+    result.knowledgeBase.newMailCount > 0 ||
+    result.knowledgeBase.updatedMailCount > 0 ||
+    result.urgent.newItems.length > 0 ||
+    Boolean(result.calendarSync && (result.calendarSync.createdCount > 0 || result.calendarSync.deduplicatedCount > 0)) ||
+    result.warnings.length > 0
+  );
+}
+
+function incrementActiveNotificationStream(scopeKey: string): void {
+  const next = (activeNotificationStreamsBySession.get(scopeKey) ?? 0) + 1;
+  setLruEntry(activeNotificationStreamsBySession, scopeKey, next);
+  enforceMapLimit(activeNotificationStreamsBySession, maxNotificationSessionEntries);
+}
+
+function decrementActiveNotificationStream(scopeKey: string): void {
+  const current = activeNotificationStreamsBySession.get(scopeKey) ?? 0;
+  if (current <= 1) {
+    activeNotificationStreamsBySession.delete(scopeKey);
+    return;
+  }
+
+  activeNotificationStreamsBySession.set(scopeKey, current - 1);
+}
+
+function durableSessionTokenForSource(userId: string, sourceId: string): string {
+  return `durable:${createHash("sha256").update(`${userId}:${sourceId}`).digest("hex").slice(0, 24)}`;
+}
+
+function isDurableSessionToken(sessionToken: string): boolean {
+  return sessionToken.startsWith("durable:");
+}
+
+function durableWebhookUrlForOutlook(): string | null {
+  const baseUrl = env.publicBaseUrl.trim();
+  if (!/^https:\/\//i.test(baseUrl)) {
+    return null;
+  }
+  return `${baseUrl}/api/mail/connections/outlook/direct/webhook`;
+}
+
+function durableSubscriptionExpirationDateTime(): string {
+  const targetMs =
+    Date.now() + Math.max(45, durableMailSubscriptionLifetimeMinutes) * 60 * 1000 - 5 * 60 * 1000;
+  return new Date(targetMs).toISOString();
+}
+
+function sameOutlookSyncBinding(
+  left: Pick<OutlookSyncState, "microsoftAccountId" | "mailboxUserId">,
+  right: Pick<OutlookSyncState, "microsoftAccountId" | "mailboxUserId">
+): boolean {
+  return left.microsoftAccountId === right.microsoftAccountId && left.mailboxUserId === right.mailboxUserId;
+}
+
+function mergeDurableOutlookRuntimeState(
+  current: OutlookSyncState,
+  next: OutlookSyncState
+): OutlookSyncState {
+  const currentWebhookIsNewer = Boolean(
+    current.lastWebhookAt &&
+      (!next.lastWebhookAt || current.lastWebhookAt.localeCompare(next.lastWebhookAt) > 0)
+  );
+  const latestWebhookAt =
+    current.lastWebhookAt && next.lastWebhookAt
+      ? current.lastWebhookAt.localeCompare(next.lastWebhookAt) >= 0
+        ? current.lastWebhookAt
+        : next.lastWebhookAt
+      : current.lastWebhookAt ?? next.lastWebhookAt;
+
+  return {
+    ...current,
+    ...next,
+    userId: current.userId,
+    sourceId: current.sourceId,
+    connectionType: current.connectionType,
+    microsoftAccountId: current.microsoftAccountId,
+    mailboxUserId: current.mailboxUserId,
+    label: current.label,
+    emailHint: current.emailHint,
+    timeZone: current.timeZone,
+    enabled: current.enabled,
+    initializedAt: current.initializedAt,
+    mode: current.mode,
+    resource: current.resource,
+    notificationUrl: current.notificationUrl,
+    lifecycleNotificationUrl: current.lifecycleNotificationUrl,
+    lastWebhookAt: latestWebhookAt,
+    subscriptionId: currentWebhookIsNewer ? current.subscriptionId : next.subscriptionId,
+    subscriptionExpirationDateTime: currentWebhookIsNewer
+      ? current.subscriptionExpirationDateTime
+      : next.subscriptionExpirationDateTime,
+    subscriptionStatus: currentWebhookIsNewer ? current.subscriptionStatus : next.subscriptionStatus,
+    dirtyReason: currentWebhookIsNewer ? current.dirtyReason : next.dirtyReason,
+  };
+}
+
+async function saveDurableOutlookRuntimeState(next: OutlookSyncState): Promise<OutlookSyncState> {
+  return updateOutlookSyncState(next.userId, next.sourceId, (current) => {
+    if (!current) {
+      return next;
+    }
+    if (!sameOutlookSyncBinding(current, next)) {
+      return current;
+    }
+    if (!current.enabled && next.enabled) {
+      return current;
+    }
+    return mergeDurableOutlookRuntimeState(current, next);
+  });
+}
+
+async function waitForDurableOutlookSyncIdle(userId: string, sourceId: string): Promise<void> {
+  const scopeKey = durableMailScopeKey(userId, sourceId);
+  const deadline = Date.now() + durableMailMutationWaitMs;
+  while (durableOutlookSyncLocks.has(scopeKey)) {
+    if (Date.now() >= deadline) {
+      throw new DurableOutlookSyncInProgressError();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+async function acquireDurableOutlookMutationLock(
+  userId: string,
+  sourceId: string
+): Promise<() => void> {
+  const scopeKey = durableMailScopeKey(userId, sourceId);
+  const deadline = Date.now() + durableMailMutationWaitMs;
+  while (true) {
+    await waitForDurableOutlookSyncIdle(userId, sourceId);
+    if (!durableOutlookSyncLocks.has(scopeKey)) {
+      durableOutlookSyncLocks.add(scopeKey);
+      let released = false;
+      return () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        durableOutlookSyncLocks.delete(scopeKey);
+      };
+    }
+    if (Date.now() >= deadline) {
+      throw new DurableOutlookSyncInProgressError();
+    }
+  }
+}
+
+function hasActiveForegroundNotificationStreamForSource(userId: string, sourceId: string): boolean {
+  const suffix = `${sourceScopeSeparator}${sourceId}`;
+  for (const [scopeKey, count] of activeNotificationStreamsBySession) {
+    if (count <= 0 || !scopeKey.endsWith(suffix)) {
+      continue;
+    }
+    const sessionToken = scopeKey.slice(0, Math.max(0, scopeKey.length - suffix.length));
+    if (getUserIdForSessionToken(sessionToken) === userId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function buildDurableTenantContext(
+  userId: string,
+  source: {
+    id: string;
+    connectionType?: "composio" | "microsoft";
+    microsoftAccountId?: string;
+    mailboxUserId?: string;
+  }
+): TenantContext | null {
+  const microsoftAccountId = cleanOptionalText(source.microsoftAccountId);
+  if (!microsoftAccountId) {
+    return null;
+  }
+
+  return {
+    userId,
+    sourceId: source.id,
+    sessionToken: durableSessionTokenForSource(userId, source.id),
+    connectionType: "microsoft",
+    microsoftAccountId,
+    ...(cleanOptionalText(source.mailboxUserId) ? { mailboxUserId: cleanOptionalText(source.mailboxUserId) } : {}),
+  };
+}
+
+async function upsertDurableOutlookSyncStateFromSource(input: {
+  userId: string;
+  allowBindingReset?: boolean;
+  source: {
+    id: string;
+    name: string;
+    emailHint: string;
+    timeZone?: string;
+    enabled: boolean;
+    microsoftAccountId?: string;
+    mailboxUserId?: string;
+  };
+}): Promise<OutlookSyncState | null> {
+  const microsoftAccountId = cleanOptionalText(input.source.microsoftAccountId);
+  if (!microsoftAccountId) {
+    return null;
+  }
+
+  const mailboxUserId = cleanOptionalText(input.source.mailboxUserId) ?? "me";
+  const timeZone = cleanOptionalText(input.source.timeZone) ?? null;
+  const allowBindingReset = input.allowBindingReset ?? true;
+  const notificationUrl = durableWebhookUrlForOutlook();
+  const current = await getOutlookSyncState(input.userId, input.source.id);
+  const sourceChanged = Boolean(
+    allowBindingReset &&
+      current &&
+      (current.microsoftAccountId !== microsoftAccountId ||
+        current.mailboxUserId !== mailboxUserId)
+  );
+
+  if (sourceChanged && current?.subscriptionId) {
+    const previousTenant = buildDurableTenantContext(input.userId, {
+      id: input.source.id,
+      connectionType: "microsoft",
+      microsoftAccountId: current.microsoftAccountId,
+      mailboxUserId: current.mailboxUserId,
+    });
+    if (previousTenant) {
+      try {
+        await deleteMicrosoftSubscription(
+          previousTenant.sessionToken,
+          previousTenant.microsoftAccountId ?? "",
+          current.subscriptionId,
+          previousTenant.userId
+        );
+      } catch (error) {
+        server.log.warn(
+          {
+            userId: input.userId,
+            sourceId: input.source.id,
+            message: error instanceof Error ? error.message : String(error),
+          },
+          "Previous Outlook subscription cleanup failed during source rebinding"
+        );
+      }
+    }
+  }
+
+  return updateOutlookSyncState(input.userId, input.source.id, (current) => {
+    const shouldReset =
+      current !== null &&
+      (current.microsoftAccountId !== microsoftAccountId || current.mailboxUserId !== mailboxUserId);
+    if (shouldReset && !allowBindingReset) {
+      return current;
+    }
+    if (!allowBindingReset && current && !current.enabled && input.source.enabled) {
+      return current;
+    }
+    const base =
+      shouldReset || !current
+        ? createOutlookSyncState({
+            userId: input.userId,
+            sourceId: input.source.id,
+            microsoftAccountId,
+            mailboxUserId,
+            label: input.source.name,
+            emailHint: input.source.emailHint,
+            timeZone,
+            enabled: input.source.enabled,
+            mode: notificationUrl ? "hybrid" : "poll",
+          })
+        : current;
+    return {
+      ...base,
+      userId: input.userId,
+      sourceId: input.source.id,
+      microsoftAccountId,
+      mailboxUserId,
+      label: input.source.name,
+      emailHint: input.source.emailHint,
+      timeZone: timeZone ?? base.timeZone,
+      enabled: input.source.enabled,
+      mode: notificationUrl ? "hybrid" : "poll",
+      notificationUrl,
+      lifecycleNotificationUrl: notificationUrl,
+      subscriptionStatus: input.source.enabled
+        ? base.subscriptionStatus === "disabled"
+          ? "idle"
+          : base.subscriptionStatus
+        : "disabled",
+      dirtyReason: shouldReset ? "initial_sync" : base.dirtyReason ?? "initial_sync",
+      lastError: shouldReset ? null : base.lastError,
+    };
+  });
+}
+
+async function ensureDurableOutlookSubscription(
+  state: OutlookSyncState,
+  tenant: TenantContext
+): Promise<OutlookSyncState> {
+  const webhookUrl = durableWebhookUrlForOutlook();
+  if (!webhookUrl || state.mode === "poll" || !state.enabled) {
+    return saveDurableOutlookRuntimeState({
+      ...state,
+      mode: webhookUrl ? state.mode : "poll",
+      notificationUrl: webhookUrl,
+      lifecycleNotificationUrl: webhookUrl,
+      subscriptionStatus: state.enabled ? "idle" : "disabled",
+    });
+  }
+
+  const currentExpirationMs = state.subscriptionExpirationDateTime
+    ? new Date(state.subscriptionExpirationDateTime).getTime()
+    : 0;
+  const clientState =
+    cleanOptionalText(state.clientState ?? undefined) ?? randomBytes(24).toString("hex");
+  const requiresRecreate =
+    state.subscriptionStatus === "needs_recreate" ||
+    !cleanOptionalText(state.clientState ?? undefined);
+  const needsRenewal =
+    !state.subscriptionId ||
+    !Number.isFinite(currentExpirationMs) ||
+    currentExpirationMs <= Date.now() + durableMailSubscriptionRenewSkewMs ||
+    requiresRecreate;
+
+  if (!needsRenewal) {
+    if (
+      state.notificationUrl !== webhookUrl ||
+      state.lifecycleNotificationUrl !== webhookUrl ||
+      state.subscriptionStatus !== "active"
+    ) {
+      return saveDurableOutlookRuntimeState({
+        ...state,
+        mode: "hybrid",
+        notificationUrl: webhookUrl,
+        lifecycleNotificationUrl: webhookUrl,
+        subscriptionStatus: "active",
+      });
+    }
+    return state;
+  }
+
+  const expirationDateTime = durableSubscriptionExpirationDateTime();
+  try {
+    if (requiresRecreate && state.subscriptionId) {
+      try {
+        await deleteMicrosoftSubscription(
+          tenant.sessionToken,
+          tenant.microsoftAccountId ?? "",
+          state.subscriptionId,
+          tenant.userId
+        );
+      } catch {
+        // Best effort cleanup; creation below still re-establishes local state.
+      }
+    }
+    const reusableSubscriptionId = requiresRecreate ? null : state.subscriptionId;
+    const subscription = reusableSubscriptionId
+      ? await renewMicrosoftSubscription(
+          tenant.sessionToken,
+          tenant.microsoftAccountId ?? "",
+          reusableSubscriptionId,
+          expirationDateTime,
+          tenant.userId
+        )
+      : await createMicrosoftMessageSubscription(
+          tenant.sessionToken,
+          tenant.microsoftAccountId ?? "",
+          {
+            notificationUrl: webhookUrl,
+            lifecycleNotificationUrl: webhookUrl,
+            clientState,
+            expirationDateTime,
+            resource: state.resource,
+          },
+          tenant.userId
+        );
+    return saveDurableOutlookRuntimeState({
+      ...state,
+      mode: "hybrid",
+      subscriptionId: subscription.id,
+      clientState,
+      notificationUrl: webhookUrl,
+      lifecycleNotificationUrl: webhookUrl,
+      subscriptionExpirationDateTime: subscription.expirationDateTime,
+      subscriptionStatus: "active",
+      lastError: null,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    server.log.warn(
+      {
+        userId: tenant.userId,
+        sourceId: tenant.sourceId,
+        message,
+      },
+      "Durable Outlook subscription ensure failed"
+    );
+    if (state.subscriptionId) {
+      try {
+        await deleteMicrosoftSubscription(
+          tenant.sessionToken,
+          tenant.microsoftAccountId ?? "",
+          state.subscriptionId,
+          tenant.userId
+        );
+      } catch {
+        // Ignore cleanup failures; the next renewal will reconcile.
+      }
+    }
+    return saveDurableOutlookRuntimeState({
+      ...state,
+      mode: webhookUrl ? "hybrid" : "poll",
+      notificationUrl: webhookUrl,
+      lifecycleNotificationUrl: webhookUrl,
+      subscriptionId: null,
+      subscriptionExpirationDateTime: null,
+      subscriptionStatus: webhookUrl ? "error" : "idle",
+      lastError: message,
+    });
+  }
+}
+
+async function runDurableOutlookDeltaSync(
+  state: OutlookSyncState,
+  tenant: TenantContext
+): Promise<{ state: OutlookSyncState; hasChanges: boolean }> {
+  const initialSync = !state.deltaLink && !state.nextDeltaLink && !state.lastDeltaSyncAt;
+  const initialReceivedAfter = new Date(
+    Date.now() - durableMailInitialLookbackMinutes * 60 * 1000
+  ).toISOString();
+  let cursor =
+    cleanOptionalText(state.nextDeltaLink ?? undefined) ??
+    cleanOptionalText(state.deltaLink ?? undefined);
+  let hasChanges = false;
+  let newestMessageId = state.lastSeenMessageId;
+  let newestReceivedAt = state.lastSeenReceivedDateTime;
+  let finalDeltaLink = state.deltaLink;
+  let finalNextLink: string | null = null;
+
+  for (let pageCount = 0; pageCount < 5; pageCount += 1) {
+    const page = await deltaMicrosoftInboxMessages(
+      tenant.sessionToken,
+      tenant.microsoftAccountId ?? "",
+      {
+        deltaLink: cursor ?? undefined,
+        receivedAfter: cursor ? undefined : initialReceivedAfter,
+        top: durableMailDeltaTop,
+        changeType: "created",
+      },
+      tenant.userId
+    );
+    finalNextLink = page.nextLink;
+    if (page.deltaLink) {
+      finalDeltaLink = page.deltaLink;
+    }
+    if (!initialSync && (page.items.length > 0 || page.removedIds.length > 0)) {
+      hasChanges = true;
+    }
+    if (!newestMessageId && page.items[0]?.id?.trim()) {
+      newestMessageId = page.items[0].id.trim();
+      newestReceivedAt = page.items[0].receivedDateTime?.trim() ?? newestReceivedAt;
+    }
+    if (!page.nextLink) {
+      break;
+    }
+    cursor = page.nextLink;
+  }
+
+  return {
+    state: await saveDurableOutlookRuntimeState({
+      ...state,
+      deltaLink: finalDeltaLink ?? state.deltaLink,
+      nextDeltaLink: finalNextLink,
+      lastDeltaSyncAt: new Date().toISOString(),
+      lastSeenMessageId: newestMessageId ?? state.lastSeenMessageId,
+      lastSeenReceivedDateTime: newestReceivedAt ?? state.lastSeenReceivedDateTime,
+      lastError: null,
+      dirtyReason: initialSync ? null : state.dirtyReason,
+    }),
+    hasChanges,
+  };
+}
+
+async function runDurableOutlookProcessingForState(
+  state: OutlookSyncState,
+  trigger: MailProcessingTrigger
+): Promise<void> {
+  if (!state.enabled) {
+    return;
+  }
+
+  if (hasActiveForegroundNotificationStreamForSource(state.userId, state.sourceId)) {
+    return;
+  }
+
+  const scopeKey = durableMailScopeKey(state.userId, state.sourceId);
+  if (durableOutlookSyncLocks.has(scopeKey)) {
+    return;
+  }
+
+  durableOutlookSyncLocks.add(scopeKey);
+  let nextState = state;
+  try {
+    const liveState = await getOutlookSyncState(state.userId, state.sourceId);
+    if (!liveState || !sameOutlookSyncBinding(liveState, state) || !liveState.enabled) {
+      return;
+    }
+    nextState = liveState;
+
+    const tenant = buildDurableTenantContext(nextState.userId, {
+      id: nextState.sourceId,
+      connectionType: "microsoft",
+      microsoftAccountId: nextState.microsoftAccountId,
+      mailboxUserId: nextState.mailboxUserId,
+    });
+    if (!tenant) {
+      return;
+    }
+
+    nextState = await ensureDurableOutlookSubscription(nextState, tenant);
+    if (!sameOutlookSyncBinding(nextState, state) || !nextState.enabled) {
+      return;
+    }
+    const deltaResult = await runDurableOutlookDeltaSync(nextState, tenant);
+    nextState = deltaResult.state;
+    if (!sameOutlookSyncBinding(nextState, state) || !nextState.enabled) {
+      return;
+    }
+
+    const shouldProcess =
+      deltaResult.hasChanges ||
+      trigger === "webhook" ||
+      (nextState.dirtyReason !== null && nextState.dirtyReason !== "initial_sync");
+    if (!shouldProcess) {
+      return;
+    }
+
+    const result = await runMailProcessingPipelineWithLock(
+      {
+        sessionToken: tenant.sessionToken,
+        tenant,
+        limit: mailAutoProcessingLimit,
+        horizonDays: mailAutoProcessingHorizonDays,
+        timeZone: normalizeIanaTimeZoneOrFallback(nextState.timeZone ?? undefined),
+        trigger,
+        windowDays: mailAutoProcessingWindowDays,
+        autoSyncCalendar: true,
+        calendarSyncMaxItems: mailAutoCalendarMaxItems,
+        calendarSyncConfidenceThreshold: mailAutoCalendarMinConfidence,
+      },
+      true
+    );
+    if (!result) {
+      return;
+    }
+
+    await saveDurableOutlookRuntimeState({
+      ...nextState,
+      lastProcessingAt: new Date().toISOString(),
+      lastError: null,
+      dirtyReason: null,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    server.log.warn(
+      {
+        userId: state.userId,
+        sourceId: state.sourceId,
+        message,
+      },
+      "Durable Outlook background processing failed"
+    );
+    await saveDurableOutlookRuntimeState({
+      ...nextState,
+      lastError: message,
+    });
+  } finally {
+    durableOutlookSyncLocks.delete(scopeKey);
+  }
+}
+
+async function deactivateDurableOutlookSyncFromSource(input: {
+  userId: string;
+  source: {
+    id: string;
+    name: string;
+    emailHint: string;
+    microsoftAccountId?: string;
+    mailboxUserId?: string;
+  };
+}): Promise<void> {
+  const existing = await getOutlookSyncState(input.userId, input.source.id);
+  if (existing?.subscriptionId) {
+    const tenant = buildDurableTenantContext(input.userId, {
+      id: input.source.id,
+      connectionType: "microsoft",
+      microsoftAccountId: input.source.microsoftAccountId,
+      mailboxUserId: input.source.mailboxUserId,
+    });
+    if (tenant) {
+      try {
+        await deleteMicrosoftSubscription(
+          tenant.sessionToken,
+          tenant.microsoftAccountId ?? "",
+          existing.subscriptionId,
+          tenant.userId
+        );
+      } catch (error) {
+        server.log.warn(
+          {
+            userId: input.userId,
+            sourceId: input.source.id,
+            message: error instanceof Error ? error.message : String(error),
+          },
+          "Durable Outlook subscription delete failed during source deactivation"
+        );
+      }
+    }
+  }
+
+  await updateOutlookSyncState(input.userId, input.source.id, (current) => {
+    const base =
+      current ??
+      createOutlookSyncState({
+        userId: input.userId,
+        sourceId: input.source.id,
+        microsoftAccountId: input.source.microsoftAccountId ?? "",
+        mailboxUserId: input.source.mailboxUserId ?? "me",
+        label: input.source.name,
+        emailHint: input.source.emailHint,
+        enabled: false,
+        mode: "poll",
+      });
+    return {
+      ...base,
+      enabled: false,
+      subscriptionId: null,
+      subscriptionExpirationDateTime: null,
+      subscriptionStatus: "disabled",
+      dirtyReason: null,
+    };
+  });
+}
+
+async function runAutomaticMailProcessingForSessionSource(input: {
+  sessionToken: string;
+  sourceId: string;
+  timeZone?: string;
+}): Promise<AutomaticMailProcessingExecution> {
+  const scopeKey = sourceScopedSessionKey(input.sessionToken, input.sourceId);
+  const latestResult = latestAutomaticMailProcessingResultBySession.get(scopeKey);
+  const nowMs = Date.now();
+  const lastRunAt = autoMailProcessingLastRunBySession.get(scopeKey) ?? 0;
+  if (nowMs - lastRunAt < mailAutoProcessingIntervalMs && latestResult) {
+    return {
+      status: "reused",
+      result: latestResult,
+    };
+  }
+
+  const routingGuard = getSourceRoutingReady(input.sessionToken, input.sourceId);
+  if (!routingGuard.ok) {
+    return {
+      status: "not_ready",
+      payload: routingGuard.payload,
+    };
+  }
+
+  const tenant = buildTenantContextForSession(input.sessionToken, input.sourceId);
+  if (!tenant) {
+    return {
+      status: "unauthorized",
+    };
+  }
+
+  if (tenant.connectionType === "microsoft" && input.timeZone) {
+    await updateOutlookSyncState(tenant.userId, tenant.sourceId, (current) => {
+      if (!current) {
+        return createOutlookSyncState({
+          userId: tenant.userId,
+          sourceId: tenant.sourceId,
+          microsoftAccountId: tenant.microsoftAccountId ?? "",
+          mailboxUserId: tenant.mailboxUserId ?? "me",
+          label: tenant.mailboxUserId ?? tenant.sourceId,
+          emailHint: tenant.mailboxUserId ?? "",
+          timeZone: normalizeIanaTimeZoneOrFallback(input.timeZone),
+          mode: durableWebhookUrlForOutlook() ? "hybrid" : "poll",
+        });
+      }
+      return {
+        ...current,
+        timeZone: normalizeIanaTimeZoneOrFallback(input.timeZone),
+      };
+    });
+  }
+
+  setLruEntry(autoMailProcessingLastRunBySession, scopeKey, nowMs);
+  enforceMapLimit(autoMailProcessingLastRunBySession, maxNotificationSessionEntries);
+
+  const result = await runMailProcessingPipelineWithLock(
+    {
+      sessionToken: input.sessionToken,
+      tenant,
+      limit: mailAutoProcessingLimit,
+      horizonDays: mailAutoProcessingHorizonDays,
+      timeZone: normalizeIanaTimeZoneOrFallback(input.timeZone),
+      trigger: "poll",
+      windowDays: mailAutoProcessingWindowDays,
+      autoSyncCalendar: true,
+      calendarSyncMaxItems: mailAutoCalendarMaxItems,
+      calendarSyncConfidenceThreshold: mailAutoCalendarMinConfidence,
+    },
+    true
+  );
+  if (!result) {
+    if (latestResult) {
+      return {
+        status: "reused",
+        result: latestResult,
+      };
+    }
+    return {
+      status: "busy",
+      retryAfterSec: Math.ceil(mailAutoProcessingIntervalMs / 1000),
+    };
+  }
+
+  setLruEntry(latestAutomaticMailProcessingResultBySession, scopeKey, result);
+  enforceMapLimit(latestAutomaticMailProcessingResultBySession, maxNotificationSessionEntries);
+  return {
+    status: "processed",
+    result,
+  };
+}
+
+async function pollAutomaticMailProcessingInBackground(): Promise<void> {
+  const now = Date.now();
+  for (const sessionToken of sessions.keys()) {
+    if (!isSessionActiveWithoutTouch(sessionToken, now)) {
+      continue;
+    }
+
+    const userId = getUserIdForSessionToken(sessionToken);
+    if (!userId || userId.startsWith("legacy:")) {
+      continue;
+    }
+
+    let snapshot = getMailSourcesSnapshotBySession(sessionToken);
+    if (snapshot.sources.length === 0) {
+      await hydrateMailSourcesForSession(sessionToken);
+      snapshot = getMailSourcesSnapshotBySession(sessionToken);
+    }
+
+    for (const source of snapshot.sources) {
+      if (!source.enabled || !source.ready) {
+        continue;
+      }
+
+      const scopeKey = sourceScopedSessionKey(sessionToken, source.id);
+      if ((activeNotificationStreamsBySession.get(scopeKey) ?? 0) > 0) {
+        continue;
+      }
+
+      const execution = await runAutomaticMailProcessingForSessionSource({
+        sessionToken,
+        sourceId: source.id,
+        timeZone: getNotificationPreferencesBySession(sessionToken, source.id, true).digestTimeZone,
+      });
+      if (execution.status === "processed" && shouldEmitAutomaticProcessingResult(execution.result)) {
+        server.log.info(
+          {
+            sessionToken: sessionToken.slice(0, 12),
+            sourceId: source.id,
+            newMailCount: execution.result.knowledgeBase.newMailCount,
+            updatedMailCount: execution.result.knowledgeBase.updatedMailCount,
+            urgentCount: execution.result.urgent.newItems.length,
+          },
+          "Background automatic mail processing completed"
+        );
+      }
+    }
+  }
+}
+
+async function pollDurableOutlookSyncInBackground(): Promise<void> {
+  const sources = await mailSourceService.listReadyMicrosoftSourcesForBackground();
+  for (const entry of sources) {
+    if (durableOutlookSyncLocks.has(durableMailScopeKey(entry.userId, entry.source.id))) {
+      continue;
+    }
+    const state = await upsertDurableOutlookSyncStateFromSource({
+      userId: entry.userId,
+      allowBindingReset: false,
+      source: entry.source,
+    });
+    if (!state || !state.enabled) {
+      continue;
+    }
+    await runDurableOutlookProcessingForState(state, "poll");
+  }
+}
+
 const maintenanceTimer = setInterval(() => {
   const now = Date.now();
   purgeExpiredSessions(now);
@@ -4211,6 +5472,9 @@ const maintenanceTimer = setInterval(() => {
   enforceMapLimit(customPriorityRulesBySession, maxPriorityRuleSessionEntries);
   enforceMapLimit(notificationPrefsBySession, maxNotificationSessionEntries);
   enforceMapLimit(notificationStateBySession, maxNotificationSessionEntries);
+  enforceMapLimit(activeNotificationStreamsBySession, maxNotificationSessionEntries);
+  enforceMapLimit(autoMailProcessingLastRunBySession, maxNotificationSessionEntries);
+  enforceMapLimit(latestAutomaticMailProcessingResultBySession, maxNotificationSessionEntries);
   for (const sourceStore of mailSourcesBySession.values()) {
     enforceMapLimit(sourceStore, maxMailSourcesPerSession);
   }
@@ -4220,6 +5484,26 @@ const maintenanceTimer = setInterval(() => {
   purgeNotificationState(now);
 }, 60000);
 maintenanceTimer.unref();
+
+const backgroundMailProcessingTimer = setInterval(() => {
+  void pollAutomaticMailProcessingInBackground().catch((error) => {
+    server.log.warn(
+      { message: error instanceof Error ? error.message : String(error) },
+      "Background automatic mail processing sweep failed"
+    );
+  });
+}, mailAutoProcessingIntervalMs);
+backgroundMailProcessingTimer.unref();
+
+const durableOutlookSyncTimer = setInterval(() => {
+  void pollDurableOutlookSyncInBackground().catch((error) => {
+    server.log.warn(
+      { message: error instanceof Error ? error.message : String(error) },
+      "Durable Outlook sync sweep failed"
+    );
+  });
+}, durableMailSyncIntervalMs);
+durableOutlookSyncTimer.unref();
 
 server.addHook("onRequest", async (request, reply) => {
   if (request.method === "OPTIONS") {
@@ -4244,7 +5528,8 @@ server.addHook("onRequest", async (request, reply) => {
     pathname === "/api/ready" ||
     pathname === "/api/health" ||
     pathname === "/api/mail/connections/outlook/direct/start" ||
-    pathname === "/api/mail/connections/outlook/direct/callback"
+    pathname === "/api/mail/connections/outlook/direct/callback" ||
+    pathname === "/api/mail/connections/outlook/direct/webhook"
   ) {
     return;
   }
@@ -4335,6 +5620,26 @@ const sourceProviderSchema = z.enum(["outlook"]);
 const sourceIdOptionalSchema = sourceIdSchema.optional();
 const sourceOnlyQuerySchema = z.object({
   sourceId: sourceIdOptionalSchema,
+});
+const outlookWebhookNotificationSchema = z.object({
+  value: z.array(
+    z
+      .object({
+        subscriptionId: z.string(),
+        subscriptionExpirationDateTime: z.string().optional(),
+        clientState: z.string().optional(),
+        changeType: z.string().optional(),
+        lifecycleEvent: z.string().optional(),
+        resource: z.string().optional(),
+        resourceData: z
+          .object({
+            id: z.string().optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough()
+  ),
 });
 const querySchema = z.object({
   message: z.string().trim().min(1).max(8000),
@@ -4494,6 +5799,8 @@ const mailProcessingRunSchema = z.object({
   sourceId: sourceIdOptionalSchema,
   limit: z.coerce.number().int().min(5).max(60).default(30),
   horizonDays: z.coerce.number().int().min(1).max(30).default(14),
+  trigger: z.enum(["manual", "poll"]).default("manual"),
+  windowDays: z.coerce.number().int().min(1).max(30).optional(),
   tz: z
     .string()
     .min(1)
@@ -4733,6 +6040,18 @@ class NotificationPollInProgressError extends Error {
   }
 }
 
+class MailProcessingInProgressError extends Error {
+  constructor() {
+    super("Mail processing already in progress");
+  }
+}
+
+class DurableOutlookSyncInProgressError extends Error {
+  constructor() {
+    super("Durable Outlook sync already in progress");
+  }
+}
+
 class UnauthorizedSessionError extends Error {
   constructor() {
     super("Unauthorized");
@@ -4764,6 +6083,79 @@ type NotificationPollInput = {
   tz?: string;
   sourceId: string;
 };
+
+type MailProcessingTrigger = "manual" | "poll" | "webhook";
+
+type CalendarDraftForProcessing = CalendarSyncInput & {
+  confidence?: number;
+};
+
+type MailProcessingCalendarSyncResult = {
+  sourceId: string;
+  total: number;
+  createdCount: number;
+  deduplicatedCount: number;
+  failedCount: number;
+  items: Array<
+    | {
+        key: string;
+        messageId: string;
+        type: CalendarSyncInput["type"];
+        dueAt: string;
+        ok: true;
+        deduplicated: boolean;
+        verified?: boolean;
+        result: Awaited<ReturnType<typeof createCalendarEventFromInsight>>;
+      }
+    | {
+        key: string;
+        messageId: string;
+        type: CalendarSyncInput["type"];
+        dueAt: string;
+        ok: false;
+        error: string;
+      }
+  >;
+};
+
+type MailProcessingPipelineInput = {
+  sessionToken: string;
+  tenant: TenantContext;
+  limit: number;
+  horizonDays: number;
+  timeZone: string;
+  trigger: MailProcessingTrigger;
+  windowDays?: number;
+  autoSyncCalendar: boolean;
+  calendarSyncMaxItems: number;
+  calendarSyncConfidenceThreshold: number;
+};
+
+type AutomaticMailProcessingExecution =
+  | {
+      status: "processed";
+      result: Awaited<ReturnType<typeof runMailProcessingPipeline>>;
+    }
+  | {
+      status: "reused";
+      result: Awaited<ReturnType<typeof runMailProcessingPipeline>>;
+    }
+  | {
+      status: "busy";
+      retryAfterSec: number;
+    }
+  | {
+      status: "unauthorized";
+    }
+  | {
+      status: "not_ready";
+      payload: SourceRoutingGuardFailurePayload;
+    };
+
+const latestAutomaticMailProcessingResultBySession = new Map<
+  string,
+  Awaited<ReturnType<typeof runMailProcessingPipeline>>
+>();
 
 function notificationErrorPayloadFromUnknown(error: unknown): NotificationErrorPayload {
   const at = new Date().toISOString();
@@ -4847,18 +6239,24 @@ async function withTrustedCalendarSyncInput(
 async function runCalendarSyncWithDedupe(
   sessionToken: string,
   sourceId: string,
-  input: CalendarSyncInput
+  input: CalendarSyncInput,
+  sourceContextOverride?: MailSourceContext
 ): Promise<CalendarSyncExecution> {
   const now = Date.now();
   maybePurgeExpiredCalendarSyncRecords(now);
-  const dedupKey = calendarSyncScopedDedupKey(sessionToken, sourceId, input);
+  const dedupKey = calendarSyncScopedDedupKey(
+    sessionToken,
+    sourceId,
+    input,
+    sourceContextOverride
+  );
   const inFlight = calendarSyncInFlightByDedupKey.get(dedupKey);
   if (inFlight) {
     return await inFlight;
   }
 
   const executionPromise = (async (): Promise<CalendarSyncExecution> => {
-    const sourceContext = buildMailSourceContext(sessionToken, sourceId);
+    const sourceContext = sourceContextOverride ?? buildMailSourceContext(sessionToken, sourceId);
     const existing = calendarSyncRecords.get(dedupKey);
 
     if (existing && existing.expiresAt > now) {
@@ -4945,6 +6343,7 @@ async function readinessProbe() {
       env.llmProviderBaseUrl.length > 0 && env.llmProviderApiKey.length > 0 && env.llmProviderModel.length > 0;
     const microsoftConfigured = isMicrosoftDirectAuthConfigured() && env.appEncryptionKey.length > 0;
     const redisConfigured = !env.redisAuthSessionsEnabled || redisAuthSessionStore.enabled;
+    const webhookUrl = durableWebhookUrlForOutlook();
     const ready = prisma.ok && llmConfigured && microsoftConfigured && redisConfigured;
 
     return {
@@ -4958,6 +6357,11 @@ async function readinessProbe() {
           prisma,
           llm: { ok: llmConfigured, model: env.llmProviderModel },
           microsoft: { ok: microsoftConfigured },
+          outlookSync: {
+            ok: true,
+            mode: webhookUrl ? "hybrid" : "poll",
+            webhookConfigured: Boolean(webhookUrl),
+          },
           redis: { ok: redisConfigured, enabled: redisAuthSessionStore.enabled },
         },
       },
@@ -5791,6 +7195,24 @@ server.post("/api/mail/sources", async (request, reply) => {
       microsoftAccountId: parsed.data.microsoftAccountId,
     });
     await hydrateMailSourcesForSession(sessionToken);
+    if (result.source.connectionType === "microsoft") {
+      await upsertDurableOutlookSyncStateFromSource({
+        userId,
+        source: {
+          id: result.source.id,
+          name: result.source.name,
+          emailHint: result.source.emailHint,
+          timeZone: getNotificationPreferencesBySession(
+            sessionToken,
+            result.source.id,
+            true
+          ).digestTimeZone,
+          enabled: result.source.enabled,
+          microsoftAccountId: result.source.microsoftAccountId,
+          mailboxUserId: result.source.mailboxUserId,
+        },
+      });
+    }
 
     return {
       ok: true,
@@ -5866,19 +7288,57 @@ server.post("/api/mail/sources/update", async (request, reply) => {
   }
 
   try {
-    const result = await mailSourceService.updateForUser(userId, parsed.data);
-    await hydrateMailSourcesForSession(sessionToken);
-    return {
-      ok: true,
-      result: {
-        source: result.source,
-        activeSourceId: result.activeSourceId,
-      },
-    };
+    const releaseDurableLock = await acquireDurableOutlookMutationLock(userId, parsed.data.id);
+    try {
+      const result = await mailSourceService.updateForUser(userId, parsed.data);
+      await hydrateMailSourcesForSession(sessionToken);
+      if (result.source.connectionType === "microsoft") {
+        if (result.source.enabled) {
+          await upsertDurableOutlookSyncStateFromSource({
+            userId,
+            source: {
+              id: result.source.id,
+              name: result.source.name,
+              emailHint: result.source.emailHint,
+              timeZone: getNotificationPreferencesBySession(
+                sessionToken,
+                result.source.id,
+                true
+              ).digestTimeZone,
+              enabled: result.source.enabled,
+              microsoftAccountId: result.source.microsoftAccountId,
+              mailboxUserId: result.source.mailboxUserId,
+            },
+          });
+        } else {
+          await deactivateDurableOutlookSyncFromSource({
+            userId,
+            source: {
+              id: result.source.id,
+              name: result.source.name,
+              emailHint: result.source.emailHint,
+              microsoftAccountId: result.source.microsoftAccountId,
+              mailboxUserId: result.source.mailboxUserId,
+            },
+          });
+        }
+      }
+      return {
+        ok: true,
+        result: {
+          source: result.source,
+          activeSourceId: result.activeSourceId,
+        },
+      };
+    } finally {
+      releaseDurableLock();
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     reply.status(
-      message === "MAIL_SOURCE_NOT_FOUND" || message === "MICROSOFT_ACCOUNT_NOT_FOUND"
+      error instanceof DurableOutlookSyncInProgressError
+        ? 409
+        : message === "MAIL_SOURCE_NOT_FOUND" || message === "MICROSOFT_ACCOUNT_NOT_FOUND"
         ? 404
         : message === "COMPOSIO_ACCOUNT_OWNERSHIP_REQUIRED"
           ? 412
@@ -5940,24 +7400,52 @@ server.post("/api/mail/sources/delete", async (request, reply) => {
   }
 
   try {
-    const result = await mailSourceService.deleteForUser(userId, parsed.data.id);
-    clearSessionScopedMapEntries(sourceRoutingStatusBySession, sessionToken);
-    customPriorityRulesBySession.delete(sourceScopedSessionKey(sessionToken, parsed.data.id));
-    notificationPrefsBySession.delete(sourceScopedSessionKey(sessionToken, parsed.data.id));
-    notificationStateBySession.delete(sourceScopedSessionKey(sessionToken, parsed.data.id));
-    notificationPollLocksBySession.delete(sourceScopedSessionKey(sessionToken, parsed.data.id));
-    await hydrateMailSourcesForSession(sessionToken);
-    return {
-      ok: true,
-      result: {
-        id: result.id,
-        deleted: true,
-        activeSourceId: result.activeSourceId,
-      },
-    };
+    const releaseDurableLock = await acquireDurableOutlookMutationLock(userId, parsed.data.id);
+    try {
+      const existing = await mailSourceService.getOwnedSource(userId, parsed.data.id);
+      const result = await mailSourceService.deleteForUser(userId, parsed.data.id);
+      clearSessionScopedMapEntries(sourceRoutingStatusBySession, sessionToken);
+      customPriorityRulesBySession.delete(sourceScopedSessionKey(sessionToken, parsed.data.id));
+      notificationPrefsBySession.delete(sourceScopedSessionKey(sessionToken, parsed.data.id));
+      notificationStateBySession.delete(sourceScopedSessionKey(sessionToken, parsed.data.id));
+      activeNotificationStreamsBySession.delete(sourceScopedSessionKey(sessionToken, parsed.data.id));
+      notificationPollLocksBySession.delete(sourceScopedSessionKey(sessionToken, parsed.data.id));
+      mailProcessingLocksBySession.delete(durableMailScopeKey(userId, parsed.data.id));
+      autoMailProcessingLastRunBySession.delete(sourceScopedSessionKey(sessionToken, parsed.data.id));
+      latestAutomaticMailProcessingResultBySession.delete(sourceScopedSessionKey(sessionToken, parsed.data.id));
+      await hydrateMailSourcesForSession(sessionToken);
+      if (existing?.connectionType === "microsoft") {
+        await deactivateDurableOutlookSyncFromSource({
+          userId,
+          source: {
+            id: parsed.data.id,
+            name: existing.name,
+            emailHint: existing.emailHint,
+            microsoftAccountId: existing.microsoftAccountId,
+            mailboxUserId: existing.mailboxUserId,
+          },
+        });
+      }
+      return {
+        ok: true,
+        result: {
+          id: result.id,
+          deleted: true,
+          activeSourceId: result.activeSourceId,
+        },
+      };
+    } finally {
+      releaseDurableLock();
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    reply.status(message === "MAIL_SOURCE_NOT_FOUND" ? 404 : 502);
+    reply.status(
+      error instanceof DurableOutlookSyncInProgressError
+        ? 409
+        : message === "MAIL_SOURCE_NOT_FOUND"
+          ? 404
+          : 502
+    );
     return {
       ok: false,
       error: message,
@@ -6385,6 +7873,124 @@ server.get("/api/mail/connections/outlook/direct/callback", async (request, repl
       },
     });
   }
+});
+
+async function replyOutlookWebhookValidationToken(
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<boolean> {
+  const validationToken = z
+    .object({
+      validationToken: z.string().trim().min(1).optional(),
+    })
+    .safeParse(request.query ?? {});
+  const token = validationToken.success ? validationToken.data.validationToken : undefined;
+  if (!token) {
+    return false;
+  }
+
+  reply.type("text/plain; charset=utf-8");
+  await reply.send(token);
+  return true;
+}
+
+server.get("/api/mail/connections/outlook/direct/webhook", async (request, reply) => {
+  if (await replyOutlookWebhookValidationToken(request, reply)) {
+    return;
+  }
+  reply.status(405);
+  return {
+    ok: false,
+    error: "Method Not Allowed",
+  };
+});
+
+server.post("/api/mail/connections/outlook/direct/webhook", async (request, reply) => {
+  if (await replyOutlookWebhookValidationToken(request, reply)) {
+    return;
+  }
+
+  const parsed = outlookWebhookNotificationSchema.safeParse(request.body ?? {});
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid Outlook webhook payload",
+      details: parsed.error.issues,
+    };
+  }
+
+  const touchedStates = new Map<string, OutlookSyncState>();
+  for (const notification of parsed.data.value) {
+    const current = await findOutlookSyncStateBySubscriptionId(notification.subscriptionId);
+    if (!current) {
+      continue;
+    }
+
+    let accepted = false;
+    const nextState = await updateOutlookSyncState(current.userId, current.sourceId, (live) => {
+      if (!live) {
+        return {
+          ...current,
+          enabled: false,
+          subscriptionId: null,
+          subscriptionExpirationDateTime: null,
+          subscriptionStatus: "disabled",
+          dirtyReason: null,
+        };
+      }
+      if (
+        !live.enabled ||
+        live.subscriptionId !== notification.subscriptionId ||
+        !sameOutlookSyncBinding(live, current) ||
+        !live.clientState ||
+        notification.clientState !== live.clientState
+      ) {
+        return live;
+      }
+
+      accepted = true;
+      return {
+        ...live,
+        subscriptionExpirationDateTime:
+          notification.subscriptionExpirationDateTime?.trim() || live.subscriptionExpirationDateTime,
+        lastWebhookAt: new Date().toISOString(),
+        subscriptionStatus:
+          notification.lifecycleEvent === "subscriptionRemoved" ||
+          notification.lifecycleEvent === "reauthorizationRequired"
+            ? "needs_recreate"
+            : live.subscriptionStatus,
+        ...(notification.lifecycleEvent === "subscriptionRemoved"
+          ? { subscriptionId: null }
+          : {}),
+        dirtyReason:
+          notification.lifecycleEvent === "missed"
+            ? "missed_notification"
+            : notification.lifecycleEvent === "reauthorizationRequired"
+              ? "reauthorization_required"
+              : notification.lifecycleEvent === "subscriptionRemoved"
+                ? "subscription_removed"
+                : `webhook:${notification.changeType ?? "changed"}`,
+        lastError: null,
+      };
+    });
+    if (!accepted) {
+      continue;
+    }
+    touchedStates.set(`${nextState.userId}:${nextState.sourceId}`, nextState);
+  }
+
+  reply.status(202);
+  queueMicrotask(() => {
+    for (const state of touchedStates.values()) {
+      void runDurableOutlookProcessingForState(state, "webhook");
+    }
+  });
+
+  return {
+    ok: true,
+    processed: touchedStates.size,
+  };
 });
 
 server.post("/api/mail/connections/outlook", async (request, reply) => {
@@ -7590,6 +9196,8 @@ server.get("/api/mail/notifications/stream", async (request, reply) => {
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   const raw = reply.raw;
+  const notificationScopeKey = sourceScopedSessionKey(sessionToken, sourceId);
+  incrementActiveNotificationStream(notificationScopeKey);
 
   const writeEvent = (eventName: string, payload: unknown) => {
     if (closed) {
@@ -7618,6 +9226,7 @@ server.get("/api/mail/notifications/stream", async (request, reply) => {
       clearInterval(keepaliveTimer);
       keepaliveTimer = null;
     }
+    decrementActiveNotificationStream(notificationScopeKey);
     raw.end();
   };
 
@@ -7642,6 +9251,53 @@ server.get("/api/mail/notifications/stream", async (request, reply) => {
     return true;
   };
 
+  const emitAutomaticMailProcessingResult = async () => {
+    const execution = await runAutomaticMailProcessingForSessionSource({
+      sessionToken,
+      sourceId,
+      timeZone: parsed.data.tz,
+    });
+    if (execution.status === "unauthorized") {
+      writeEvent("mail_processing_error", {
+        ok: false,
+        sourceId,
+        error: "Unauthorized",
+        errorCode: "UNAUTHORIZED",
+        at: new Date().toISOString(),
+      });
+      return;
+    }
+    if (execution.status === "not_ready") {
+      writeEvent("mail_processing_error", execution.payload);
+      return;
+    }
+    if (execution.status === "busy") {
+      writeEvent("mail_processing_busy", {
+        ok: false,
+        sourceId,
+        error: "Mail processing already in progress",
+        errorCode: "MAIL_PROCESSING_IN_PROGRESS",
+        retryable: true,
+        retryAfterSec: execution.retryAfterSec,
+        at: new Date().toISOString(),
+      });
+      return;
+    }
+    if (
+      execution.status === "processed" &&
+      !closed &&
+      !raw.destroyed &&
+      !raw.writableEnded &&
+      shouldEmitAutomaticProcessingResult(execution.result)
+    ) {
+      writeEvent("mail_processing", {
+        ok: true,
+        sourceId,
+        result: execution.result,
+      });
+    }
+  };
+
   const emitNotificationSnapshot = async () => {
     if (!ensureStreamSessionIsActive()) {
       return;
@@ -7660,6 +9316,7 @@ server.get("/api/mail/notifications/stream", async (request, reply) => {
     }
 
     try {
+      await emitAutomaticMailProcessingResult();
       const computation = await runNotificationPollWithLock(
         sessionToken,
         {
@@ -7772,169 +9429,83 @@ server.post("/api/mail/processing/run", async (request, reply) => {
     return routingGuard.payload;
   }
 
-  const startedAt = new Date().toISOString();
   const timeZone = normalizeIanaTimeZoneOrFallback(parsed.data.tz);
-  const priorityRules = getPriorityRulesSnapshotBySession(sessionToken, tenant.sourceId);
-
-  let knowledgeBase;
   try {
-    const summary = await summarizeMailInbox(
-      tenant.userId,
-      tenant,
-      tenant.sessionToken,
-      server.log,
-      parsed.data.limit
-    );
-    try {
-      const store = await getMailKnowledgeBaseStore(tenant.userId, tenant.sourceId);
-      const baselineStatus = store.readBaselineStatus();
-      const backfillCompleted = Boolean(baselineStatus?.backfillCompleted);
-      await exportMailKnowledgeBaseDocuments({
-        userId: tenant.userId,
+    if (parsed.data.trigger === "poll") {
+      const execution = await runAutomaticMailProcessingForSessionSource({
+        sessionToken,
         sourceId: tenant.sourceId,
-        logger: server.log,
-        backfillCompleted,
-        note:
-          baselineStatus?.note ??
-          (backfillCompleted
-            ? "旧有邮件信息已完成归档，可直接用于问答检索。"
-            : "当前仅完成文档刷新，历史邮件归纳任务尚未确认全部完成。"),
+        timeZone,
       });
-    } catch (exportError) {
-      const exportMessage =
-        exportError instanceof Error ? exportError.message : String(exportError);
-      summary.errors.push(`知识库文档导出失败: ${exportMessage}`);
-      server.log.warn(
-        { userId: tenant.userId, sourceId: tenant.sourceId, message: exportMessage },
-        "Mail processing knowledge-base export failed"
-      );
-    }
-    knowledgeBase = knowledgeBaseProcessingView(summary);
-  } catch (error) {
-    server.log.warn(
-      { userId: tenant.userId, sourceId: tenant.sourceId, message: error instanceof Error ? error.message : String(error) },
-      "Mail processing knowledge-base update failed"
-    );
-    knowledgeBase = failedKnowledgeBaseProcessingView(error);
-  }
-
-  const warnings: string[] = [];
-  let triage: {
-    total: number;
-    counts: Awaited<ReturnType<typeof triageInbox>>["counts"];
-  } = {
-    total: 0,
-    counts: {
-      unprocessed: 0,
-      urgent_important: 0,
-      not_urgent_important: 0,
-      urgent_not_important: 0,
-      not_urgent_not_important: 0,
-    },
-  };
-  let urgent: NotificationPollResult["urgent"] = {
-    totalUrgentImportant: 0,
-    newItems: [],
-  };
-  let dailyDigest: NotificationPollResult["dailyDigest"] = null;
-  let calendarDrafts: Array<{
-    messageId: string;
-    subject: string;
-    type: string;
-    dueAt: string;
-    dueDateLabel: string;
-    confidence?: number;
-  }> = [];
-
-  const warningMessage = (stage: string, error: unknown) =>
-    `${stage}: ${error instanceof Error ? error.message : String(error)}`;
-
-  try {
-    const notificationComputation = await runNotificationPollWithLock(
-      sessionToken,
-      {
+      if (execution.status === "unauthorized") {
+        reply.status(401);
+        return {
+          ok: false,
+          error: "Unauthorized",
+          errorCode: "UNAUTHORIZED",
+        };
+      }
+      if (execution.status === "not_ready") {
+        reply.status(execution.payload.status);
+        return execution.payload;
+      }
+      if (execution.status === "busy") {
+        reply.status(409);
+        return {
+          ok: false,
+          error: "Mail processing already in progress",
+          errorCode: "MAIL_PROCESSING_IN_PROGRESS",
+          retryable: true,
+          retryAfterSec: execution.retryAfterSec,
+        };
+      }
+      return {
+        ok: true,
         sourceId: tenant.sourceId,
+        result: execution.result,
+      };
+    }
+
+    const result = await runMailProcessingPipelineWithLock(
+      {
+        sessionToken,
+        tenant,
         limit: parsed.data.limit,
         horizonDays: parsed.data.horizonDays,
-        tz: timeZone,
+        timeZone,
+        trigger: parsed.data.trigger,
+        windowDays: parsed.data.windowDays,
+        autoSyncCalendar: true,
+        calendarSyncMaxItems: mailAutoCalendarMaxItems,
+        calendarSyncConfidenceThreshold: mailAutoCalendarMinConfidence,
       },
       false
     );
-    if (!notificationComputation) {
-      warnings.push("notification: another processing run is already polling notifications");
-    } else {
-      notificationComputation.commit();
-      triage = notificationComputation.result.triage;
-      urgent = notificationComputation.result.urgent;
-      dailyDigest = notificationComputation.result.dailyDigest;
-    }
-  } catch (error) {
-    warnings.push(warningMessage("notification", error));
-    server.log.warn(
-      { sourceId: tenant.sourceId, message: error instanceof Error ? error.message : String(error) },
-      "Mail processing notification stage failed"
-    );
-  }
-
-  if (triage.total === 0) {
-    try {
-      const triageResult = await triageInbox(parsed.data.limit, priorityRules, tenant);
-      triage = {
-        total: triageResult.total,
-        counts: triageResult.counts,
+    if (!result) {
+      reply.status(409);
+      return {
+        ok: false,
+        error: "Mail processing already in progress",
+        errorCode: "MAIL_PROCESSING_IN_PROGRESS",
       };
-    } catch (error) {
-      warnings.push(warningMessage("triage", error));
-      server.log.warn(
-        { sourceId: tenant.sourceId, message: error instanceof Error ? error.message : String(error) },
-        "Mail processing triage fallback failed"
-      );
     }
-  }
 
-  try {
-    const insights = await buildMailInsights(
-      parsed.data.limit,
-      parsed.data.horizonDays,
-      timeZone,
-      priorityRules,
-      tenant
-    );
-    calendarDrafts = insights.upcoming.slice(0, 12).map((item) => ({
-      messageId: item.messageId,
-      subject: item.subject,
-      type: item.type,
-      dueAt: item.dueAt,
-      dueDateLabel: item.dueDateLabel,
-      ...(item.confidence === undefined ? {} : { confidence: item.confidence }),
-    }));
-  } catch (error) {
-    warnings.push(warningMessage("insights", error));
-    server.log.warn(
-      { sourceId: tenant.sourceId, message: error instanceof Error ? error.message : String(error) },
-      "Mail processing insights stage failed"
-    );
-  }
-
-  return {
-    ok: true,
-    sourceId: tenant.sourceId,
-    result: {
-      status: warnings.length > 0 || knowledgeBase.status === "failed" ? "partial" : "completed",
-      warnings: [...(knowledgeBase.status === "failed" ? knowledgeBase.errors : []), ...warnings].slice(0, 20),
+    return {
+      ok: true,
       sourceId: tenant.sourceId,
-      startedAt,
-      completedAt: new Date().toISOString(),
-      limit: parsed.data.limit,
-      horizonDays: parsed.data.horizonDays,
-      timeZone,
-      knowledgeBase,
-      triage,
-      urgent,
-      dailyDigest,
-      calendarDrafts,
-    },
-  };
+      result,
+    };
+  } catch (error) {
+    if (error instanceof MailProcessingInProgressError) {
+      reply.status(409);
+      return {
+        ok: false,
+        error: error.message,
+        errorCode: "MAIL_PROCESSING_IN_PROGRESS",
+      };
+    }
+    throw error;
+  }
 });
 
 server.get("/api/mail/triage", async (request, reply) => {
@@ -9507,6 +11078,11 @@ const kbTriggerBodySchema = z.object({
   limit: z.coerce.number().int().min(30).max(400).optional(),
   windowDays: z.coerce.number().int().min(1).max(90).optional(),
 });
+const kbKnowledgeCardBodySchema = z.object({
+  sourceId: sourceIdOptionalSchema,
+  messageId: z.string().trim().min(1).max(4096),
+  tags: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
+});
 const kbJobParamSchema = z.object({
   jobId: z.string().min(1).max(200),
 });
@@ -9600,6 +11176,81 @@ server.get("/api/mail-kb/mails", async (request, reply) => {
   const mails = allMails.slice(offset, offset + limit);
 
   return { ok: true, mails, total, result: { mails, total, limit, offset } };
+});
+
+server.post("/api/mail-kb/knowledge-card", async (request, reply) => {
+  const parsed = kbKnowledgeCardBodySchema.safeParse(request.body ?? {});
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid payload",
+      details: parsed.error.issues,
+    };
+  }
+
+  const sessionToken = getSessionTokenFromRequest(request);
+  const tenant = buildTenantContextForRequest(reply, sessionToken, parsed.data.sourceId);
+  if (!tenant || tenant.isLegacySession || tenant.userId.startsWith("legacy:")) {
+    return {
+      ok: false,
+      error: "Unauthorized or source not found",
+      errorCode: sessionToken ? "MAIL_SOURCE_CONNECTION_REQUIRED" : "UNAUTHORIZED",
+    };
+  }
+
+  const tags = Array.from(new Set(["knowledge-card", "important", ...(parsed.data.tags ?? [])])).slice(0, 12);
+  const store = await getMailKnowledgeBaseStore(tenant.userId, tenant.sourceId);
+  const record = store.markKnowledgeCard(parsed.data.messageId, tags);
+  if (!record) {
+    reply.status(404);
+    return {
+      ok: false,
+      error: "Mail summary not found in local knowledge base",
+      errorCode: "MAIL_KB_RECORD_NOT_FOUND",
+    };
+  }
+
+  await agentFileMemoryStore.append(
+    { userId: tenant.userId, sourceId: tenant.sourceId },
+    {
+      kind: "fact",
+      content: `知识卡片 ${record.mailId}：${record.subject}\n${record.summary}`,
+      tags,
+      metadata: { key: `mail-card:${record.mailId}` },
+    }
+  );
+
+  try {
+    const baselineStatus = store.readBaselineStatus();
+    await exportMailKnowledgeBaseDocuments({
+      userId: tenant.userId,
+      sourceId: tenant.sourceId,
+      logger: server.log,
+      backfillCompleted: Boolean(baselineStatus?.backfillCompleted),
+      note:
+        baselineStatus?.note ??
+        "新邮件知识卡片已写入本地知识库，可直接用于问答检索。",
+    });
+  } catch (error) {
+    server.log.warn(
+      {
+        userId: tenant.userId,
+        sourceId: tenant.sourceId,
+        mailId: record.mailId,
+        message: error instanceof Error ? error.message : String(error),
+      },
+      "Knowledge card document export failed"
+    );
+  }
+
+  return {
+    ok: true,
+    result: {
+      sourceId: tenant.sourceId,
+      mail: record,
+    },
+  };
 });
 
 server.get("/api/mail-kb/events", async (request, reply) => {

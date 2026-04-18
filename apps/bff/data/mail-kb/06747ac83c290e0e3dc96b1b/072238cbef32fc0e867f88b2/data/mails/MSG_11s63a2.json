@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_11s63a2",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABhsxA8QAAAA==",
+  "subject": "Some users may experience empty response from ChatGPT in web",
+  "personId": "PER_006",
+  "eventId": "EVT_010006",
+  "importanceScore": 0.6,
+  "urgencyScore": 0.5,
+  "scoreScale": "ratio",
+  "quadrant": "not_urgent_important",
+  "summary": "OpenAI通报ChatGPT网页端部分用户遇到空回复问题，已实施缓解措施并正监控恢复，对话组件性能降级。",
+  "receivedAt": "2026-04-06T08:02:50.000Z",
+  "processedAt": "2026-04-18T12:43:33.780Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABhsxA8QAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

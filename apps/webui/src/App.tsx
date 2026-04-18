@@ -25,6 +25,7 @@ import { SettingsView } from "./components/dashboard/SettingsView";
 import { MailDetailModal } from "./components/dashboard/MailDetailModal";
 import { Sidebar } from "./components/layout/Sidebar";
 import { Header } from "./components/layout/Header";
+import { UrgentMailToast } from "./components/notification";
 import { LoadingSpinner } from "./components/shared/LoadingSpinner";
 import type { TriageMailItem } from "@mail-agent/shared-types";
 import { isAgentWindowLocation } from "./utils/agentWindow";
@@ -313,6 +314,7 @@ function MainLayout({
 
       {/* 邮件详情弹窗 */}
       <MailDetailModal />
+      <UrgentMailToast />
     </div>
   );
 }

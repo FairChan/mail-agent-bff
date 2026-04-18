@@ -249,9 +249,10 @@ interface MailContextValue extends MailState {
     options?: { silent?: boolean }
   ) => Promise<MailNotificationPollResult | null>;
 
-  // 新邮件处理
-  runMailProcessing: (limit?: number, horizonDays?: number) => Promise<MailProcessingRunResult>;
-  syncCalendarDrafts: (items: MailCalendarDraft[]) => Promise<{
+	  // 新邮件处理
+	  runMailProcessing: (limit?: number, horizonDays?: number) => Promise<MailProcessingRunResult>;
+	  saveKnowledgeCard: (messageId: string, tags?: string[]) => Promise<MailKnowledgeRecord | null>;
+	  syncCalendarDrafts: (items: MailCalendarDraft[]) => Promise<{
     syncedIds: string[];
     failedIds: string[];
     createdCount: number;
@@ -297,6 +298,10 @@ type OutlookLaunchResult = {
 const MailContext = createContext<MailContextValue | null>(null);
 
 // ========== API 函数 ==========
+
+const notificationFallbackProcessingIntervalMs = 45_000;
+const notificationFallbackProcessingLimit = 20;
+const notificationFallbackProcessingWindowDays = 2;
 
 async function apiFetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const response = await fetch(endpoint, {
@@ -917,12 +922,81 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
 
     const requestedSourceId = state.activeSourceId;
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai";
+    let fallbackProcessingTimer: number | null = null;
+    let fallbackProcessingInFlight = false;
+    const ensureSourceStillActive = () => activeSourceIdRef.current === requestedSourceId;
+
+    const runFallbackAutoProcessing = async () => {
+      if (!ensureSourceStillActive() || fallbackProcessingInFlight) {
+        return;
+      }
+      fallbackProcessingInFlight = true;
+      try {
+        const data = await apiFetch<{ ok: boolean; result: MailProcessingRunResult }>(
+          `${apiBase}/mail/processing/run`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              limit: notificationFallbackProcessingLimit,
+              horizonDays: 14,
+              tz: timeZone,
+              sourceId: requestedSourceId,
+              trigger: "poll",
+              windowDays: notificationFallbackProcessingWindowDays,
+            }),
+          }
+        );
+        if (!ensureSourceStillActive()) {
+          return;
+        }
+        if (data.ok && data.result.sourceId === requestedSourceId) {
+          dispatch({ type: "SET_PROCESSING_RESULT", payload: data.result });
+        }
+      } catch (err) {
+        if (!ensureSourceStillActive()) {
+          return;
+        }
+        if (err instanceof Error && err.message.includes("Mail processing already in progress")) {
+          return;
+        }
+        dispatch({ type: "SET_NOTIFICATION_STREAM_STATUS", payload: "error" });
+        dispatch({
+          type: "SET_NOTIFICATION_STREAM_ERROR",
+          payload: err instanceof Error ? err.message : "自动检查新邮件暂时不可用。",
+        });
+      } finally {
+        fallbackProcessingInFlight = false;
+      }
+    };
+
+    const startFallbackProcessingLoop = () => {
+      if (fallbackProcessingTimer) {
+        return;
+      }
+      void runFallbackAutoProcessing();
+      fallbackProcessingTimer = window.setInterval(() => {
+        void runFallbackAutoProcessing();
+      }, notificationFallbackProcessingIntervalMs);
+    };
+
+    const stopFallbackProcessingLoop = () => {
+      if (!fallbackProcessingTimer) {
+        return;
+      }
+      window.clearInterval(fallbackProcessingTimer);
+      fallbackProcessingTimer = null;
+    };
 
     if (typeof window.EventSource === "undefined") {
       dispatch({ type: "SET_NOTIFICATION_STREAM_STATUS", payload: "idle" });
-      dispatch({ type: "SET_NOTIFICATION_STREAM_ERROR", payload: "当前浏览器不支持实时通知连接。" });
-      void pollNotifications(40, 7, { silent: true });
-      return;
+      dispatch({
+        type: "SET_NOTIFICATION_STREAM_ERROR",
+        payload: "当前浏览器不支持实时通知连接，已启用自动轮询检查。",
+      });
+      startFallbackProcessingLoop();
+      return () => {
+        stopFallbackProcessingLoop();
+      };
     }
 
     dispatch({ type: "SET_NOTIFICATION_STREAM_STATUS", payload: "connecting" });
@@ -939,12 +1013,11 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     });
     let fallbackPolled = false;
 
-    const ensureSourceStillActive = () => activeSourceIdRef.current === requestedSourceId;
-
     eventSource.addEventListener("open", () => {
       if (!ensureSourceStillActive()) {
         return;
       }
+      stopFallbackProcessingLoop();
       dispatch({ type: "SET_NOTIFICATION_STREAM_STATUS", payload: "connected" });
       dispatch({ type: "SET_NOTIFICATION_STREAM_ERROR", payload: null });
     });
@@ -967,6 +1040,21 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
         return;
       }
       dispatch({ type: "SET_NOTIFICATION_SNAPSHOT", payload: payload.result });
+      dispatch({ type: "SET_NOTIFICATION_STREAM_STATUS", payload: "connected" });
+      dispatch({ type: "SET_NOTIFICATION_STREAM_ERROR", payload: null });
+    });
+
+    eventSource.addEventListener("mail_processing", (event) => {
+      if (!ensureSourceStillActive()) {
+        return;
+      }
+      const payload = parseJsonData<{ ok?: boolean; sourceId?: string; result?: MailProcessingRunResult }>(
+        (event as MessageEvent<string>).data
+      );
+      if (!payload?.ok || !payload.result || payload.result.sourceId !== requestedSourceId) {
+        return;
+      }
+      dispatch({ type: "SET_PROCESSING_RESULT", payload: payload.result });
       dispatch({ type: "SET_NOTIFICATION_STREAM_STATUS", payload: "connected" });
       dispatch({ type: "SET_NOTIFICATION_STREAM_ERROR", payload: null });
     });
@@ -1006,9 +1094,11 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
         fallbackPolled = true;
         void pollNotifications(40, 7, { silent: true });
       }
+      startFallbackProcessingLoop();
     };
 
     return () => {
+      stopFallbackProcessingLoop();
       eventSource.close();
     };
   }, [apiBase, isAuthenticated, state.activeSourceId, pollNotifications]);
@@ -1167,6 +1257,49 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     }
   }, [apiBase, state.activeSourceId]);
 
+  const saveKnowledgeCard = useCallback(async (messageId: string, tags: string[] = []): Promise<MailKnowledgeRecord | null> => {
+    const requestedSourceId = state.activeSourceId;
+    if (!requestedSourceId) {
+      throw new Error("No active mail source selected");
+    }
+    try {
+      const data = await apiFetch<{
+        ok: boolean;
+        result?: { mail?: MailKnowledgeRecord };
+      }>(
+        `${apiBase}/mail-kb/knowledge-card`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            sourceId: requestedSourceId,
+            messageId,
+            tags,
+          }),
+        }
+      );
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        return null;
+      }
+      const record = data.result?.mail ?? null;
+      if (data.ok && record) {
+        dispatch({
+          type: "SET_KB_MAILS",
+          payload: [
+            record,
+            ...stateRef.current.kbMails.filter((mail) => mail.mailId !== record.mailId && mail.rawId !== record.rawId),
+          ].slice(0, 50),
+        });
+        void fetchKbStats();
+      }
+      return record;
+    } catch (err) {
+      if (activeSourceIdRef.current === requestedSourceId) {
+        dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to save knowledge card" });
+      }
+      throw err;
+    }
+  }, [apiBase, fetchKbStats, state.activeSourceId]);
+
   const triggerSummarize = useCallback(async (options?: { windowDays?: number; limit?: number }): Promise<string | null> => {
     try {
       const requestedSourceId = state.activeSourceId;
@@ -1266,9 +1399,10 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     deletePriorityRule,
     fetchNotificationPrefs,
     updateNotificationPrefs,
-    pollNotifications,
-    runMailProcessing,
-    syncCalendarDrafts,
+	    pollNotifications,
+	    runMailProcessing,
+	    saveKnowledgeCard,
+	    syncCalendarDrafts,
     fetchKbStats,
     fetchKbMails,
     fetchKbEvents,

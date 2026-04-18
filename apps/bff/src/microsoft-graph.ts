@@ -1,9 +1,12 @@
 import { createHash, randomBytes } from "node:crypto";
+import { join } from "node:path";
 import type { FastifyBaseLogger } from "fastify";
 import { z } from "zod";
 import { env } from "./config.js";
 import { getPrismaClient } from "./persistence.js";
 import { decryptSecret, encryptSecret } from "./secret-box.js";
+import { runtimePaths } from "./runtime/paths.js";
+import { listJsonFiles, readJsonFile, writeJsonFile } from "./runtime/json-file-store.js";
 
 const microsoftGraphBaseUrl = "https://graph.microsoft.com/v1.0";
 const microsoftStateTtlMs = 10 * 60 * 1000;
@@ -79,6 +82,31 @@ const microsoftEventSchema = z.object({
     .optional(),
 });
 
+const microsoftSubscriptionSchema = z.object({
+  id: z.string(),
+  resource: z.string(),
+  applicationId: z.string().optional(),
+  changeType: z.string().optional(),
+  notificationUrl: z.string().optional(),
+  lifecycleNotificationUrl: z.string().nullable().optional(),
+  expirationDateTime: z.string(),
+  clientState: z.string().nullable().optional(),
+});
+
+const microsoftMessageDeltaItemSchema = microsoftMessageSchema
+  .extend({
+    "@removed": z.object({ reason: z.string().optional() }).optional(),
+  })
+  .passthrough();
+
+const microsoftMessageDeltaSchema = z
+  .object({
+    "@odata.nextLink": z.string().optional(),
+    "@odata.deltaLink": z.string().optional(),
+    value: z.array(microsoftMessageDeltaItemSchema),
+  })
+  .passthrough();
+
 const microsoftTokenSchema = z.object({
   access_token: z.string(),
   token_type: z.string().optional(),
@@ -93,6 +121,8 @@ type MicrosoftProfile = z.infer<typeof microsoftProfileSchema>;
 type MicrosoftMessage = z.infer<typeof microsoftMessageSchema>;
 type MicrosoftEvent = z.infer<typeof microsoftEventSchema>;
 type MicrosoftTokenResponse = z.infer<typeof microsoftTokenSchema>;
+type MicrosoftSubscription = z.infer<typeof microsoftSubscriptionSchema>;
+type MicrosoftMessageDeltaResponse = z.infer<typeof microsoftMessageDeltaSchema>;
 
 type MicrosoftAuthState = {
   sessionToken: string;
@@ -115,6 +145,25 @@ type MicrosoftAccountRecord = {
   updatedAt: string;
 };
 
+type MicrosoftAccountRecordSnapshot = {
+  accountId: string;
+  displayName: string;
+  email: string;
+  tenantId: string | null;
+  scope: string[];
+  accessTokenCiphertext: string;
+  refreshTokenCiphertext: string | null;
+  expiresAt: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type MicrosoftAccountFileSnapshot = {
+  version: 1;
+  userId: string;
+  accounts: MicrosoftAccountRecordSnapshot[];
+};
+
 export type MicrosoftAccountView = {
   accountId: string;
   displayName: string;
@@ -133,6 +182,7 @@ const noopLogger = {
   warn: () => undefined,
   error: () => undefined,
 } as unknown as FastifyBaseLogger;
+const microsoftAccountFileStoreDir = join(runtimePaths.dataDir, "microsoft-accounts");
 
 export class MicrosoftGraphHttpError extends Error {
   status: number;
@@ -252,6 +302,75 @@ function accountViewFromRecord(record: MicrosoftAccountRecord): MicrosoftAccount
   };
 }
 
+function microsoftAccountFilePath(userId: string): string {
+  return join(
+    microsoftAccountFileStoreDir,
+    `${createHash("sha256").update(userId).digest("hex").slice(0, 24)}.json`
+  );
+}
+
+function serializeMicrosoftAccountRecord(record: MicrosoftAccountRecord): MicrosoftAccountRecordSnapshot {
+  return {
+    accountId: record.accountId,
+    displayName: record.displayName,
+    email: record.email,
+    tenantId: record.tenantId,
+    scope: [...record.scope],
+    accessTokenCiphertext: encryptSecret(record.accessToken),
+    refreshTokenCiphertext: record.refreshToken ? encryptSecret(record.refreshToken) : null,
+    expiresAt: record.expiresAt,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+}
+
+function deserializeMicrosoftAccountRecord(
+  snapshot: MicrosoftAccountRecordSnapshot
+): MicrosoftAccountRecord | null {
+  if (!snapshot?.accountId || !snapshot.accessTokenCiphertext) {
+    return null;
+  }
+
+  return {
+    accountId: snapshot.accountId,
+    displayName: snapshot.displayName ?? snapshot.email ?? snapshot.accountId,
+    email: snapshot.email ?? "",
+    tenantId: snapshot.tenantId ?? null,
+    scope: Array.isArray(snapshot.scope) ? snapshot.scope : [],
+    accessToken: decryptSecret(snapshot.accessTokenCiphertext),
+    refreshToken: snapshot.refreshTokenCiphertext ? decryptSecret(snapshot.refreshTokenCiphertext) : null,
+    expiresAt: Number.isFinite(snapshot.expiresAt) ? snapshot.expiresAt : Date.now(),
+    createdAt: snapshot.createdAt ?? new Date().toISOString(),
+    updatedAt: snapshot.updatedAt ?? new Date().toISOString(),
+  };
+}
+
+async function readMicrosoftAccountFileSnapshot(userId: string): Promise<MicrosoftAccountFileSnapshot | null> {
+  const snapshot = await readJsonFile<MicrosoftAccountFileSnapshot | null>(
+    microsoftAccountFilePath(userId),
+    null
+  );
+  if (!snapshot || snapshot.userId !== userId || !Array.isArray(snapshot.accounts)) {
+    return null;
+  }
+  return snapshot;
+}
+
+async function writeMicrosoftAccountFileSnapshot(
+  userId: string,
+  records: MicrosoftAccountRecord[]
+): Promise<void> {
+  const snapshot: MicrosoftAccountFileSnapshot = {
+    version: 1,
+    userId,
+    accounts: records
+      .slice()
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .map(serializeMicrosoftAccountRecord),
+  };
+  await writeJsonFile(microsoftAccountFilePath(userId), snapshot);
+}
+
 function parseBoundary<T>(schema: z.ZodType<T>, input: unknown, label: string): T {
   const parsed = schema.safeParse(input);
   if (parsed.success) {
@@ -298,6 +417,19 @@ async function loadMicrosoftAccountRecordForUser(
 ): Promise<MicrosoftAccountRecord | null> {
   const prisma = (await getPrismaClient(logger)) as any;
   if (!prisma?.microsoftAccount?.findFirst) {
+    if (!env.mailSourceMemoryFallbackEnabled) {
+      return null;
+    }
+    const snapshot = await readMicrosoftAccountFileSnapshot(userId);
+    if (!snapshot) {
+      return null;
+    }
+    for (const record of snapshot.accounts) {
+      if (record.accountId !== accountId) {
+        continue;
+      }
+      return deserializeMicrosoftAccountRecord(record);
+    }
     return null;
   }
 
@@ -346,6 +478,16 @@ export async function persistMicrosoftAccountForUser(input: {
     if (!env.mailSourceMemoryFallbackEnabled) {
       throw new Error("MICROSOFT_ACCOUNT_STORE_UNAVAILABLE");
     }
+    const snapshot = await readMicrosoftAccountFileSnapshot(input.userId);
+    const existing = snapshot?.accounts ?? [];
+    const next = existing.filter((candidate) => candidate.accountId !== record.accountId);
+    next.push(serializeMicrosoftAccountRecord(record));
+    await writeMicrosoftAccountFileSnapshot(
+      input.userId,
+      next
+        .map(deserializeMicrosoftAccountRecord)
+        .filter((candidate): candidate is MicrosoftAccountRecord => candidate !== null)
+    );
     return accountViewFromRecord(record);
   }
 
@@ -499,6 +641,17 @@ async function ensureMicrosoftAccessToken(
           updatedAt: new Date(),
         },
       });
+    } else if (env.mailSourceMemoryFallbackEnabled) {
+      const snapshot = await readMicrosoftAccountFileSnapshot(userId);
+      const existing = snapshot?.accounts ?? [];
+      const next = existing.filter((candidate) => candidate.accountId !== refreshed.accountId);
+      next.push(serializeMicrosoftAccountRecord(refreshed));
+      await writeMicrosoftAccountFileSnapshot(
+        userId,
+        next
+          .map(deserializeMicrosoftAccountRecord)
+          .filter((candidate): candidate is MicrosoftAccountRecord => candidate !== null)
+      );
     }
   }
   return refreshed.accessToken;
@@ -513,7 +666,8 @@ async function requestMicrosoftGraphJson(
   userId?: string
 ): Promise<unknown> {
   const accessToken = await ensureMicrosoftAccessToken(sessionToken, accountId, userId);
-  const response = await fetch(`${microsoftGraphBaseUrl}${path}`, {
+  const requestUrl = /^https?:\/\//i.test(path) ? path : `${microsoftGraphBaseUrl}${path}`;
+  const response = await fetch(requestUrl, {
     ...init,
     headers: {
       Accept: "application/json",
@@ -529,7 +683,7 @@ async function requestMicrosoftGraphJson(
   }
 
   const text = await response.text();
-  const json = parseJsonText(text, `Microsoft Graph ${init?.method ?? "GET"} ${path}`);
+  const json = parseJsonText(text, `Microsoft Graph ${init?.method ?? "GET"} ${requestUrl}`);
   if (!response.ok) {
     const parsedError = graphErrorEnvelopeSchema.safeParse(json);
     const message =
@@ -844,4 +998,148 @@ export async function deleteMicrosoftEventById(
     undefined,
     userId
   );
+}
+
+export async function createMicrosoftMessageSubscription(
+  sessionToken: string,
+  accountId: string,
+  input: {
+    notificationUrl: string;
+    lifecycleNotificationUrl?: string;
+    clientState: string;
+    expirationDateTime: string;
+    resource?: string;
+    changeType?: string;
+  },
+  userId?: string
+): Promise<MicrosoftSubscription> {
+  const payload = await requestMicrosoftGraphJson(
+    sessionToken,
+    accountId,
+    "/subscriptions",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        changeType: input.changeType ?? "created,updated",
+        notificationUrl: input.notificationUrl,
+        lifecycleNotificationUrl: input.lifecycleNotificationUrl ?? input.notificationUrl,
+        resource: input.resource ?? "/me/mailFolders('inbox')/messages",
+        expirationDateTime: input.expirationDateTime,
+        clientState: input.clientState,
+      }),
+    },
+    undefined,
+    userId
+  );
+  return parseBoundary(microsoftSubscriptionSchema, payload, "Microsoft subscription response");
+}
+
+export async function renewMicrosoftSubscription(
+  sessionToken: string,
+  accountId: string,
+  subscriptionId: string,
+  expirationDateTime: string,
+  userId?: string
+): Promise<MicrosoftSubscription> {
+  const payload = await requestMicrosoftGraphJson(
+    sessionToken,
+    accountId,
+    `/subscriptions/${encodeURIComponent(subscriptionId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        expirationDateTime,
+      }),
+    },
+    undefined,
+    userId
+  );
+  return parseBoundary(microsoftSubscriptionSchema, payload, "Microsoft subscription renewal response");
+}
+
+export async function deleteMicrosoftSubscription(
+  sessionToken: string,
+  accountId: string,
+  subscriptionId: string,
+  userId?: string
+): Promise<void> {
+  await requestMicrosoftGraphJson(
+    sessionToken,
+    accountId,
+    `/subscriptions/${encodeURIComponent(subscriptionId)}`,
+    {
+      method: "DELETE",
+    },
+    undefined,
+    userId
+  );
+}
+
+export async function deltaMicrosoftInboxMessages(
+  sessionToken: string,
+  accountId: string,
+  input: {
+    deltaLink?: string;
+    receivedAfter?: string;
+    top?: number;
+    changeType?: "created" | "updated" | "deleted";
+  },
+  userId?: string
+): Promise<{
+  items: MicrosoftMessage[];
+  removedIds: string[];
+  nextLink: string | null;
+  deltaLink: string | null;
+}> {
+  const top = Math.max(5, Math.min(input.top ?? 25, 100));
+  const requestPath = (() => {
+    if (input.deltaLink?.trim()) {
+      return input.deltaLink.trim();
+    }
+
+    const params = new URLSearchParams();
+    params.set("$select", "id,subject,from,bodyPreview,receivedDateTime,importance,isRead,hasAttachments,webLink");
+    params.set("$orderby", "receivedDateTime desc");
+    params.set("$top", String(top));
+    if (input.receivedAfter?.trim()) {
+      params.set("$filter", `receivedDateTime ge ${new Date(input.receivedAfter).toISOString()}`);
+    }
+    if (input.changeType) {
+      params.set("changeType", input.changeType);
+    }
+    return `/me/mailFolders('inbox')/messages/delta?${params.toString()}`;
+  })();
+
+  const payload = await requestMicrosoftGraphJson(
+    sessionToken,
+    accountId,
+    requestPath,
+    { method: "GET" },
+    {
+      Prefer: `odata.maxpagesize=${top}`,
+    },
+    userId
+  );
+  const parsed = parseBoundary(microsoftMessageDeltaSchema, payload, "Microsoft delta response");
+  const items: MicrosoftMessage[] = [];
+  const removedIds: string[] = [];
+
+  for (const item of parsed.value) {
+    const messageId = item.id?.trim();
+    if (!messageId) {
+      continue;
+    }
+    if (item["@removed"]) {
+      removedIds.push(messageId);
+      continue;
+    }
+    items.push(microsoftMessageSchema.parse(item));
+  }
+
+  return {
+    items,
+    removedIds,
+    nextLink: parsed["@odata.nextLink"]?.trim() || null,
+    deltaLink: parsed["@odata.deltaLink"]?.trim() || null,
+  };
 }

@@ -258,6 +258,8 @@ export type MailCalendarBatchSyncResult = {
   >;
 };
 
+export type MailProcessingTrigger = "manual" | "poll" | "webhook";
+
 // ========== 邮件问答相关 ==========
 
 export type MailQaReference = {
@@ -336,6 +338,10 @@ export type MailKnowledgeRecord = {
   receivedAt: string;
   processedAt: string;
   webLink?: string;
+  knowledgeCard?: {
+    savedAt: string;
+    tags: string[];
+  };
 };
 
 export type EventCluster = {
@@ -548,6 +554,7 @@ export type MailNotificationPollResult = MailNotificationPreferencesResult & {
 
 export type MailProcessingRunResult = {
   status: "completed" | "partial";
+  trigger?: MailProcessingTrigger;
   warnings: string[];
   sourceId: string;
   startedAt: string;
@@ -576,6 +583,14 @@ export type MailProcessingRunResult = {
   };
   dailyDigest: MailDailyDigestNotification | null;
   calendarDrafts: MailCalendarDraft[];
+  calendarSync?: MailCalendarBatchSyncResult | null;
+  automation?: {
+    triggeredBy: MailProcessingTrigger;
+    windowDays: number | null;
+    newMailDetected: boolean;
+    calendarAutoSyncEnabled: boolean;
+    calendarAutoSyncThreshold: number | null;
+  };
 };
 
 // ========== UI 相关常量 ==========

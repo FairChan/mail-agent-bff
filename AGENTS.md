@@ -220,6 +220,7 @@ This is a starting point. Add your own conventions, style, and rules as you figu
 - Default MCP config should stay local/no-secret. Credentialed MCP servers belong in `.cursor/mcp.optional.json` until intentionally activated.
 - Prefer `npm run harness:semantic` after edits and `npm run check:standard` before commits.
 - Use `npm run harness:mock` and `.harness/fixtures/` for mailbox/calendar development before touching real services.
+- RTK is installed at `~/.local/bin/rtk` and Codex global instructions reference `~/.codex/RTK.md`; prefer `rtk` for noisy shell commands (`rtk git status`, `rtk rg`, `rtk npm ...`) while preserving full raw output when precision/debugging requires it.
 
 ## Standing Delivery Requirements (Effective 2026-03-25T17:25:17+08:00)
 
@@ -227,7 +228,10 @@ This is a starting point. Add your own conventions, style, and rules as you figu
 2. Append one entry to `SUMMARY.md` for every task using ISO-8601 timestamp format (for example, `2026-03-25T17:25:17+08:00`).
 3. For `Code` tasks, implement changes first, then run a `sub-agent audit` before final delivery.
 4. `Sub-agent audit` means an independent reviewer (separate model/process from the implementer) covering changed files and relevant tests; record audit evidence including tool/model, timestamp, and output location.
-5. All `Critical` and `High` audit findings must be fixed before delivery; `Medium` and `Low` findings may be deferred only with written rationale, owner, and target date.
-6. After audit-driven fixes, rerun relevant validation (tests/checks) and confirm final audit status.
-7. For `Non-code` tasks, record `Audit: N/A (no code changes)` in `SUMMARY.md`.
-8. Final entries in `SUMMARY.md` must not contain `Pending`; if blocked, include blocker, owner, ETA, and explicit user approval for any exception.
+5. Sub-agent audit is capped at 3 rounds per task. Each round must be real, comprehensive, and focused on changed files plus relevant tests, but the report should be concise and token-efficient.
+6. All `Critical` and `High` audit findings must be fixed before delivery; `Medium` and `Low` findings may be deferred only with written rationale, owner, and target date.
+7. After audit-driven fixes, rerun relevant validation (tests/checks) and confirm final audit status.
+8. For `Non-code` tasks, record `Audit: N/A (no code changes)` in `SUMMARY.md`.
+9. Final entries in `SUMMARY.md` must not contain `Pending`; if blocked, include blocker, owner, ETA, and explicit user approval for any exception.
+
+@RTK.md
