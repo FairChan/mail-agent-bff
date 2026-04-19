@@ -3,6 +3,7 @@ import type { MailPriorityRule, MailSourceContext } from "../mail.js";
 export type AgentRuntimeName = "mastra" | "openclaw";
 
 export type TenantContext = MailSourceContext & {
+  tenantId: string;
   userId: string;
   sessionToken: string;
   sourceId: string;

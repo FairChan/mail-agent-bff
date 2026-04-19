@@ -426,4 +426,18 @@ class MailKnowledgeBase {
   }
 }
 
-export const mailKnowledgeBase = new MailKnowledgeBase();
+function legacyGlobalKbDisabledError(): Error {
+  return new Error(
+    "Legacy global MailKnowledgeBase is disabled. Use getMailKnowledgeBaseStore(userId, sourceId) for tenant-scoped access."
+  );
+}
+
+export function createLegacyMailKnowledgeBaseForMigration(): MailKnowledgeBase {
+  throw legacyGlobalKbDisabledError();
+}
+
+export const mailKnowledgeBase = new Proxy({} as MailKnowledgeBase, {
+  get() {
+    throw legacyGlobalKbDisabledError();
+  },
+});

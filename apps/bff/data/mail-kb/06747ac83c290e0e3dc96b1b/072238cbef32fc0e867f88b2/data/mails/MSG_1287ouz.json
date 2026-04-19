@@ -1,0 +1,15 @@
+{
+  "mailId": "MSG_1287ouz",
+  "rawId": "AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABk0ga0gAAAA==",
+  "subject": "[FairChan/mail-agent-bff] Run failed: .github/workflows/codeql.yml - master (b352688)",
+  "personId": "PER_002",
+  "eventId": "EVT_001014",
+  "importanceScore": 0.7,
+  "urgencyScore": 0.5,
+  "scoreScale": "ratio",
+  "quadrant": "not_urgent_important",
+  "summary": "FairChan/mail-agent-bff项目的CodeQL工作流运行失败，提示“No jobs were run”，未执行任何任务，需排查工作流配置或运行环境异常。",
+  "receivedAt": "2026-04-19T06:58:24.000Z",
+  "processedAt": "2026-04-19T06:59:09.456Z",
+  "webLink": "https://outlook.live.com/owa/?ItemID=AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABk0ga0gAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem"
+}

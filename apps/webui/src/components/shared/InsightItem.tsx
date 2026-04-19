@@ -2,6 +2,7 @@ import React, { memo } from "react";
 import type { MailInsightItem } from "../../types";
 import { buildCalendarKey } from "../../utils/normalize";
 import { formatDue } from "../../utils/format";
+import { CalmButton, CalmPill } from "../ui/Calm";
 
 interface InsightItemProps {
   item: MailInsightItem;
@@ -28,39 +29,39 @@ const InsightItemComponent = ({
   const displayDate = formatDueOverride ? formatDueOverride(item.dueAt) : formatDue(item.dueAt);
 
   return (
-    <li className="rounded-xl border border-zinc-200 bg-white px-3 py-3">
+    <li className="rounded-[1.1rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] px-3 py-3 shadow-[var(--shadow-inset)]">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-zinc-900">{item.subject}</p>
-          <p className="mt-1 text-xs text-zinc-500">{item.dueDateLabel || displayDate}</p>
-          {item.aiSummary ? <p className="mt-1 line-clamp-2 text-xs text-zinc-600">{item.aiSummary}</p> : null}
+          <p className="truncate text-sm font-semibold text-[color:var(--ink)]">{item.subject}</p>
+          <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">{item.dueDateLabel || displayDate}</p>
+          {item.aiSummary ? <p className="mt-1 line-clamp-2 text-xs text-[color:var(--ink-muted)]">{item.aiSummary}</p> : null}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] uppercase tracking-wide text-zinc-700">
+          <CalmPill tone={item.type === "ddl" ? "warning" : item.type === "meeting" ? "info" : item.type === "exam" ? "urgent" : "muted"}>
             {item.type}
-          </span>
+          </CalmPill>
 
           {!synced ? (
-            <button
+            <CalmButton
               type="button"
               onClick={() => onSyncCalendar(item)}
-              className="rounded-lg border border-zinc-300 px-2.5 py-1 text-[11px] text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
+              variant="secondary"
+              className="px-2.5 py-1 text-[11px]"
               disabled={busy}
             >
               {busy ? t("common.processing") : t("common.addToCalendar")}
-            </button>
+            </CalmButton>
           ) : (
-            <>
-              <button
-                type="button"
-                onClick={() => onUndoCalendar(item, synced.eventId)}
-                className="rounded-lg border border-zinc-300 px-2.5 py-1 text-[11px] text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50"
-                disabled={busy}
-              >
-                {busy ? t("common.processing") : t("common.undo")}
-              </button>
-            </>
+            <CalmButton
+              type="button"
+              onClick={() => onUndoCalendar(item, synced.eventId)}
+              variant="secondary"
+              className="px-2.5 py-1 text-[11px]"
+              disabled={busy}
+            >
+              {busy ? t("common.processing") : t("common.undo")}
+            </CalmButton>
           )}
         </div>
       </div>

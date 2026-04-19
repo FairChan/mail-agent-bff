@@ -14,6 +14,7 @@ import { PersonsProfilePanel } from "./PersonsProfilePanel";
 import { ArtifactsLibraryPanel } from "./ArtifactsLibraryPanel";
 import { LoadingSpinner } from "../../shared/LoadingSpinner";
 import MailKBSummaryModal from "../MailKBSummaryModal";
+import { CalmButton, CalmPill } from "../../ui/Calm";
 
 type TabKey = "overview" | "mails" | "events" | "persons" | "documents";
 
@@ -124,60 +125,48 @@ export function KnowledgeBaseView({
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="border-b border-zinc-200 bg-white px-6 py-4 dark:border-zinc-700 dark:bg-zinc-800">
+      <div className="border-b border-[color:var(--border-soft)] px-6 py-5">
         <div className="flex items-center justify-between gap-4 flex-wrap">
-          <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-            {labels.title}
-          </h1>
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--ink-subtle)]">Knowledge Base</p>
+            <h1 className="mt-1 text-xl font-semibold text-[color:var(--ink)]">
+              {labels.title}
+            </h1>
+          </div>
           <div className="flex items-center gap-2">
-            <button
+            <CalmButton
               onClick={() => {
                 void loadAll();
                 setArtifactsRefreshToken((value) => value + 1);
               }}
               disabled={loading}
-              className="flex items-center gap-2 rounded-lg bg-zinc-100 px-3 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-200 disabled:opacity-50 dark:bg-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-600"
+              variant="secondary"
             >
-              {loading ? <LoadingSpinner size="sm" /> : (
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-              )}
+              {loading ? <LoadingSpinner size="sm" /> : null}
               {labels.refresh}
-            </button>
-            <button
-              onClick={() => void handleSummarize()}
-              disabled={isSummarizing}
-              className="flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
-            >
-              {isSummarizing ? <LoadingSpinner size="sm" /> : (
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-                </svg>
-              )}
+            </CalmButton>
+            <CalmButton onClick={() => void handleSummarize()} disabled={isSummarizing} variant="primary">
+              {isSummarizing ? <LoadingSpinner size="sm" /> : null}
               {labels.triggerSummarize}
-            </button>
+            </CalmButton>
           </div>
         </div>
 
-        {/* Tab Bar */}
         {tabs.length > 1 && (
-          <div className="mt-4 flex gap-1">
+          <div className="mt-4 flex flex-wrap gap-2">
             {tabs.map((tab) => (
               <button
                 key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
-                className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+                className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition ${
                   activeTab === tab.key
-                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-600"
+                    ? "border-[color:var(--border-info)] bg-[color:var(--surface-info)] text-[color:var(--pill-info-ink)]"
+                    : "border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] text-[color:var(--ink-muted)] hover:bg-[color:var(--surface-elevated)] hover:text-[color:var(--ink)]"
                 }`}
               >
                 {tab.label}
                 {tab.count !== undefined && (
-                  <span className={`rounded-full px-2 py-0.5 text-xs ${activeTab === tab.key ? "bg-white/20" : "bg-zinc-200 dark:bg-zinc-600"}`}>
-                    {tab.count}
-                  </span>
+                  <CalmPill tone={activeTab === tab.key ? "info" : "muted"}>{tab.count}</CalmPill>
                 )}
               </button>
             ))}
@@ -186,11 +175,11 @@ export function KnowledgeBaseView({
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto p-6">
+      <div className="calm-scrollbar flex-1 overflow-auto p-6">
         {loading && !kbStats ? (
           <div className="flex h-full items-center justify-center gap-3">
             <LoadingSpinner size="lg" />
-            <span className="text-zinc-500">{labels.loading}</span>
+            <span className="text-[color:var(--ink-subtle)]">{labels.loading}</span>
           </div>
         ) : (
           <>

@@ -1,9 +1,13 @@
 # 邮件评分索引（重要性 + 紧急性）
 
-生成时间：2026-04-19T06:57:44.804Z
+生成时间：2026-04-19T12:31:35.542Z
 
 | 标识码 | 重要性 | 紧急性 | 分数制 | 象限 |
 | --- | --- | --- | --- | --- |
+| MSG_35jya4 | 0.9/1 | 0.9/1 | 0-1 比例 | urgent_important |
+| MSG_1orlyl8 | 0.1/1 | 0.2/1 | 0-1 比例 | not_urgent_not_important |
+| MSG_1fn9qiz | 0.8/1 | 0.7/1 | 0-1 比例 | urgent_important |
+| MSG_1287ouz | 0.7/1 | 0.5/1 | 0-1 比例 | not_urgent_important |
 | MSG_ftnmm6 | 0.3/1 | 0.1/1 | 0-1 比例 | not_urgent_not_important |
 | MSG_t8poa6 | 0.7/1 | 0.6/1 | 0-1 比例 | urgent_important |
 | MSG_h80mzc | 0.8/1 | 0.7/1 | 0-1 比例 | urgent_important |

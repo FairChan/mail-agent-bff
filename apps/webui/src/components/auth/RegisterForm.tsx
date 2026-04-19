@@ -55,8 +55,8 @@ export function RegisterForm({
       <div className="mt-6 space-y-3">
         <h2 className="text-xl font-semibold text-zinc-900">{t("auth.verifyStepTitle")}</h2>
         <p className="text-sm text-zinc-600">{t("auth.verifyStepSubtitle")}</p>
-        <p className="text-xs text-zinc-500">
-          {t("auth.codeSentTo")} <span className="font-medium text-zinc-700">{pendingEmail}</span>
+        <p className="text-xs text-[color:var(--ink-subtle)]">
+          {t("auth.codeSentTo")} <span className="font-medium text-[color:var(--ink-muted)]">{pendingEmail}</span>
         </p>
 
         <form className="space-y-3" onSubmit={onSubmitVerify} aria-busy={busy}>
@@ -66,7 +66,7 @@ export function RegisterForm({
               inputMode="numeric"
               pattern="[0-9]{6}"
               maxLength={6}
-              className="h-12 w-full rounded-xl border border-zinc-300/90 bg-white px-3 text-center text-2xl tracking-[0.4em] font-mono text-zinc-900 outline-none transition focus:border-zinc-900"
+              className="calm-input h-12 w-full px-3 text-center text-2xl tracking-[0.4em] font-mono"
               placeholder={t("auth.verifyCodePlaceholder")}
               aria-label={t("auth.verifyCodeLabel")}
               value={verifyCode}
@@ -78,7 +78,7 @@ export function RegisterForm({
 
           <button
             type="submit"
-            className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-zinc-900 px-4 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex h-12 w-full items-center justify-center rounded-[1rem] bg-[color:var(--button-primary)] px-4 text-sm font-semibold text-[color:var(--button-primary-ink)] transition hover:bg-[color:var(--button-primary-hover)] disabled:cursor-not-allowed disabled:opacity-60"
             disabled={busy || verifyCode.length !== 6}
           >
             {busy ? t("auth.verifying") : t("auth.submitVerify")}
@@ -89,14 +89,14 @@ export function RegisterForm({
           <div className="flex items-center justify-between">
             <button
               type="button"
-              className="text-xs text-zinc-500 hover:text-zinc-700 hover:underline"
+              className="text-xs text-[color:var(--ink-subtle)] hover:text-[color:var(--ink-muted)] hover:underline"
               onClick={onBackToForm}
             >
               {t("auth.backToForm")}
             </button>
             <button
               type="button"
-              className="text-xs text-zinc-500 hover:text-zinc-700 hover:underline"
+              className="text-xs text-[color:var(--ink-subtle)] hover:text-[color:var(--ink-muted)] hover:underline"
               onClick={onResendCode}
               disabled={busy}
             >
@@ -113,7 +113,7 @@ export function RegisterForm({
       <div className="space-y-1">
         <input
           type="email"
-          className="h-11 w-full rounded-xl border border-zinc-300/90 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-900"
+          className="calm-input h-12 w-full px-4 text-sm"
           placeholder={t("auth.email")}
           aria-label={t("auth.email")}
           value={email}
@@ -126,7 +126,7 @@ export function RegisterForm({
       <div className="space-y-1">
         <input
           type="text"
-          className="h-11 w-full rounded-xl border border-zinc-300/90 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-900"
+          className="calm-input h-12 w-full px-4 text-sm"
           placeholder={t("auth.username")}
           aria-label={t("auth.username")}
           value={username}
@@ -139,7 +139,7 @@ export function RegisterForm({
       <div className="space-y-1">
         <input
           type="password"
-          className="h-11 w-full rounded-xl border border-zinc-300/90 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-900"
+          className="calm-input h-12 w-full px-4 text-sm"
           placeholder={t("auth.password")}
           aria-label={t("auth.password")}
           value={password}
@@ -152,7 +152,7 @@ export function RegisterForm({
       <div className="space-y-1">
         <input
           type="password"
-          className="h-11 w-full rounded-xl border border-zinc-300/90 bg-white px-3 text-sm text-zinc-900 outline-none transition focus:border-zinc-900"
+          className="calm-input h-12 w-full px-4 text-sm"
           placeholder={t("auth.confirmPassword")}
           aria-label={t("auth.confirmPassword")}
           value={confirmPassword}
@@ -168,17 +168,17 @@ export function RegisterForm({
 
       <button
         type="submit"
-        className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-zinc-900 px-4 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60"
+        className="inline-flex h-12 w-full items-center justify-center rounded-[1rem] bg-[color:var(--button-primary)] px-4 text-sm font-semibold text-[color:var(--button-primary-ink)] transition hover:bg-[color:var(--button-primary-hover)] disabled:cursor-not-allowed disabled:opacity-60"
         disabled={busy}
       >
         {busy ? t("auth.sending") : t("auth.submitRegister")}
       </button>
 
-      <p className="mt-3 text-xs text-zinc-500">{t("auth.registerHint")}</p>
+      <p className="mt-3 text-xs text-[color:var(--ink-subtle)]">{t("auth.registerHint")}</p>
 
       <button
         type="button"
-        className="text-xs font-medium text-zinc-700 hover:text-zinc-900 hover:underline"
+        className="text-xs font-medium text-[color:var(--ink-muted)] hover:text-[color:var(--ink)] hover:underline"
         onClick={onSwitchToLogin}
       >
         {t("auth.switchToLogin")}

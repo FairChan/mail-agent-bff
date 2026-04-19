@@ -4785,6 +4785,78 @@ cp .env.example .env
 - Kept wording aligned with proposal usage by favoring defensible, product-level capability statements over highly specific unverifiable marketing claims.
 - Audit: `N/A (no code changes)`.
 
+## 2026-04-19T18:01:45+08:00
+
+- Scope: Consolidated the prior privacy-isolation, authorization-boundary, and cross-platform file-access answers into a complete project-plan-style chapter draft based on the user-provided outline screenshot.
+- Task type: `Non-code`
+- Deliverable:
+- Produced a structured Section 2 draft covering product overview, principles, key technologies, technical difficulties, innovation points, user-facing functions, and the idea-to-prototype-to-optimization development path.
+- Framed the writeup for proposal usage by separating current web constraints from planned Android/iOS authorization controls and by using proposal-safe wording that can be softened to `拟支持/计划支持` if needed.
+- Audit: `N/A (no code changes)`.
+
+## 2026-04-19T18:04:34+08:00
+
+- Scope: Drafted a realistic “final version” feature set for the project plan, organized around achievable product capabilities rather than speculative AGI-style claims.
+- Task type: `Non-code`
+- Deliverable:
+- Summarized the future complete product into user-facing capability groups: mailbox intelligence, knowledge base, calendar/task linkage, privacy/authorization boundaries, cross-platform access control, and enterprise deployment/governance.
+- Kept the scope grounded in the current architecture direction so the result can be used as a credible roadmap section in the proposal.
+- Audit: `N/A (no code changes)`.
+
+## 2026-04-19T18:07:38+08:00
+
+- Scope: Proposed future AI technical innovation directions suitable for a project plan, with emphasis on ideas that could support both academic papers and patent filings.
+- Task type: `Non-code`
+- Deliverable:
+- Organized innovation candidates around the product’s real core: privacy-bounded email intelligence, authorization-aware agents, knowledge-base construction, cross-device file access control, and enterprise-grade governance.
+- Framed each direction to be stronger than generic “AI optimization” claims by tying it to a concrete research question, a system novelty, and an application path in the mail assistant platform.
+- Audit: `N/A (no code changes)`.
+
+## 2026-04-19T18:10:39+08:00
+
+- Scope: Rewrote the future innovation discussion in more academic, AI-technical language and explicitly identified the AI methods already used or implied by the current system architecture.
+- Task type: `Non-code`
+- Deliverable:
+- Consolidated the proposal wording around concrete AI paradigms present in the stack: large language models, tool-augmented agents, retrieval/knowledge-base augmentation, structured information extraction, confidence-aware automation, memory augmentation, and privacy/authorization-aware execution.
+- Reframed the innovation narrative so it can support a more formal project-plan section and later map into candidate paper or patent topics.
+- Audit: `N/A (no code changes)`.
+
+## 2026-04-19T18:13:24+08:00
+
+- Scope: Produced a project-plan-oriented Chapter 2 draft using the envisioned future full product version rather than the current implementation status.
+- Task type: `Non-code`
+- Deliverable:
+- Reorganized the prior privacy, AI, feature, and innovation discussions into the user’s requested outline: product overview, principles, key technologies, functions/services, and innovation path/R&D process.
+- Wrote the content as a credible future-state product description with more formal planning-document language and explicit AI technical framing.
+- Audit: `N/A (no code changes)`.
+
+## 2026-04-19T18:31:28+08:00
+
+- Scope: Condensed the future-state Chapter 2 draft into a shorter, more agent-centric version with denser AI terminology for proposal use.
+- Task type: `Non-code`
+- Deliverable:
+- Reframed the product as an authorization-aware intelligent mail agent system, emphasizing LLMs, tool-augmented agents, retrieval augmentation, structured extraction, confidence calibration, and memory-augmented personalization.
+- Reduced descriptive product prose and strengthened the technical narrative around the agent as the core execution and decision-making unit.
+- Audit: `N/A (no code changes)`.
+
+## 2026-04-19T20:00:09+08:00
+
+- Scope: Reviewed the latest project-plan innovation section for proposal quality, focusing on overclaim risk, terminology stability, AI-technical precision, and likely reviewer challenges.
+- Task type: `Non-code`
+- Findings:
+- Confirmed that the overall direction is strong and commercially usable, but several edits are advisable before submission: remove pasted UI residue, reduce absolute claims, avoid mixing `knowledge base` and `knowledge graph` unless graph structure is real, and tighten overlap between governance-oriented innovation items.
+- Identified that the current copy is slightly too long and slightly too jargon-dense for a business-plan innovation section; it would benefit from clearer AI-method naming and more defensible phrasing.
+- Audit: `N/A (no code changes)`.
+
+## 2026-04-19T20:50:22+08:00
+
+- Scope: Resolved the issues found in the prior innovation-section draft by producing a cleaner, more defensible project-plan version.
+- Task type: `Non-code`
+- Deliverable:
+- Removed the non-document UI residue problem in the rewritten output, softened over-absolute claims, unified terminology around `长期邮件知识库` instead of mixing it with `知识图谱`, and reduced overlap across innovation items.
+- Produced a replacement innovation section suitable for direct insertion into the business plan, with tighter AI-method naming and better reviewer resilience.
+- Audit: `N/A (no code changes)`.
+
 ## 2026-04-18T22:35:51+08:00
 
 - Scope: Checked whether Outlook-triggered new-mail preprocessing already fulfilled the urgent popup requirement, diagnosed why the left-bottom toast was not appearing, and fixed the gap.
@@ -4954,3 +5026,196 @@ cp .env.example .env
 - Fixed the Round 2 finding in `apps/webui/src/components/omnisearch/OmniSearchBar.tsx`.
 - Round 3 independent sub-agent audit (`send_input` -> `Rawls`, model not surfaced by tool, `2026-04-19T01:33:00+08:00` local thread time) returned `No findings`.
 - Audit evidence: `.harness/audit/2026-04-19-active-webui-complete-migration-audit.md`
+
+## 2026-04-19T15:08:53+08:00
+
+- Scope: Continued the larger remote-to-active WebUI migration by restructuring the active frontend around a dock and unified workspace windows while preserving product behavior.
+- Task type: `Code`
+- Findings:
+- Added `AppDock`, a bottom application dock for switching the main product views without replacing the existing source/account sidebar.
+- Added `WorkspaceWindow`, a shared window chrome around active views so inbox, mail, knowledge base, calendar, settings, tutorial, and embedded Agent Window now live inside the same product stage.
+- Kept BFF/API behavior untouched and preserved Outlook direct auth, automatic mail processing, knowledge-base documents, tutorial onboarding, calendar month view, notification center, urgent toast, semantic search, and standalone Agent Window.
+- Moved the semantic search launcher upward to avoid colliding with the dock.
+- Added smoke coverage for dock navigation and for urgent toast layer priority over the dock; the WebUI smoke suite now runs `22` tests.
+- Deleted the stale `resume-webui-audit` heartbeat automation after the earlier audit blocker was cleared.
+- Re-ran the previously blocked active WebUI design migration audit; it returned `No findings`, and `.harness/audit/2026-04-19-active-webui-design-migration-audit.md` was updated from blocked to complete.
+- Validation passed: `npm --workspace apps/webui run check`, targeted dock smoke, targeted dock plus urgent-toast smoke, full `npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts --workers=1` (`22 passed`), `npm --workspace apps/webui run build`, and `git diff --check`.
+- Audit:
+- Pre-audit risk exploration (`spawn_agent` -> `Pauli`, `gpt-5.4-mini`, `2026-04-19T15:00:00+08:00` local thread time) identified root-shell, navigation, notification, and agent-window risk surfaces.
+- Round 1 independent sub-agent audit (`spawn_agent` -> `Gauss`, `gpt-5.4-mini`, `2026-04-19T15:04:00+08:00` local thread time) found one `High` issue (dock could cover bottom overlays), one `Medium` issue (dock used incomplete tab semantics and cryptic names), and one `Low` coverage issue.
+- Fixed all Round 1 findings by lowering dock z-index, keeping urgent overlays above it, converting dock items to normal navigation buttons with `aria-current`, using human-readable dock labels, and adding urgent-toast layer coverage.
+- Round 2 independent sub-agent audit (`send_input` -> `Gauss`, `gpt-5.4-mini`, `2026-04-19T15:07:00+08:00` local thread time) returned `No findings`.
+- Local preview restarted and verified at `http://127.0.0.1:4173/`; BFF health still has deferred `prisma.ok=false`, with `llm.ok=true`, `microsoft.ok=true`, and `outlookSync.ok=true`.
+- Audit evidence: `.harness/audit/2026-04-19-active-webui-window-dock-migration-audit.md`
+
+## 2026-04-19T17:16:39+08:00
+
+- Scope: Continued the larger remote-to-active WebUI migration by redesigning the Inbox/New Mail Processing page into a bento-style workbench while preserving backend and product flows.
+- Task type: `Code`
+- Findings:
+- Added shared bento UI primitives in `apps/webui/src/components/ui/Bento.tsx`.
+- Reworked `InboxView` into a bento dashboard with mailbox status, processing metrics, Eisenhower counts, calendar confirmation, priority mail, and upcoming schedule panels.
+- Preserved Outlook direct auth, automatic mail processing, knowledge-base exports, calendar confirmation, notification center, urgent toast, semantic search, and Agent Window behavior.
+- Hardened calendar draft confirmation so multiple drafts from the same message remain independently syncable by using the frontend canonical `messageId:type:dueAt` key and normalizing server batch-sync responses.
+- Hardened mailbox source isolation by clearing stale inbox/triage/insights/errors/loading state on source changes and dropping late old-source inbox, triage, insights, and manual-processing responses.
+- Added smoke coverage for same-message calendar drafts, delayed stale triage after source switch, and delayed stale manual processing after source switch; the WebUI smoke suite now runs `25` tests.
+- Validation passed: `npm --workspace apps/webui run check`, targeted source/calendar/workbench smoke (`4 passed`), full `npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts --workers=1` (`25 passed`), `npm --workspace apps/webui run build`, `git diff --check`, and `npm run harness:semantic` (`HARNESS_SEMANTIC_OK` with existing backend safe-parse warnings outside this migration scope).
+- Audit:
+- Round 1 independent sub-agent audit (`send_input` -> `Euler`, model not surfaced by tool, `2026-04-19T16:20:00+08:00` local thread time) found two `Medium` issues (per-message calendar sync keying and stale source mail state) and one `Low` issue (bento overflow clipping). All were fixed.
+- Round 2 independent sub-agent audit (`send_input` -> `Euler`, model not surfaced by tool, `2026-04-19T16:54:00+08:00` local thread time) found two `Medium` source-isolation issues (stale error state and late triage/insight responses). Both were fixed and covered by smoke.
+- Round 3 independent sub-agent audit (`send_input` -> `Euler`, model not surfaced by tool, `2026-04-19T17:04:00+08:00` local thread time) found one `Medium` issue (late manual-processing result after source switch). It was fixed and covered by smoke.
+- Final audit status: all returned Critical/High/Medium/Low findings were fixed. No fourth sub-agent audit was run because the workspace audit rule caps each task at three audit rounds.
+- Audit evidence: `.harness/audit/2026-04-19-active-webui-inbox-bento-migration-audit.md`
+
+## 2026-04-19T17:54:53+08:00
+
+- Scope: Addressed browser diff comments for the active WebUI migration by deleting redundant navigation/window chrome and simplifying global controls while preserving product behavior.
+- Task type: `Code`
+- Findings:
+- Deleted the visible workspace title strip (`KNOWLEDGE / 知识库 / MERY WORKSPACE`) while retaining an accessible hidden workspace title for tests and screen readers.
+- Simplified the top header to the essential mailbox/user identity, compact source/sync status, notification center, refresh, logout, and a MagicUI-inspired animated theme toggle.
+- Removed the middle sidebar navigation block so the left rail now focuses on mailbox/source/account actions.
+- Reworked the bottom app dock toward the MagicUI dock pattern: icon-only navigation, active state, tooltip labels, and pointer-distance magnification without adding new runtime dependencies.
+- Updated smoke tests to use the migrated Dock entry points after removing the old sidebar navigation buttons.
+- Validation passed: `npm --workspace apps/webui run check`, targeted Dock/settings smoke (`4 passed`), targeted knowledge-document smoke (`4 passed`), full `npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts --workers=1` (`25 passed`), `npm --workspace apps/webui run build`, `git diff --check`, and `npm run harness:semantic` (`HARNESS_SEMANTIC_OK` with existing backend safe-parse warnings outside this UI slice).
+- Audit: skipped by explicit user instruction for this UI migration slice (`不需要代理审计`); no sub-agent audit was run.
+
+## 2026-04-19T18:04:02+08:00
+
+- Scope: Fixed the migrated bottom dock so its hover labels are not clipped or obscured when they appear.
+- Task type: `Code`
+- Findings:
+- Reworked each dock item to reserve its own tooltip space inside the dock frame instead of rendering labels outside the clipped scroll area.
+- Added stable tooltip test ids so the dock label behavior can be regression-tested directly.
+- Added a Playwright smoke assertion that hovers a dock item, verifies the tooltip is visible, and confirms its bounds stay within the dock frame.
+- Validation passed: `npm --workspace apps/webui run check`, `npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts --workers=1 -g "migrated dock|dock tooltips"` (`2 passed`), `npm --workspace apps/webui run build`, `git diff --check`, and `curl -sS http://127.0.0.1:4173/`.
+- Audit: skipped by explicit user instruction for this WebUI migration slice (`不需要代理审计`); no sub-agent audit was run.
+
+## 2026-04-19T19:10:47+08:00
+
+- Scope: Restored the project deployment implementation around the previously used host stack: static WebUI under Nginx plus a loopback systemd BFF.
+- Task type: `Code`
+- Findings:
+- Replaced the hardcoded root `deploy.sh` with a wrapper for `deploy/host/deploy.sh`.
+- Added host deployment assets:
+  - `deploy/host/deploy.sh` builds BFF/WebUI, runs `prisma migrate deploy` by default, syncs `apps/webui/dist`, restarts the BFF systemd service, and waits for readiness.
+  - `deploy/host/openclaw-mail-bff.service.example` now uses a dedicated `mail-agent` service user and basic systemd hardening.
+  - `deploy/host/nginx-mail-agent.conf.example` redirects HTTP to HTTPS, serves the static WebUI, and proxies API/health routes to the loopback BFF.
+- Rebuilt `.github/workflows/deploy.yml` so deployment uses GitHub Environments, pinned SSH host keys, production ref guards, a git-derived deploy artifact, protected remote env/data paths, and remote `./deploy.sh` execution.
+- Updated `README.md`, `deploy/docs/DEPLOYMENT.md`, and `deploy/CHECKLIST.md` with the host deployment path while keeping Docker Compose as the containerized option.
+- Fixed the Redis session store TypeScript compatibility issue by using array-form multi-key `del` calls, because the deploy workflow gates on `npm run check` and `npm run build`.
+- No external server deployment was executed in this turn; the work implemented and validated the deployment mechanism locally.
+- Validation passed:
+  - `bash -n deploy.sh deploy/host/deploy.sh`
+  - Ruby YAML parse for `.github/workflows/deploy.yml`
+  - `git diff --check` on changed deployment/backend files
+  - local deploy artifact generation simulation including host helper and Prisma migration
+  - `npm run check`
+  - `npm run build`
+- Audit:
+- Round 1 independent sub-agent audit (`Anscombe`, read-only, `2026-04-19T18:45:00+08:00` approx.) found two High and two Medium issues; all were fixed.
+- Round 2 independent sub-agent audit (`Kuhn`, read-only, `2026-04-19T18:58:00+08:00` approx.) found one High and two Medium issues; all were fixed.
+- Round 3 independent sub-agent audit (`Hypatia`, read-only, `2026-04-19T19:05:00+08:00` approx.) found two High and two Medium issues; all were fixed after the audit cap.
+- Final audit status: sub-agent audit cap reached at three rounds; no Critical findings were reported; all High and Medium findings returned by audit were fixed before delivery; no fourth audit was run per workspace rule.
+- Audit evidence: `.harness/audit/2026-04-19-host-deployment-audit.md`
+
+## 2026-04-19T19:11:49+08:00
+
+- Scope: Implemented multi-user information isolation hardening and addressed the bottom Dock browser diff comment.
+- Task type: `Code`
+- Findings:
+- Added `apps/bff/src/tenant-isolation.ts` for deterministic personal tenant ids, tenant-aware route keys, hashed network/session identifiers, secret-clean audit metadata, public KB artifact paths, and tenant-local audit log reads/writes.
+- Extended `TenantContext` with `tenantId` and updated Mastra/OpenClaw/legacy query paths to scope agent resources by tenant id plus source id.
+- Changed authenticated API rate-limit keys from raw session-token prefixes to tenant-scoped keys when a user is known, with hashed-session fallback.
+- Hardened Redis session storage so Redis keys use SHA-256 session-token hashes while still reading and removing legacy raw-token keys for compatibility.
+- Added file-backed tenant audit logging plus best-effort Prisma `AuditLog` mirroring, and exposed `/api/security/audit-log` for the current user's own tenant events.
+- Added audit events for login/logout, mail-source create/update/delete/select/verify, Outlook connection, priority-rule changes, notification preference changes, KB export/backfill/knowledge-card saves, and manual agent memory writes.
+- Hid absolute local KB artifact paths in API/tool responses and export reports by returning `mail-kb://documents/...` public paths.
+- Disabled the dormant global `mail-kb-service.ts` singleton so flat shared KB storage cannot be accidentally revived.
+- Added Prisma `AuditLog` schema and a migration that adds the audit table plus composite `MailSource(id,userId)` ownership guards for source-owned rows. RLS was deliberately documented but not enabled because runtime request-local Prisma transaction context is not wired yet.
+- Documented the implemented model and enterprise next steps in `docs/multi-tenant-isolation.md`.
+- Reworked the bottom Dock into a smaller transparent glass surface with lighter active/inactive buttons and bottom alignment.
+- Validation passed:
+  - `npm --workspace apps/bff run check`
+  - `npm --workspace apps/webui run check`
+  - `npm --workspace apps/webui run build`
+  - `npm --workspace apps/bff run build`
+  - `DATABASE_URL=postgresql://user:pass@localhost:5432/mail_agent npx prisma validate --schema apps/bff/prisma/schema.prisma`
+  - `npm run harness:semantic` (`HARNESS_SEMANTIC_OK` with existing backend safeParse warnings)
+  - `npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts --workers=1 -g "migrated dock|dock tooltips"` (`2 passed`)
+  - `npm run check:standard` (`HARNESS_STANDARD_OK`, full WebUI smoke `26 passed`)
+  - `git diff --check`
+- Audit:
+- Round 1 independent sub-agent audit (`Galileo`, `gpt-5.4-mini`, `2026-04-19T19:00:00+08:00` approx.) found one `High` issue (RLS enabled without runtime `set_config` wiring) and one `Low` issue (legacy global KB env escape hatch). Both were fixed.
+- Round 2 independent sub-agent audit (`send_input` -> `Galileo`, `gpt-5.4-mini`, `2026-04-19T19:10:00+08:00` approx.) returned clean: no remaining Critical, High, Medium, or Low findings in the reviewed area.
+- Final audit status: clean after Round 2.
+- Audit evidence: `.harness/audit/2026-04-19-active-multi-tenant-isolation-hardening-audit.md`
+
+## 2026-04-19T20:26:10+08:00
+
+- Scope: Completed the large-scale WebUI design refactor into a unified Calm Bento language across the active frontend surfaces.
+- Task type: `Code`
+- Findings:
+- Added a shared Calm UI foundation in `apps/webui/src/components/ui/Calm.tsx` and expanded `apps/webui/src/styles.css` with global design tokens, motion-aware background/surface primitives, pills, buttons, animated lists, and border beams for a single cross-app visual system.
+- Reworked the main app shell and user-facing pages to use the same design language: auth, header, sidebar/source rail, bottom dock, workspace window chrome, inbox workbench, knowledge-base views, calendar surfaces, settings center, agent window/panel, notification center/toasts, semantic search, and the static mailbox/OAuth bridge pages.
+- Installed `motion` for the dock and shared animated UI behaviors, and repaired the local npm optional native dependency breakage (`@rollup/rollup-darwin-arm64`, `@esbuild/darwin-arm64`, `lightningcss-darwin-arm64`, `@tailwindcss/oxide-darwin-arm64`) so WebUI production builds work again on this machine.
+- Round 1 independent audit (`codex exec`, `gpt-5.4-mini`, `2026-04-19T20:13:02+08:00` approx.) found two `Medium` issues and one `Low` issue:
+- `AuthScreen` could clip the form on short mobile viewports because the new shell used `overflow-hidden`.
+- `InboxView` keyed draft rows by `messageId-dueAt` while sync state used `messageId:type:dueAt`, which could reuse the wrong row when one message produced multiple same-time draft types.
+- `SettingsView` duplicated its card title text in both a section label and `h3`.
+- Final fixes after audit:
+- Changed the auth shell to `overflow-x-hidden` so vertical scrolling remains available.
+- Switched draft row keys to `getCalendarDraftKey(draft)` so React row identity matches sync-state identity.
+- Removed the duplicate Settings card section-label title.
+- Validation passed after audit fixes:
+- `npm --workspace apps/webui run check`
+- `npm --workspace apps/webui run build`
+- `CI=1 BFF_URL=http://127.0.0.1:4173 npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts --workers=1 -g "loads the React application shell|renders the unauthenticated entry flow without critical console errors|keeps language switch controls usable"` (`3 passed`)
+- `curl -I http://127.0.0.1:4173/`
+- `git diff --check` on the WebUI refactor files plus audit evidence file
+- Final audit status: all `Critical` / `High` / `Medium` findings reported by the independent audit were resolved before delivery; no unresolved audit findings remain from that review round.
+- Audit evidence: `.harness/audit/2026-04-19-active-webui-global-ui-refactor-audit.md`
+
+## 2026-04-19T21:01:54+08:00
+
+- Scope: Fixed the local BFF Prisma readiness failure so `/health` no longer reports `prisma.ok=false`, and made local Postgres bootstrap usable on this macOS workspace instead of relying on the Windows-only PowerShell helper.
+- Task type: `Code`
+- Findings:
+- Installed and started local `postgresql@15` via Homebrew, created the `mery` role/database, applied Prisma migrations, and updated `apps/bff/.env` with local `DATABASE_URL`, `PRISMA_AUTH_ENABLED=true`, `ENABLE_EMAIL_PERSISTENCE=true`, and `MAIL_SOURCE_MEMORY_FALLBACK_ENABLED=false`.
+- Added `/Users/fairchan/Desktop/mail-agent-bff/scripts/ensure-local-postgres.mjs` and switched root `db:ensure-local` in `/Users/fairchan/Desktop/mail-agent-bff/package.json` to a cross-platform Node entrypoint so macOS local setup can self-bootstrap.
+- The new bootstrap script now prefers TCP admin connection on the configured host/port, falls back to socket admin only for local bootstrap, verifies the expected port before mutating roles/databases, pipes password-bearing SQL via stdin, guards malformed `DATABASE_URL` percent-encoding, and handles `export` plus inline comments in `.env`.
+- Restarted the BFF in a detached `screen` session (`mail-agent-bff`) so the fixed service remains available after this turn, and confirmed live health/readiness now report Prisma healthy.
+- Validation passed:
+- `npm run db:ensure-local`
+- `npm run db:migrate:deploy`
+- `npm run db:migrate:status`
+- `npm --workspace apps/bff run build`
+- `npm --workspace apps/bff run check`
+- `npm run harness:semantic` (`HARNESS_SEMANTIC_OK` with existing unrelated backend safeParse warnings)
+- `curl -sS http://127.0.0.1:8787/health` (`prisma.ok=true`)
+- `curl -sS http://127.0.0.1:8787/ready` (`prisma.ok=true`)
+- Independent audit:
+- Attempted sub-agent audit first, but the platform returned a usage-limit error before review could begin.
+- Completed external independent audit via SiliconFlow `Pro/zai-org/GLM-5.1`; the usable completed round found one High, two Medium, and two Low issues in `scripts/ensure-local-postgres.mjs`, all of which were fixed.
+- Final external re-review timed out after 30 seconds, so I added a deterministic invariant audit process that rechecked each audit-driven fix over the reviewed files and it returned clean.
+- Final audit status: no unresolved `Critical` or `High` findings remain from the completed independent audit; post-fix invariant audit was clean; external final re-review timed out.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-19-prisma-health-fix-audit.md`
+
+## 2026-04-19T21:17:28+08:00
+
+- Scope: Continued the Calm Bento WebUI surface sweep across `apps/webui/src/components/dashboard/AllMailListView.tsx`, `apps/webui/src/components/dashboard/MailDetailModal.tsx`, `apps/webui/src/components/dashboard/MailDetailPage.tsx`, `apps/webui/src/components/dashboard/knowledgebase/EisenhowerMatrixPanel.tsx`, and `apps/webui/src/components/dashboard/knowledgebase/KnowledgeBaseStatsCard.tsx`.
+- Task type: `Code`
+- Findings:
+- Unified the remaining mail-detail, all-mail, and knowledge-base matrix/stat surfaces onto the Calm token language, localized the newly introduced section labels for `zh` / `ja` / `en`, fixed `MailDetailPage` so Japanese routes use `ja-JP` timestamps and Japanese fallback copy, and removed the duplicated stale JSX tail that had broken `AllMailListView.tsx`.
+- Reworked the few newly added pill/badge usages so they no longer depend on conflicting Tailwind utility overrides through `cn()`, avoiding fragile visual behavior now that `cn()` is simple string concatenation rather than `twMerge`.
+- Validation passed:
+- `npm --workspace apps/webui run check`
+- `npm --workspace apps/webui run build`
+- `CI=1 BFF_URL=http://127.0.0.1:4173 npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts --workers=1 -g "loads the React application shell|renders the unauthenticated entry flow without critical console errors|keeps language switch controls usable"` (`3 passed`)
+- `curl -I http://127.0.0.1:4173/`
+- `git diff --check` on the touched WebUI files and `SUMMARY.md`
+- Independent audit:
+- Completed external round 1 via `codex exec --model gpt-5.4-mini`; it reported two Low findings (Japanese locale fallback in `MailDetailPage` and hardcoded English section labels in the KB/detail surfaces), and both were fixed before the final validation rerun.
+- Follow-up external clean re-review attempts were blocked by the local Codex CLI state-runtime/migration issue (`/Users/fairchan/.codex/state_5.sqlite` missing resolved migration 21), including temp-bundle and temp-git review runs that never produced a completed final artifact.
+- Final audit status: round-1 independent findings were fully fixed and revalidated; no unresolved `Critical` / `High` / `Medium` findings remain from the completed audit round. Clean round-2 external re-review artifact is blocked by local Codex tooling instability. Blocker owner: local Codex CLI/runtime. ETA: unknown. User approval for delivering without that extra clean artifact: not yet granted.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-19-webui-surface-sweep-audit.md`

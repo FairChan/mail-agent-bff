@@ -29,7 +29,7 @@ const MEMORY_TEMPLATE = `# Mail assistant memory
 type RunStatus = "success" | "error" | "aborted" | "timeout";
 
 function scopedResourceId(tenant: TenantContext): string {
-  return `mail:${tenant.userId}:${tenant.sourceId}`;
+  return `mail:${tenant.tenantId}:${tenant.sourceId}`;
 }
 
 function memoryScopeFor(tenant: TenantContext): MemoryScope {

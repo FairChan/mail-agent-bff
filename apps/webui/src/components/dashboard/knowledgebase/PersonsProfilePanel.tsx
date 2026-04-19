@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { PersonProfile, MailKnowledgeRecord } from "@mail-agent/shared-types";
+import { useApp } from "../../../contexts/AppContext";
+import { CalmPill, CalmSectionLabel, CalmSurface } from "../../ui/Calm";
 
 interface PersonsProfilePanelProps {
   persons: PersonProfile[];
@@ -7,165 +9,202 @@ interface PersonsProfilePanelProps {
 }
 
 export function PersonsProfilePanel({ persons, mails }: PersonsProfilePanelProps) {
-  const [selectedPerson, setSelectedPerson] = useState<PersonProfile | null>(null);
+  const { locale } = useApp();
+  const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
-  const filteredPersons = persons.filter((person) =>
-    person.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    person.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    person.role.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  const getRelatedMails = (personId: string) => {
-    return mails.filter((m) => m.personId === personId);
+  const dateLocale = locale === "zh" ? "zh-CN" : locale === "ja" ? "ja-JP" : "en-US";
+  const labels = {
+    explorer: locale === "zh" ? "人物画像" : locale === "ja" ? "人物プロファイル" : "People Profiles",
+    detail: locale === "zh" ? "人物详情" : locale === "ja" ? "人物詳細" : "Profile Detail",
+    empty: locale === "zh" ? "暂无人物数据" : locale === "ja" ? "人物データはまだありません" : "No people data yet",
+    search: locale === "zh" ? "搜索人物..." : locale === "ja" ? "人物を検索..." : "Search people...",
+    unknownRole: locale === "zh" ? "未知角色" : locale === "ja" ? "役割未設定" : "Unknown role",
+    profile: locale === "zh" ? "人物画像" : locale === "ja" ? "人物メモ" : "Profile",
+    relatedMails: locale === "zh" ? "相关邮件" : locale === "ja" ? "関連メール" : "Related mails",
+    importance: locale === "zh" ? "重要性" : locale === "ja" ? "重要度" : "Importance",
+    mailCount: locale === "zh" ? "邮件数" : locale === "ja" ? "メール数" : "Mail count",
+    interactions: locale === "zh" ? "交互次数" : locale === "ja" ? "やり取り" : "Interactions",
+    updatedAt: locale === "zh" ? "最后更新" : locale === "ja" ? "最終更新" : "Updated",
+    pickPrompt: locale === "zh" ? "选择一个人物查看详情" : locale === "ja" ? "人物を選ぶと詳細が表示されます" : "Select a person to inspect details",
+    mailsUnit: locale === "zh" ? "封邮件" : locale === "ja" ? "通のメール" : "mails",
   };
 
+  const filteredPersons = useMemo(
+    () =>
+      persons.filter((person) => {
+        const query = searchQuery.toLowerCase();
+        return (
+          person.name.toLowerCase().includes(query) ||
+          person.email.toLowerCase().includes(query) ||
+          (person.role ?? "").toLowerCase().includes(query)
+        );
+      }),
+    [persons, searchQuery]
+  );
+
+  const selectedPerson =
+    filteredPersons.find((person) => person.personId === selectedPersonId) ??
+    filteredPersons[0] ??
+    null;
+
+  const relatedMails = useMemo(
+    () =>
+      selectedPerson
+        ? mails.filter((mail) => mail.personId === selectedPerson.personId)
+        : [],
+    [mails, selectedPerson]
+  );
+
   const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleDateString("zh-CN", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
+    try {
+      return new Date(dateStr).toLocaleDateString(dateLocale, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      });
+    } catch {
+      return "-";
+    }
+  };
+
+  const getImportanceTone = (importance: number) => {
+    if (importance >= 8) return "urgent";
+    if (importance >= 5) return "warning";
+    return "muted";
   };
 
   if (persons.length === 0) {
     return (
-      <div className="flex h-64 items-center justify-center rounded-xl border border-dashed border-zinc-300">
-        <p className="text-zinc-500">暂无人物数据</p>
+      <div className="flex h-64 items-center justify-center rounded-[1.35rem] border border-dashed border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] px-6 text-center shadow-[var(--shadow-inset)]">
+        <div>
+          <CalmSectionLabel>{labels.explorer}</CalmSectionLabel>
+          <p className="mt-2 text-sm text-[color:var(--ink-subtle)]">{labels.empty}</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-full gap-6">
-      {/* Person List */}
-      <div className="flex w-1/2 flex-col">
-        {/* Search */}
-        <div className="mb-4">
-          <input
-            type="text"
-            placeholder="搜索人物..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full rounded-lg border border-zinc-200 px-4 py-2 text-sm focus:border-zinc-400 focus:outline-none"
-          />
-        </div>
+    <div className="grid gap-6 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
+      <CalmSurface className="flex min-h-[36rem] flex-col p-5" beam>
+        <CalmSectionLabel>{labels.explorer}</CalmSectionLabel>
+        <input
+          type="text"
+          placeholder={labels.search}
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="calm-input mt-4 w-full px-4 py-2.5 text-sm"
+        />
 
-        {/* List */}
-        <div className="flex-1 space-y-2 overflow-auto">
+        <div className="mt-4 flex-1 space-y-2 overflow-auto">
           {filteredPersons.map((person) => {
             const isSelected = selectedPerson?.personId === person.personId;
-            const mailCount = getRelatedMails(person.personId).length;
+            const mailCount = mails.filter((mail) => mail.personId === person.personId).length;
             return (
-              <div
+              <button
                 key={person.personId}
-                onClick={() => setSelectedPerson(person)}
-                className={`cursor-pointer rounded-xl border p-4 transition-colors ${
+                type="button"
+                onClick={() => setSelectedPersonId(person.personId)}
+                className={`w-full rounded-[1.1rem] border px-4 py-4 text-left transition ${
                   isSelected
-                    ? "border-zinc-400 bg-zinc-50"
-                    : "border-zinc-200 bg-white hover:border-zinc-300"
+                    ? "border-[color:var(--border-strong)] bg-[color:var(--surface-elevated)] shadow-[var(--shadow-soft)]"
+                    : "border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] hover:border-[color:var(--border-strong)] hover:bg-[color:var(--surface-elevated)]"
                 }`}
               >
                 <div className="flex items-center gap-4">
-                  {/* Avatar */}
-                  <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-zinc-400 to-zinc-600 text-lg font-semibold text-white">
+                  <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,rgba(17,40,79,0.92),rgba(86,154,255,0.78))] text-lg font-semibold text-white shadow-[var(--shadow-soft)]">
                     {person.name.charAt(0).toUpperCase()}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <h4 className="font-medium text-zinc-900">{person.name}</h4>
-                      <span className={`rounded px-1.5 py-0.5 text-xs ${
-                        person.importance >= 8 ? "bg-red-100 text-red-700" :
-                        person.importance >= 5 ? "bg-yellow-100 text-yellow-700" :
-                        "bg-gray-100 text-gray-700"
-                      }`}>
-                        重要度 {person.importance}
-                      </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h4 className="truncate text-sm font-semibold text-[color:var(--ink)]">{person.name}</h4>
+                      <CalmPill tone={getImportanceTone(person.importance)}>{labels.importance} {person.importance}</CalmPill>
                     </div>
-                    <p className="mt-0.5 text-sm text-zinc-500">{person.role || "未知角色"}</p>
-                    <p className="mt-0.5 text-xs text-zinc-400">{person.email}</p>
-                    <div className="mt-1 flex items-center gap-3 text-xs text-zinc-400">
-                      <span>{mailCount} 封邮件</span>
-                      <span>{person.recentInteractions} 次交互</span>
+                    <p className="mt-1 text-sm text-[color:var(--ink-muted)]">{person.role || labels.unknownRole}</p>
+                    <p className="mt-1 truncate text-xs text-[color:var(--ink-subtle)]">{person.email}</p>
+                    <div className="mt-2 flex flex-wrap gap-3 text-xs text-[color:var(--ink-subtle)]">
+                      <span>{mailCount} {labels.mailsUnit}</span>
+                      <span>{person.recentInteractions} {labels.interactions}</span>
                     </div>
                   </div>
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>
-      </div>
+      </CalmSurface>
 
-      {/* Person Detail */}
-      <div className="w-1/2 space-y-4 overflow-auto rounded-xl border border-zinc-200 bg-white p-6">
+      <CalmSurface className="min-h-[36rem] p-6">
         {selectedPerson ? (
-          <>
-            {/* Header */}
+          <div className="space-y-5">
             <div className="flex items-center gap-4">
-              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-zinc-400 to-zinc-600 text-2xl font-semibold text-white">
+              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[linear-gradient(135deg,rgba(17,40,79,0.92),rgba(86,154,255,0.78))] text-2xl font-semibold text-white shadow-[var(--shadow-soft)]">
                 {selectedPerson.name.charAt(0).toUpperCase()}
               </div>
-              <div>
-                <h3 className="text-xl font-semibold text-zinc-900">{selectedPerson.name}</h3>
-                <p className="text-sm text-zinc-500">{selectedPerson.role || "未知角色"}</p>
-                <p className="text-sm text-zinc-400">{selectedPerson.email}</p>
+              <div className="min-w-0">
+                <CalmSectionLabel>{labels.detail}</CalmSectionLabel>
+                <h3 className="mt-1 text-xl font-semibold text-[color:var(--ink)]">{selectedPerson.name}</h3>
+                <p className="text-sm text-[color:var(--ink-muted)]">{selectedPerson.role || labels.unknownRole}</p>
+                <p className="text-sm text-[color:var(--ink-subtle)]">{selectedPerson.email}</p>
               </div>
             </div>
 
-            {/* Stats */}
-            <div className="grid grid-cols-3 gap-4 rounded-lg bg-zinc-50 p-4">
-              <div className="text-center">
-                <p className="text-2xl font-bold text-zinc-900">{selectedPerson.importance}</p>
-                <p className="text-xs text-zinc-500">重要性</p>
-              </div>
-              <div className="text-center">
-                <p className="text-2xl font-bold text-zinc-900">{getRelatedMails(selectedPerson.personId).length}</p>
-                <p className="text-xs text-zinc-500">邮件数</p>
-              </div>
-              <div className="text-center">
-                <p className="text-2xl font-bold text-zinc-900">{selectedPerson.recentInteractions}</p>
-                <p className="text-xs text-zinc-500">交互次数</p>
-              </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {[
+                [labels.importance, selectedPerson.importance],
+                [labels.mailCount, relatedMails.length],
+                [labels.interactions, selectedPerson.recentInteractions],
+              ].map(([label, value]) => (
+                <div
+                  key={String(label)}
+                  className="rounded-[1rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] p-4 text-center"
+                >
+                  <p className="text-2xl font-bold text-[color:var(--ink)]">{value}</p>
+                  <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">{label}</p>
+                </div>
+              ))}
             </div>
 
-            {/* Profile */}
             <div>
-              <p className="mb-2 text-sm font-medium text-zinc-900">人物画像</p>
-              <div className="rounded-lg bg-zinc-50 p-4 text-sm text-zinc-700">
+              <p className="mb-2 text-sm font-medium text-[color:var(--ink)]">{labels.profile}</p>
+              <div className="rounded-[1rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] p-4 text-sm leading-7 text-[color:var(--ink-muted)]">
                 {selectedPerson.profile}
               </div>
             </div>
 
-            {/* Related Mails */}
             <div>
-              <p className="mb-3 text-sm font-medium text-zinc-900">
-                相关邮件 ({getRelatedMails(selectedPerson.personId).length})
+              <p className="mb-3 text-sm font-medium text-[color:var(--ink)]">
+                {labels.relatedMails} ({relatedMails.length})
               </p>
               <div className="space-y-2">
-                {getRelatedMails(selectedPerson.personId).slice(0, 5).map((mail) => (
-                  <div key={mail.mailId} className="rounded-lg border border-zinc-200 p-3">
-                    <div className="flex items-start justify-between gap-2">
+                {relatedMails.slice(0, 5).map((mail) => (
+                  <div
+                    key={mail.mailId}
+                    className="rounded-[1rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-4 py-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-zinc-900">{mail.subject}</p>
-                        <p className="mt-1 text-xs text-zinc-500">{mail.summary.slice(0, 100)}...</p>
+                        <p className="truncate text-sm font-semibold text-[color:var(--ink)]">{mail.subject}</p>
+                        <p className="mt-1 line-clamp-2 text-xs leading-6 text-[color:var(--ink-subtle)]">{mail.summary}</p>
                       </div>
-                      <span className="text-xs text-zinc-400">{formatDate(mail.receivedAt)}</span>
+                      <span className="text-xs text-[color:var(--ink-subtle)]">{formatDate(mail.receivedAt)}</span>
                     </div>
                   </div>
                 ))}
               </div>
             </div>
 
-            <div className="text-xs text-zinc-400">
-              最后更新: {formatDate(selectedPerson.lastUpdated)}
-            </div>
-          </>
+            <p className="text-xs text-[color:var(--ink-subtle)]">
+              {labels.updatedAt}: {formatDate(selectedPerson.lastUpdated)}
+            </p>
+          </div>
         ) : (
-          <div className="flex h-full items-center justify-center text-zinc-500">
-            选择一个人物查看详情
+          <div className="flex h-full items-center justify-center text-sm text-[color:var(--ink-subtle)]">
+            {labels.pickPrompt}
           </div>
         )}
-      </div>
+      </CalmSurface>
     </div>
   );
 }

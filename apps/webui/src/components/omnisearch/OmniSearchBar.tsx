@@ -3,6 +3,7 @@ import type { MailQaReference, TriageMailItem } from "@mail-agent/shared-types";
 import { useApp } from "../../contexts/AppContext";
 import { useMail } from "../../contexts/MailContext";
 import { cn } from "../../lib/utils";
+import { CalmButton, CalmPill, CalmSurface } from "../ui/Calm";
 
 type OmniSearchBarProps = {
   apiBase: string;
@@ -55,7 +56,7 @@ export function OmniSearchBar({ apiBase }: OmniSearchBarProps) {
   const [messages, setMessages] = useState<OmniMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const dialogRef = useRef<HTMLElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -328,9 +329,9 @@ export function OmniSearchBar({ apiBase }: OmniSearchBarProps) {
         onClick={() => setIsOpen(true)}
         aria-hidden={isOpen}
         className={cn(
-          "fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full",
-          "bg-blue-600 text-white shadow-lg shadow-blue-600/25 transition-all duration-300",
-          "hover:scale-105 hover:bg-blue-700 hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2",
+          "fixed bottom-24 right-5 z-40 flex h-14 w-14 items-center justify-center rounded-full sm:right-6",
+          "bg-[color:var(--button-primary)] text-[color:var(--button-primary-ink)] shadow-[var(--shadow-card)] transition-all duration-300",
+          "hover:scale-105 hover:bg-[color:var(--button-primary-hover)] focus:outline-none",
           isOpen && "scale-0 opacity-0"
         )}
         aria-label={copy.floatingLabel}
@@ -348,50 +349,42 @@ export function OmniSearchBar({ apiBase }: OmniSearchBarProps) {
             aria-label={copy.close}
           />
 
-          <section
+          <CalmSurface
             ref={dialogRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby="omnisearch-title"
             tabIndex={-1}
-            className="relative z-10 flex h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-[28px] border border-white/60 bg-white/94 shadow-[0_30px_90px_rgba(15,23,42,0.30)] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/94"
+            className="relative z-10 flex h-[86vh] w-full max-w-3xl flex-col overflow-hidden p-0"
+            beam
           >
-            <header className="flex items-start justify-between gap-4 border-b border-zinc-200/70 px-5 py-4 dark:border-zinc-800">
+            <header className="flex items-start justify-between gap-4 border-b border-[color:var(--border-soft)] px-5 py-4">
               <div className="flex min-w-0 items-center gap-3">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white">
                   <SearchIcon className="h-5 w-5" />
                 </div>
                 <div className="min-w-0">
-                  <h2 id="omnisearch-title" className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+                  <h2 id="omnisearch-title" className="text-base font-semibold text-[color:var(--ink)]">
                     {copy.title}
                   </h2>
-                  <p className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">{copy.subtitle}</p>
+                  <p className="mt-0.5 truncate text-xs text-[color:var(--ink-subtle)]">{copy.subtitle}</p>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setIsOpen(false)}
-                className="rounded-xl p-2 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
-                aria-label={copy.close}
-              >
+              <CalmButton type="button" onClick={() => setIsOpen(false)} variant="ghost" className="h-10 w-10 rounded-2xl p-0" aria-label={copy.close}>
                 <CloseIcon className="h-5 w-5" />
-              </button>
+              </CalmButton>
             </header>
 
-            <div className="border-b border-zinc-200/70 px-5 py-3 dark:border-zinc-800">
+            <div className="border-b border-[color:var(--border-soft)] px-5 py-3">
               <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="rounded-full bg-sky-50 px-2.5 py-1 font-medium text-sky-700 dark:bg-sky-950/40 dark:text-sky-300">
-                  {copy.sourceLabel}: {activeSource?.name || activeSource?.emailHint || "—"}
-                </span>
+                <CalmPill tone="info">{copy.sourceLabel}: {activeSource?.name || activeSource?.emailHint || "—"}</CalmPill>
                 {!canSearch ? (
-                  <span className="rounded-full bg-amber-50 px-2.5 py-1 font-medium text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
-                    {copy.noSource}
-                  </span>
+                  <CalmPill tone="warning">{copy.noSource}</CalmPill>
                 ) : null}
               </div>
             </div>
 
-            <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4">
+            <div ref={scrollRef} className="calm-scrollbar flex-1 overflow-y-auto px-5 py-4">
               <div className="space-y-4">
                 {messages.map((message) => (
                   <MessageBubble
@@ -408,7 +401,7 @@ export function OmniSearchBar({ apiBase }: OmniSearchBarProps) {
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white">
                       <SearchIcon className="h-4 w-4" />
                     </div>
-                    <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
+                    <div className="rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-4 py-3 text-sm text-[color:var(--ink-subtle)]">
                       {copy.thinking}
                     </div>
                   </div>
@@ -416,9 +409,9 @@ export function OmniSearchBar({ apiBase }: OmniSearchBarProps) {
               </div>
             </div>
 
-            <div className="border-t border-zinc-200/70 px-5 py-4 dark:border-zinc-800">
+            <div className="border-t border-[color:var(--border-soft)] px-5 py-4">
               {error ? (
-                <p className="mb-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300">
+                <p className="mb-3 rounded-2xl border border-[color:var(--border-urgent)] bg-[color:var(--surface-urgent)] px-4 py-2 text-xs text-[color:var(--pill-urgent-ink)]">
                   {error}
                 </p>
               ) : null}
@@ -426,14 +419,14 @@ export function OmniSearchBar({ apiBase }: OmniSearchBarProps) {
               <div className="mb-3 flex flex-wrap gap-2">
                 {copy.suggestions.map((suggestion) => (
                   <button
-                    key={suggestion}
-                    type="button"
-                    onClick={() => void handleSubmit(undefined, suggestion)}
-                    disabled={!canSearch || isLoading}
-                    className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-600 transition hover:border-blue-300 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300"
-                  >
-                    {suggestion}
-                  </button>
+                  key={suggestion}
+                  type="button"
+                  onClick={() => void handleSubmit(undefined, suggestion)}
+                  disabled={!canSearch || isLoading}
+                  className="rounded-full border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-3 py-1.5 text-xs text-[color:var(--ink-muted)] transition hover:bg-[color:var(--surface-info)] hover:text-[color:var(--pill-info-ink)] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {suggestion}
+                </button>
                 ))}
               </div>
 
@@ -449,19 +442,15 @@ export function OmniSearchBar({ apiBase }: OmniSearchBarProps) {
                   onChange={(event) => setInput(event.target.value)}
                   placeholder={copy.placeholder}
                   disabled={!canSearch || isLoading}
-                  className="h-12 min-w-0 flex-1 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 text-sm text-zinc-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100"
+                  className="calm-input h-12 min-w-0 flex-1 px-4 text-sm"
                 />
-                <button
-                  type="submit"
-                  disabled={!canSearch || !input.trim() || isLoading}
-                  className="inline-flex h-12 items-center justify-center rounded-2xl bg-blue-600 px-5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
+                <CalmButton type="submit" disabled={!canSearch || !input.trim() || isLoading} variant="primary" className="h-12 rounded-2xl px-5">
                   {isLoading ? copy.loading : copy.send}
-                </button>
+                </CalmButton>
               </form>
-              <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">{copy.shortcut}</p>
+              <p className="mt-2 text-xs text-[color:var(--ink-subtle)]">{copy.shortcut}</p>
             </div>
-          </section>
+          </CalmSurface>
         </div>
       ) : null}
     </>
@@ -489,7 +478,7 @@ function MessageBubble({
       <div
         className={cn(
           "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white",
-          isUser ? "bg-zinc-900 dark:bg-zinc-100 dark:text-zinc-900" : "bg-blue-600"
+          isUser ? "bg-[color:var(--button-primary)] text-[color:var(--button-primary-ink)]" : "bg-blue-600"
         )}
       >
         {isUser ? <UserIcon className="h-4 w-4" /> : <SearchIcon className="h-4 w-4" />}
@@ -500,8 +489,8 @@ function MessageBubble({
           className={cn(
             "rounded-2xl px-4 py-3 text-sm leading-6",
             isUser
-              ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-              : "border border-zinc-200 bg-zinc-50 text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200"
+              ? "bg-[color:var(--button-primary)] text-[color:var(--button-primary-ink)]"
+              : "border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] text-[color:var(--ink-muted)]"
           )}
         >
           <p className="whitespace-pre-wrap">{message.content}</p>
@@ -521,10 +510,10 @@ function MessageBubble({
         ) : null}
 
         {!isUser && message.id !== "welcome" && references.length === 0 ? (
-          <p className="text-xs text-zinc-400 dark:text-zinc-500">{noReferencesLabel}</p>
+          <p className="text-xs text-[color:var(--ink-subtle)]">{noReferencesLabel}</p>
         ) : null}
 
-        <span className="text-xs text-zinc-400 dark:text-zinc-500">
+        <span className="text-xs text-[color:var(--ink-subtle)]">
           {formatTime(message.timestamp, locale === "zh" ? "zh-CN" : locale === "ja" ? "ja-JP" : "en-US")}
         </span>
       </div>
@@ -548,7 +537,7 @@ function ReferenceCard({
     <button
       type="button"
       onClick={onOpen}
-      className="group rounded-2xl border border-zinc-200 bg-white p-4 text-left transition hover:border-blue-300 hover:shadow-lg hover:shadow-blue-600/10 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-blue-700"
+      className="group rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] p-4 text-left transition hover:border-[color:var(--border-info)] hover:shadow-[var(--shadow-soft)]"
     >
       <div className="flex items-start gap-3">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-blue-600 text-sm font-semibold text-white">
@@ -557,19 +546,19 @@ function ReferenceCard({
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <h3 className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              <h3 className="truncate text-sm font-semibold text-[color:var(--ink)]">
                 {reference.subject || "(No Subject)"}
               </h3>
-              <p className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">{sender}</p>
+              <p className="mt-0.5 truncate text-xs text-[color:var(--ink-subtle)]">{sender}</p>
             </div>
-            <span className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 opacity-0 transition group-hover:opacity-100 dark:bg-blue-950/40 dark:text-blue-300">
+            <span className="rounded-full bg-[color:var(--pill-info)] px-2 py-1 text-xs font-medium text-[color:var(--pill-info-ink)] opacity-0 transition group-hover:opacity-100">
               {openLabel}
             </span>
           </div>
           {reference.evidence ? (
-            <p className="mt-2 line-clamp-2 text-sm leading-6 text-zinc-600 dark:text-zinc-300">{reference.evidence}</p>
+            <p className="mt-2 line-clamp-2 text-sm leading-6 text-[color:var(--ink-muted)]">{reference.evidence}</p>
           ) : null}
-          {meta ? <p className="mt-2 text-xs text-blue-600 dark:text-blue-300">{meta}</p> : null}
+          {meta ? <p className="mt-2 text-xs text-[color:var(--pill-info-ink)]">{meta}</p> : null}
         </div>
       </div>
     </button>

@@ -11,6 +11,7 @@ import { useApp } from "../../contexts/AppContext";
 import { useTheme } from "../../contexts/ThemeContext";
 import { cn } from "../../lib/utils";
 import { LoadingSpinner } from "../shared/LoadingSpinner";
+import { CalmButton, CalmPill, CalmSectionLabel, CalmSurface } from "../ui/Calm";
 
 function padTime(value: number): string {
   return String(value).padStart(2, "0");
@@ -400,14 +401,29 @@ export function SettingsView() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">{copy.title}</h2>
-        <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{copy.subtitle}</p>
-      </div>
+      <CalmSurface tone="info" beam className="px-5 py-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="space-y-2">
+            <CalmSectionLabel>{locale === "zh" ? "Control Center" : locale === "ja" ? "コントロールセンター" : "Control Center"}</CalmSectionLabel>
+            <div>
+              <h2 className="text-xl font-semibold tracking-tight text-[color:var(--ink)]">{copy.title}</h2>
+              <p className="mt-1 max-w-2xl text-sm text-[color:var(--ink-subtle)]">{copy.subtitle}</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusPill tone={notificationStreamStatus === "connected" ? "success" : notificationStreamStatus === "error" ? "danger" : "warning"}>
+              {streamStatusLabel}
+            </StatusPill>
+            <StatusPill tone={desktopPermission === "granted" ? "success" : desktopPermission === "denied" ? "danger" : "neutral"}>
+              {desktopPermissionLabel}
+            </StatusPill>
+          </div>
+        </div>
+      </CalmSurface>
 
       <div className="grid gap-4 lg:grid-cols-5">
         <div className="lg:col-span-1">
-          <nav className="space-y-1">
+          <nav className="space-y-2">
             {([
               { id: "account", label: copy.sections.account, icon: <UserNavIcon /> },
               { id: "mail", label: copy.sections.mail, icon: <MailNavIcon /> },
@@ -419,10 +435,10 @@ export function SettingsView() {
                 key={section.id}
                 type="button"
                 onClick={() => setActiveSection(section.id)}
-                className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-medium transition-all ${
+                className={`flex w-full items-center gap-3 rounded-[1.25rem] border px-4 py-3 text-left text-sm font-medium transition-all ${
                   activeSection === section.id
-                    ? "bg-blue-50 text-blue-700 shadow-sm dark:bg-blue-950/40 dark:text-blue-300"
-                    : "text-zinc-500 hover:bg-white/70 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-white/5 dark:hover:text-zinc-100"
+                    ? "border-[color:var(--border-info)] bg-[color:var(--surface-info)] text-[color:var(--ink)] shadow-[var(--shadow-soft)]"
+                    : "border-transparent text-[color:var(--ink-subtle)] hover:border-[color:var(--border-soft)] hover:bg-[color:var(--surface-elevated)] hover:text-[color:var(--ink)]"
                 }`}
               >
                 {section.icon}
@@ -472,14 +488,14 @@ export function SettingsView() {
 
               <SettingsCard title={locale === "zh" ? "账户操作" : locale === "ja" ? "アカウント操作" : "Account Actions"}>
                 <div className="grid gap-3 md:grid-cols-2">
-                  <button
+                  <CalmButton
                     type="button"
                     onClick={handleLogout}
-                    className="flex items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-600 transition hover:bg-red-100 dark:border-red-900/30 dark:bg-red-950/20 dark:text-red-400 dark:hover:bg-red-950/40"
+                    className="min-h-11 border-[color:var(--border-urgent)] bg-[color:var(--surface-urgent)] text-[color:var(--pill-urgent-ink)] hover:bg-[color:var(--surface-urgent)]"
                   >
                     <LogoutMiniIcon />
                     {locale === "zh" ? "退出登录" : locale === "ja" ? "ログアウト" : "Log out"}
-                  </button>
+                  </CalmButton>
                 </div>
               </SettingsCard>
             </>
@@ -496,15 +512,16 @@ export function SettingsView() {
                     <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
                       {locale === "zh" ? "跳转微软官方登录页，授权后自动回到当前产品。" : locale === "ja" ? "Microsoft 公式ログインへ遷移し、認可後に自動で戻ります。" : "Jump to the official Microsoft sign-in flow and return automatically."}
                     </p>
-                    <button
+                    <CalmButton
                       type="button"
                       onClick={handleMicrosoftAuth}
                       disabled={isAuthenticating}
-                      className="mt-3 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                      variant="primary"
+                      className="mt-3"
                     >
                       {isAuthenticating ? <LoadingSpinner size="sm" /> : <MailNavIcon />}
                       {locale === "zh" ? "登录 Microsoft Outlook" : locale === "ja" ? "Microsoft Outlook にログイン" : "Connect Outlook"}
-                    </button>
+                    </CalmButton>
                     {authInfo ? <p className="mt-3 text-xs text-emerald-600 dark:text-emerald-400">{authInfo}</p> : null}
                     {authError ? <p className="mt-3 text-xs text-red-600 dark:text-red-400">{authError}</p> : null}
                   </div>
@@ -513,22 +530,23 @@ export function SettingsView() {
 
               <SettingsCard title={locale === "zh" ? "邮箱源管理" : locale === "ja" ? "メールソース管理" : "Mail Sources"}>
                 <div className="mb-3 flex items-center justify-between">
-                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  <p className="text-xs text-[color:var(--ink-subtle)]">
                     {locale === "zh" ? "切换默认邮箱、验证连接状态，并保留多账号管理能力。" : locale === "ja" ? "既定ソースの切り替えと複数アカウント管理。" : "Switch defaults, verify readiness, and keep multi-source control."}
                   </p>
-                  <button
+                  <CalmButton
                     type="button"
                     onClick={() => fetchSources()}
                     disabled={isLoadingSources}
-                    className="rounded-xl border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300"
+                    variant="secondary"
+                    className="px-3 py-1.5 text-xs"
                   >
                     {isLoadingSources ? <LoadingSpinner size="sm" /> : locale === "zh" ? "刷新" : locale === "ja" ? "更新" : "Refresh"}
-                  </button>
+                  </CalmButton>
                 </div>
 
                 <div className="space-y-3">
                   {sources.length === 0 && !isLoadingSources ? (
-                    <div className="rounded-2xl border border-dashed border-zinc-300 px-4 py-8 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+                    <div className="rounded-[1.25rem] border border-dashed border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-4 py-8 text-center text-sm text-[color:var(--ink-subtle)]">
                       {locale === "zh" ? "暂无数据源，请先完成 Outlook 授权。" : locale === "ja" ? "メールソースがありません。先に Outlook 認可を完了してください。" : "No mail sources yet. Connect Outlook first."}
                     </div>
                   ) : null}
@@ -536,53 +554,47 @@ export function SettingsView() {
                   {sources.map((source) => {
                     const isActive = source.id === activeSourceId;
                     return (
-                      <div key={source.id} className="rounded-2xl border border-zinc-200 bg-zinc-50/70 p-4 dark:border-zinc-800 dark:bg-zinc-950/50">
+                      <div key={source.id} className="rounded-[1.25rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] p-4 shadow-[var(--shadow-inset)]">
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">{source.name}</p>
-                            <p className="mt-1 truncate text-xs text-zinc-500 dark:text-zinc-400">{source.emailHint || source.id}</p>
+                            <p className="truncate text-sm font-semibold text-[color:var(--ink)]">{source.name}</p>
+                            <p className="mt-1 truncate text-xs text-[color:var(--ink-subtle)]">{source.emailHint || source.id}</p>
                           </div>
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                              source.ready
-                                ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400"
-                                : "bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300"
-                            }`}>
-                              {source.ready ? copy.ready : copy.pending}
-                            </span>
+                            <StatusPill tone={source.ready ? "success" : "warning"}>{source.ready ? copy.ready : copy.pending}</StatusPill>
                             {isActive ? (
-                              <span className="rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-medium text-white">
-                                {copy.current}
-                              </span>
+                              <StatusPill tone="neutral">{copy.current}</StatusPill>
                             ) : null}
                           </div>
                         </div>
 
                         <div className="mt-3 flex flex-wrap gap-2">
                           {!isActive ? (
-                            <button
+                            <CalmButton
                               type="button"
                               onClick={() => handleSelectSource(source.id)}
-                              className="rounded-xl border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
+                              variant="secondary"
+                              className="px-3 py-1.5 text-xs"
                             >
                               {locale === "zh" ? "设为默认" : locale === "ja" ? "既定にする" : "Set default"}
-                            </button>
+                            </CalmButton>
                           ) : null}
-                          <button
+                          <CalmButton
                             type="button"
                             onClick={() => handleVerifySource(source.id)}
-                            className="rounded-xl border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
+                            variant="secondary"
+                            className="px-3 py-1.5 text-xs"
                           >
                             {locale === "zh" ? "验证" : locale === "ja" ? "確認" : "Verify"}
-                          </button>
+                          </CalmButton>
                           {source.id !== "default_outlook" ? (
-                            <button
+                            <CalmButton
                               type="button"
                               onClick={() => handleDeleteSource(source.id)}
-                              className="rounded-xl border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 dark:border-red-900/30 dark:text-red-400 dark:hover:bg-red-950/20"
+                              className="border-[color:var(--border-urgent)] bg-[color:var(--surface-urgent)] px-3 py-1.5 text-xs text-[color:var(--pill-urgent-ink)] hover:bg-[color:var(--surface-urgent)]"
                             >
                               {locale === "zh" ? "删除" : locale === "ja" ? "削除" : "Delete"}
-                            </button>
+                            </CalmButton>
                           ) : null}
                         </div>
                       </div>
@@ -599,30 +611,31 @@ export function SettingsView() {
                       value={newSourceLabel}
                       onChange={(e) => setNewSourceLabel(e.target.value)}
                       placeholder={locale === "zh" ? "数据源名称" : locale === "ja" ? "ソース名" : "Source label"}
-                      className="h-11 rounded-xl border border-zinc-300 px-4 text-sm outline-none transition focus:border-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                      className="calm-input h-11"
                     />
                     <input
                       type="text"
                       value={newMailboxUserId}
                       onChange={(e) => setNewMailboxUserId(e.target.value)}
                       placeholder="mailboxUserId"
-                      className="h-11 rounded-xl border border-zinc-300 px-4 text-sm outline-none transition focus:border-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                      className="calm-input h-11"
                     />
                     <input
                       type="text"
                       value={newConnectedAccountId}
                       onChange={(e) => setNewConnectedAccountId(e.target.value)}
                       placeholder="connectedAccountId"
-                      className="h-11 rounded-xl border border-zinc-300 px-4 text-sm outline-none transition focus:border-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                      className="calm-input h-11"
                     />
-                    <button
+                    <CalmButton
                       type="button"
                       onClick={handleAddSource}
                       disabled={isCreating || !newSourceLabel.trim() || !newMailboxUserId.trim() || !newConnectedAccountId.trim()}
-                      className="inline-flex h-11 items-center justify-center rounded-xl bg-zinc-900 px-4 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+                      variant="primary"
+                      className="h-11"
                     >
                       {isCreating ? <LoadingSpinner size="sm" /> : locale === "zh" ? "添加并验证" : locale === "ja" ? "追加して確認" : "Add and verify"}
-                    </button>
+                    </CalmButton>
                   </div>
                 </SettingsCard>
               ) : null}
@@ -644,23 +657,24 @@ export function SettingsView() {
                   {sources.map((source) => {
                     const isActive = source.id === activeSourceId;
                     return (
-                      <div key={source.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-zinc-200/70 bg-zinc-50/75 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950/45">
+                      <div key={source.id} className="flex flex-wrap items-center justify-between gap-3 rounded-[1.25rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-4 py-3 shadow-[var(--shadow-inset)]">
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">{source.name}</p>
-                          <p className="mt-1 truncate text-xs text-zinc-500 dark:text-zinc-400">{source.emailHint || source.id}</p>
+                          <p className="truncate text-sm font-medium text-[color:var(--ink)]">{source.name}</p>
+                          <p className="mt-1 truncate text-xs text-[color:var(--ink-subtle)]">{source.emailHint || source.id}</p>
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2">
                           {isActive ? (
                             <StatusPill tone={source.ready ? "success" : "warning"}>{copy.current}</StatusPill>
                           ) : (
-                            <button
+                            <CalmButton
                               type="button"
                               onClick={() => handleSelectSource(source.id)}
-                              className="rounded-xl border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
+                              variant="secondary"
+                              className="px-3 py-1.5 text-xs"
                             >
                               {locale === "zh" ? "设为默认" : locale === "ja" ? "既定にする" : "Set default"}
-                            </button>
+                            </CalmButton>
                           )}
                         </div>
                       </div>
@@ -709,7 +723,7 @@ export function SettingsView() {
                   />
 
                   <div className="grid gap-3 md:grid-cols-[minmax(0,12rem)_minmax(0,1fr)]">
-                    <label htmlFor="settings-digest-time" className="grid gap-1 text-sm text-zinc-700 dark:text-zinc-300">
+                    <label htmlFor="settings-digest-time" className="grid gap-1 text-sm text-[color:var(--ink-muted)]">
                       <span>{locale === "zh" ? "摘要时间" : locale === "ja" ? "配信時刻" : "Digest time"}</span>
                       <input
                         id="settings-digest-time"
@@ -720,11 +734,11 @@ export function SettingsView() {
                           markNotificationDirty();
                         }}
                         disabled={!notificationPrefsReady || !dailyDigestEnabled}
-                        className="h-11 rounded-xl border border-zinc-300 px-4 text-sm outline-none transition focus:border-zinc-900 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                        className="calm-input h-11 disabled:opacity-60"
                       />
                     </label>
 
-                    <div className="grid gap-1 text-sm text-zinc-700 dark:text-zinc-300">
+                    <div className="grid gap-1 text-sm text-[color:var(--ink-muted)]">
                       <label htmlFor="settings-digest-timezone">{locale === "zh" ? "摘要时区" : locale === "ja" ? "タイムゾーン" : "Digest timezone"}</label>
                       <div className="flex flex-wrap gap-2">
                         <input
@@ -737,23 +751,24 @@ export function SettingsView() {
                           }}
                           disabled={!notificationPrefsReady || !dailyDigestEnabled}
                           placeholder="Asia/Shanghai"
-                          className="h-11 min-w-0 flex-1 rounded-xl border border-zinc-300 px-4 text-sm outline-none transition focus:border-zinc-900 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                          className="calm-input h-11 min-w-0 flex-1 disabled:opacity-60"
                         />
-                        <button
+                        <CalmButton
                           type="button"
                           onClick={handleUseBrowserTimeZone}
                           disabled={!notificationPrefsReady || !dailyDigestEnabled}
-                          className="rounded-xl border border-zinc-300 px-3 py-2 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-300"
+                          variant="secondary"
+                          className="px-3 py-2 text-xs"
                         >
                           {locale === "zh" ? "使用浏览器时区" : locale === "ja" ? "ブラウザ時区を使用" : "Use browser timezone"}
-                        </button>
+                        </CalmButton>
                       </div>
                     </div>
                   </div>
 
-                  <div className="rounded-2xl bg-zinc-50 px-4 py-3 text-xs text-zinc-600 dark:bg-zinc-950/50 dark:text-zinc-300">
+                  <div className="rounded-[1.25rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-4 py-3 text-xs text-[color:var(--ink-muted)]">
                     {!notificationPrefsReady ? (
-                      <span className="mb-1 block text-zinc-500 dark:text-zinc-400">
+                      <span className="mb-1 block text-[color:var(--ink-subtle)]">
                         {locale === "zh" ? "正在加载当前邮箱源的通知设置..." : locale === "ja" ? "現在のソース設定を読み込み中..." : "Loading notification preferences for the active source..."}
                       </span>
                     ) : null}
@@ -761,31 +776,31 @@ export function SettingsView() {
                   </div>
 
                   <div className="flex flex-wrap gap-2">
-                    <button
+                    <CalmButton
                       type="button"
                       onClick={handleSaveNotificationSettings}
                       disabled={!activeSourceId || !notificationPrefsReady || isSavingNotifications || !notificationDirty}
-                      className="inline-flex items-center gap-2 rounded-xl bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900"
+                      variant="primary"
                     >
                       {isSavingNotifications ? <LoadingSpinner size="sm" /> : null}
                       {locale === "zh" ? "保存通知设置" : locale === "ja" ? "通知設定を保存" : "Save notification settings"}
-                    </button>
-                    <button
+                    </CalmButton>
+                    <CalmButton
                       type="button"
                       onClick={handleResetNotificationSettings}
                       disabled={!notificationPrefsReady || !notificationDirty}
-                      className="rounded-xl border border-zinc-300 px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-300"
+                      variant="secondary"
                     >
                       {locale === "zh" ? "撤销未保存更改" : locale === "ja" ? "未保存の変更を戻す" : "Reset unsaved changes"}
-                    </button>
-                    <button
+                    </CalmButton>
+                    <CalmButton
                       type="button"
                       onClick={handleEnableDesktopNotifications}
                       disabled={!notificationPrefsReady || desktopPermission === "granted" || desktopPermission === "unsupported"}
-                      className="rounded-xl border border-zinc-300 px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-300"
+                      variant="secondary"
                     >
                       {locale === "zh" ? "开启桌面提醒" : locale === "ja" ? "デスクトップ通知を有効化" : "Enable desktop alerts"}
-                    </button>
+                    </CalmButton>
                   </div>
                 </div>
               </SettingsCard>
@@ -805,14 +820,14 @@ export function SettingsView() {
                       key={themeOption.id}
                       type="button"
                       onClick={() => setTheme(themeOption.id)}
-                      className={`flex flex-col items-center gap-2 rounded-2xl border-2 p-3 transition-all ${
+                      className={`flex flex-col items-center gap-2 rounded-[1.25rem] border-2 p-3 transition-all ${
                         theme === themeOption.id
-                          ? "border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-950/40"
-                          : "border-zinc-200 dark:border-zinc-700"
+                          ? "border-[color:var(--border-info)] bg-[color:var(--surface-info)]"
+                          : "border-[color:var(--border-soft)] bg-[color:var(--surface-soft)]"
                       }`}
                     >
                       <div className={`h-8 w-full rounded-lg border ${themeOption.preview}`} />
-                      <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">{themeOption.label}</span>
+                      <span className="text-xs font-medium text-[color:var(--ink-muted)]">{themeOption.label}</span>
                     </button>
                   ))}
                 </div>
@@ -831,10 +846,10 @@ export function SettingsView() {
                       onClick={() => {
                         void handleLocaleChange(lang.code);
                       }}
-                      className={`flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-sm font-medium transition-all ${
+                      className={`flex w-full items-center justify-between rounded-[1.25rem] border px-4 py-3 text-sm font-medium transition-all ${
                         locale === lang.code
-                          ? "border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-950/40 dark:text-blue-300"
-                          : "border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-900"
+                          ? "border-[color:var(--border-info)] bg-[color:var(--surface-info)] text-[color:var(--ink)]"
+                          : "border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] text-[color:var(--ink-muted)] hover:bg-[color:var(--surface-elevated)]"
                       }`}
                     >
                       <span>{lang.label}</span>
@@ -866,7 +881,7 @@ export function SettingsView() {
               </SettingsCard>
 
               <SettingsCard title={locale === "zh" ? "运行备注" : locale === "ja" ? "実行メモ" : "Runtime Notes"}>
-                <ul className="space-y-2 text-sm text-zinc-600 dark:text-zinc-300">
+                <ul className="space-y-2 text-sm text-[color:var(--ink-muted)]">
                   <li>{digestScheduleSummary}</li>
                   <li>{error || (locale === "zh" ? "当前没有全局错误。" : locale === "ja" ? "現在グローバルエラーはありません。" : "No global errors right now.")}</li>
                   <li>
@@ -902,10 +917,10 @@ function SettingsCard({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-[28px] border border-white/65 bg-white/82 p-5 shadow-[0_18px_55px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/72 dark:shadow-[0_18px_55px_rgba(2,6,23,0.42)]">
-      <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{title}</h3>
+    <CalmSurface tone="default" beam className="px-5 py-5">
+      <h3 className="mt-2 text-base font-semibold text-[color:var(--ink)]">{title}</h3>
       <div className="mt-4">{children}</div>
-    </section>
+    </CalmSurface>
   );
 }
 
@@ -923,10 +938,10 @@ function ToggleRow({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex cursor-pointer items-start justify-between gap-4 rounded-2xl border border-zinc-200/70 bg-zinc-50/70 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950/45">
+    <label className="flex cursor-pointer items-start justify-between gap-4 rounded-[1.25rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-4 py-3 shadow-[var(--shadow-inset)]">
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{label}</p>
-        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{description}</p>
+        <p className="text-sm font-medium text-[color:var(--ink)]">{label}</p>
+        <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">{description}</p>
       </div>
       <span className="relative mt-0.5 inline-flex h-7 w-12 shrink-0 items-center">
         <input
@@ -941,8 +956,8 @@ function ToggleRow({
           className={cn(
             "pointer-events-none relative inline-flex h-7 w-12 items-center rounded-full transition",
             checked
-              ? "bg-blue-600 dark:bg-blue-500"
-              : "bg-zinc-300 dark:bg-zinc-700",
+              ? "bg-[color:var(--button-primary)]"
+              : "bg-[color:var(--pill-muted)]",
             disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"
           )}
         >
@@ -966,17 +981,9 @@ function StatusPill({
   children: React.ReactNode;
 }) {
   return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]",
-        tone === "success" && "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/35 dark:text-emerald-300",
-        tone === "warning" && "bg-amber-50 text-amber-700 dark:bg-amber-950/35 dark:text-amber-300",
-        tone === "danger" && "bg-red-50 text-red-700 dark:bg-red-950/35 dark:text-red-300",
-        tone === "neutral" && "bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300"
-      )}
-    >
+    <CalmPill tone={mapTone(tone)} className="px-2.5 py-1 text-[10px] uppercase tracking-[0.16em]">
       {children}
-    </span>
+    </CalmPill>
   );
 }
 
@@ -992,16 +999,16 @@ function StatusPanel({
   tone?: "neutral" | "success" | "warning" | "danger";
 }) {
   return (
-    <div className="rounded-2xl border border-zinc-200/70 bg-zinc-50/75 p-4 dark:border-zinc-800 dark:bg-zinc-950/50">
+    <CalmSurface tone={mapTone(tone)} className="p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-400 dark:text-zinc-500">{label}</p>
-          <p className="mt-2 break-words text-sm font-semibold text-zinc-900 dark:text-zinc-100">{value}</p>
-          {detail ? <p className="mt-1 break-words text-xs text-zinc-500 dark:text-zinc-400">{detail}</p> : null}
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[color:var(--ink-subtle)]">{label}</p>
+          <p className="mt-2 break-words text-sm font-semibold text-[color:var(--ink)]">{value}</p>
+          {detail ? <p className="mt-1 break-words text-xs text-[color:var(--ink-subtle)]">{detail}</p> : null}
         </div>
         <StatusPill tone={tone}>{tone}</StatusPill>
       </div>
-    </div>
+    </CalmSurface>
   );
 }
 
@@ -1015,15 +1022,28 @@ function InlineMessage({
   return (
     <div
       className={cn(
-        "rounded-2xl border px-4 py-3 text-xs",
-        tone === "success" && "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300",
-        tone === "danger" && "border-red-200 bg-red-50 text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300",
-        tone === "neutral" && "border-zinc-200 bg-zinc-50 text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950/40 dark:text-zinc-300"
+        "rounded-[1.25rem] border px-4 py-3 text-xs",
+        tone === "success" && "border-[color:var(--border-success)] bg-[color:var(--surface-success)] text-[color:var(--ink)]",
+        tone === "danger" && "border-[color:var(--border-urgent)] bg-[color:var(--surface-urgent)] text-[color:var(--ink)]",
+        tone === "neutral" && "border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] text-[color:var(--ink-muted)]"
       )}
     >
       {children}
     </div>
   );
+}
+
+function mapTone(tone: "neutral" | "success" | "warning" | "danger") {
+  if (tone === "success") {
+    return "success" as const;
+  }
+  if (tone === "warning") {
+    return "warning" as const;
+  }
+  if (tone === "danger") {
+    return "urgent" as const;
+  }
+  return "muted" as const;
 }
 
 function UserNavIcon() {

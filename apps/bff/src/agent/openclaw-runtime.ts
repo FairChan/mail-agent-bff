@@ -33,7 +33,7 @@ export class OpenClawRuntime implements AgentRuntime {
   async query(input: AgentRuntimeInput): Promise<AgentQueryResult> {
     const raw = await queryAgent({
       message: input.message,
-      user: `${input.tenant.userId}:${input.tenant.sourceId}`,
+      user: `${input.tenant.tenantId}:${input.tenant.sourceId}`,
       sessionKey: `${input.tenant.sessionToken}${OPENCLAW_SCOPE_SEPARATOR}${input.tenant.sourceId}`,
     });
 

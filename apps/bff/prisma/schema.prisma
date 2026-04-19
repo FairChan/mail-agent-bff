@@ -30,6 +30,7 @@ model User {
   mailEvents MailEvent[]
   senderProfiles SenderProfile[]
   mailKbJobs MailKbJob[]
+  auditLogs AuditLog[]
 
   @@index([createdAt])
 }
@@ -72,6 +73,7 @@ model MailSource {
   mailKbJobs         MailKbJob[]
 
   @@unique([userId, externalId])
+  @@unique([id, userId])
   @@index([userId, createdAt])
   @@index([userId, enabled])
   @@index([userId, microsoftAccountId])
@@ -317,4 +319,27 @@ model SubjectIndex {
   updatedAt DateTime    @updatedAt
 
   @@index([subject])
+}
+
+model AuditLog {
+  id            String   @id @default(cuid())
+  tenantId      String
+  userId        String?
+  user          User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  sourceId      String?
+  action        String
+  resourceType  String
+  resourceId    String?
+  outcome       String   @default("success")
+  requestId     String?
+  ipHash        String?
+  userAgentHash String?
+  sessionHash   String?
+  metadataJson  String?  @db.Text
+  createdAt     DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([userId, createdAt])
+  @@index([sourceId, createdAt])
+  @@index([action, createdAt])
 }

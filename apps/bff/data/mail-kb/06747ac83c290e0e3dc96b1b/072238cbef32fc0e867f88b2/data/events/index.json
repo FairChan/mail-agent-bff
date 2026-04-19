@@ -18,8 +18,8 @@
   },
   "EVT_002": {
     "eventId": "EVT_002",
-    "name": "[FairChan/mail-agent-bff] Run failed: CI - master (779cc63)",
-    "summary": "CI工作流再次失败，verify任务于46秒后失败并产生2个注解，项目CI异常问题仍在持续。",
+    "name": "[FairChan/mail-agent-bff] Run failed: CI - master (b352688)",
+    "summary": "CI工作流再次失败，verify任务于48秒后失败并产生2个注解，项目CI异常问题仍在持续。",
     "keyInfo": [
       "repo: FairChan/mail-agent-bff",
       "branch: master",
@@ -31,9 +31,10 @@
       "MSG_kxrmhf",
       "MSG_115lw76",
       "MSG_gww2fz",
-      "MSG_uby43z"
+      "MSG_uby43z",
+      "MSG_1fn9qiz"
     ],
-    "lastUpdated": "2026-04-18T13:09:39.000Z",
+    "lastUpdated": "2026-04-19T06:59:16.000Z",
     "tags": [
       "urgent_important",
       "not_urgent_important"
@@ -150,8 +151,8 @@
   },
   "EVT_001004": {
     "eventId": "EVT_001004",
-    "name": "Shop Sell-Out Styles Here!",
-    "summary": "SHEIN继续推送促销，新增当季热销爆款商品推荐，强调库存紧张催促购买。",
+    "name": "Clearance Bonanza: Treat Yourself!",
+    "summary": "SHEIN继续推送促销，新增清仓大促活动，强调精选商品新价格及优先挑选权，催促用户抢购。",
     "keyInfo": [
       "type: promotion",
       "season: Spring"
@@ -162,9 +163,10 @@
       "MSG_1mvy1yi",
       "MSG_1mlmddb",
       "MSG_8kp2tz",
-      "MSG_budzat"
+      "MSG_budzat",
+      "MSG_1orlyl8"
     ],
-    "lastUpdated": "2026-04-05T10:17:21.000Z",
+    "lastUpdated": "2026-04-19T10:15:56.000Z",
     "tags": [
       "not_urgent_not_important"
     ]
@@ -556,18 +558,30 @@
   },
   "EVT_001014": {
     "eventId": "EVT_001014",
-    "name": "Decathlon账号注册成功通知",
-    "summary": "用户成功创建Decathlon账户，官方发送欢迎邮件及账户信息确认。",
+    "name": "Binance账户异常IP登录安全警告",
+    "summary": "Binance账户检测到来自新IP地址的登录行为，提示用户核实安全性，若非本人操作需立即重置密码。",
     "keyInfo": [
       "platform: Decathlon",
-      "account_id: 2094600728134"
+      "account_id: 2094600728134",
+      "project: FairChan/mail-agent-bff",
+      "workflow: codeql.yml",
+      "branch: master",
+      "commit: b352688",
+      "error: No jobs were run",
+      "account: ssemaster@outlook.com",
+      "login_ip: 27.125.242.30",
+      "login_time: 2026-04-19 11:43:01(UTC)"
     ],
     "relatedMailIds": [
-      "MSG_ftnmm6"
+      "MSG_ftnmm6",
+      "MSG_1287ouz",
+      "MSG_35jya4"
     ],
-    "lastUpdated": "2026-04-19T06:04:20.000Z",
+    "lastUpdated": "2026-04-19T11:43:06.000Z",
     "tags": [
-      "not_urgent_not_important"
+      "not_urgent_not_important",
+      "not_urgent_important",
+      "urgent_important"
     ]
   },
   "EVT_001015": {

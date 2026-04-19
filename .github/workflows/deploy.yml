@@ -2,77 +2,159 @@ name: Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment environment
+        required: true
+        default: production
+        type: choice
+        options:
+          - staging
+          - production
+
+concurrency:
+  group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || github.ref == 'refs/heads/develop' && 'staging' || 'production' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
-  deploy-staging:
-    name: Deploy to Staging
+  deploy:
+    name: Deploy
     runs-on: ubuntu-latest
-    if: contains(github.ref, 'develop') || contains(github.event.head_commit.message, '[staging]')
+    if: |
+      (
+        github.event_name == 'workflow_dispatch' &&
+        (
+          inputs.environment != 'production' ||
+          github.ref == 'refs/heads/main' ||
+          startsWith(github.ref, 'refs/tags/v')
+        )
+      ) ||
+      github.ref == 'refs/heads/main' ||
+      github.ref == 'refs/heads/develop' ||
+      startsWith(github.ref, 'refs/tags/v')
     environment:
-      name: staging
-      url: https://staging.true-sight.asia
+      name: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || github.ref == 'refs/heads/develop' && 'staging' || 'production' }}
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          cache: "npm"
-      
-      - name: Install dependencies
-        run: npm ci
-        
-      - name: Build
-        run: npm run build
-        
-      - name: Deploy to server
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-        run: |
-          echo "$SSH_PRIVATE_KEY" > private_key
-          chmod 600 private_key
-          rsync -avz --delete -e "ssh -i private_key -o StrictHostKeyChecking=no" \
-            apps/webui/dist/ \
-            $SSH_USER@$SSH_HOST:/var/www/staging.true-sight.asia/
-          rm private_key
+          persist-credentials: false
 
-  deploy-production:
-    name: Deploy to Production
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v') || contains(github.event.head_commit.message, '[prod]')
-    environment:
-      name: production
-      url: https://true-sight.asia
-    steps:
-      - uses: actions/checkout@v4
-      
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
-      
+
       - name: Install dependencies
         run: npm ci
-        
-      - name: Build
-        run: npm run build
-        
-      - name: Deploy to server
+
+      - name: Verify repository
+        run: |
+          npm run check
+          npm run build
+
+      - name: Prepare SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
         run: |
-          echo "$SSH_PRIVATE_KEY" > private_key
-          chmod 600 private_key
-          rsync -avz --delete -e "ssh -i private_key -o StrictHostKeyChecking=no" \
-            apps/webui/dist/ \
-            $SSH_USER@$SSH_HOST:/var/www/true-sight.asia/
-          rm private_key
+          test -n "$SSH_KNOWN_HOSTS"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Validate deploy settings
+        env:
+          DEPLOY_HOST: ${{ secrets.SSH_HOST }}
+          DEPLOY_USER: ${{ secrets.SSH_USER }}
+          DEPLOY_WORKSPACE_DIR: ${{ vars.DEPLOY_WORKSPACE_DIR }}
+          DEPLOY_PUBLIC_DIR: ${{ vars.DEPLOY_PUBLIC_DIR }}
+          DEPLOY_SERVICE_NAME: ${{ vars.DEPLOY_SERVICE_NAME }}
+        run: |
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_USER"
+          test -n "$DEPLOY_WORKSPACE_DIR"
+          test -n "$DEPLOY_PUBLIC_DIR"
+          test -n "$DEPLOY_SERVICE_NAME"
+
+      - name: Create deploy artifact
+        run: |
+          DEPLOY_ARTIFACT_DIR="$(mktemp -d)"
+          echo "DEPLOY_ARTIFACT_DIR=$DEPLOY_ARTIFACT_DIR" >> "$GITHUB_ENV"
+          {
+            git ls-files -z \
+              package.json \
+              package-lock.json \
+              deploy.sh \
+              apps/bff/package.json \
+              apps/bff/package-lock.json \
+              apps/bff/tsconfig.json \
+              apps/bff/src \
+              apps/bff/public \
+              apps/webui/package.json \
+              apps/webui/tsconfig.json \
+              apps/webui/index.html \
+              apps/webui/vite.config.ts \
+              apps/webui/src \
+              apps/webui/public \
+              packages/shared-types/package.json \
+              packages/shared-types/tsconfig.json \
+              packages/shared-types/src \
+              skills
+            git ls-files -z --cached --others --exclude-standard \
+              deploy/host \
+              apps/bff/prisma
+          } | rsync -a --from0 --files-from=- ./ "$DEPLOY_ARTIFACT_DIR/"
+          test -f "$DEPLOY_ARTIFACT_DIR/deploy/host/deploy.sh"
+          test -f "$DEPLOY_ARTIFACT_DIR/apps/bff/prisma/schema.prisma"
+          test -d "$DEPLOY_ARTIFACT_DIR/apps/bff/prisma/migrations"
+          test -d "$DEPLOY_ARTIFACT_DIR/skills"
+          migration_count="$(find "$DEPLOY_ARTIFACT_DIR/apps/bff/prisma/migrations" -name migration.sql | wc -l | tr -d ' ')"
+          test "$migration_count" -gt 0
+
+      - name: Sync deploy artifact to host
+        env:
+          DEPLOY_HOST: ${{ secrets.SSH_HOST }}
+          DEPLOY_USER: ${{ secrets.SSH_USER }}
+          DEPLOY_WORKSPACE_DIR: ${{ vars.DEPLOY_WORKSPACE_DIR }}
+        run: |
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_WORKSPACE_DIR'"
+          rsync -az --delete \
+            --exclude '.env' \
+            --exclude '.env.*' \
+            --exclude 'apps/bff/.env' \
+            --exclude 'apps/bff/.env.*' \
+            --exclude 'apps/bff/data/' \
+            --exclude 'apps/webui/.env' \
+            --exclude 'apps/webui/.env.*' \
+            "$DEPLOY_ARTIFACT_DIR/" "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_WORKSPACE_DIR/"
+
+      - name: Run remote deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.SSH_HOST }}
+          DEPLOY_USER: ${{ secrets.SSH_USER }}
+          DEPLOY_WORKSPACE_DIR: ${{ vars.DEPLOY_WORKSPACE_DIR }}
+          DEPLOY_PUBLIC_DIR: ${{ vars.DEPLOY_PUBLIC_DIR }}
+          DEPLOY_SERVICE_NAME: ${{ vars.DEPLOY_SERVICE_NAME }}
+          DEPLOY_BFF_READY_URL: ${{ vars.DEPLOY_BFF_READY_URL }}
+          DEPLOY_PUBLIC_HEALTHCHECK_URL: ${{ vars.DEPLOY_PUBLIC_HEALTHCHECK_URL }}
+          DEPLOY_RELOAD_NGINX: ${{ vars.DEPLOY_RELOAD_NGINX }}
+        run: |
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "\
+            cd '$DEPLOY_WORKSPACE_DIR' && \
+            WORKSPACE_DIR='$DEPLOY_WORKSPACE_DIR' \
+            PUBLIC_WEB_DIR='$DEPLOY_PUBLIC_DIR' \
+            SYSTEMD_SERVICE_NAME='$DEPLOY_SERVICE_NAME' \
+            BFF_HEALTHCHECK_URL='${DEPLOY_BFF_READY_URL:-http://127.0.0.1:8787/api/ready}' \
+            PUBLIC_HEALTHCHECK_URL='${DEPLOY_PUBLIC_HEALTHCHECK_URL:-}' \
+            RELOAD_NGINX='${DEPLOY_RELOAD_NGINX:-false}' \
+            bash ./deploy.sh"

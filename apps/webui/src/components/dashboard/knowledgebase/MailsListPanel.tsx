@@ -38,8 +38,8 @@ export function MailsListPanel({ mails, persons, events }: MailsListPanelProps) 
 
   if (mails.length === 0) {
     return (
-      <div className="flex h-64 items-center justify-center rounded-xl border border-dashed border-zinc-300">
-        <p className="text-zinc-500">暂无邮件数据，请先执行邮件总结任务</p>
+      <div className="flex h-64 items-center justify-center rounded-[1.4rem] border border-dashed border-[color:var(--border-soft)] bg-[color:var(--surface-soft)]">
+        <p className="text-[color:var(--ink-subtle)]">暂无邮件数据，请先执行邮件总结任务</p>
       </div>
     );
   }
@@ -55,12 +55,12 @@ export function MailsListPanel({ mails, persons, events }: MailsListPanelProps) 
             placeholder="搜索邮件..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full rounded-lg border border-zinc-200 px-4 py-2 text-sm focus:border-zinc-400 focus:outline-none"
+            className="calm-input w-full px-4 py-2 text-sm"
           />
         </div>
 
         {/* List */}
-        <div className="flex-1 space-y-2 overflow-auto">
+        <div className="calm-scrollbar flex-1 space-y-2 overflow-auto pr-1">
           {filteredMails.map((mail) => {
             const meta = getQuadrantMeta(mail.quadrant);
             const isSelected = selectedMail?.mailId === mail.mailId;
@@ -71,8 +71,8 @@ export function MailsListPanel({ mails, persons, events }: MailsListPanelProps) 
                 onClick={() => setSelectedMail(mail)}
                 className={`w-full cursor-pointer rounded-xl border p-4 text-left transition-colors ${
                   isSelected
-                    ? "border-zinc-400 bg-zinc-50"
-                    : "border-zinc-200 bg-white hover:border-zinc-300"
+                    ? "border-[color:var(--border-info)] bg-[color:var(--surface-info)] shadow-[var(--shadow-soft)]"
+                    : "border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] hover:bg-[color:var(--surface-soft)]"
                 }`}
               >
                 <div className="flex items-start justify-between gap-2">
@@ -81,11 +81,11 @@ export function MailsListPanel({ mails, persons, events }: MailsListPanelProps) 
                       <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${meta.badgeClass}`}>
                         {meta.label}
                       </span>
-                      <span className="text-xs text-zinc-400">{mail.mailId}</span>
+                      <span className="text-xs text-[color:var(--ink-subtle)]">{mail.mailId}</span>
                     </div>
-                    <h4 className="mt-1 truncate font-medium text-zinc-900">{mail.subject}</h4>
-                    <p className="mt-1 text-sm text-zinc-500">{getPersonName(mail.personId)}</p>
-                    <p className="mt-1 text-xs text-zinc-400">{formatDate(mail.receivedAt)}</p>
+                    <h4 className="mt-1 truncate font-medium text-[color:var(--ink)]">{mail.subject}</h4>
+                    <p className="mt-1 text-sm text-[color:var(--ink-muted)]">{getPersonName(mail.personId)}</p>
+                    <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">{formatDate(mail.receivedAt)}</p>
                   </div>
                 </div>
               </button>
@@ -95,7 +95,7 @@ export function MailsListPanel({ mails, persons, events }: MailsListPanelProps) 
       </div>
 
       {/* Mail Detail */}
-      <div className="w-1/2 rounded-xl border border-zinc-200 bg-white p-6">
+      <div className="w-1/2 rounded-[1.4rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] p-6 shadow-[var(--shadow-soft)]">
         {selectedMail ? (
           <div className="space-y-4">
             <div>
@@ -103,23 +103,23 @@ export function MailsListPanel({ mails, persons, events }: MailsListPanelProps) 
                 <span className={`rounded px-2 py-1 text-xs font-medium ${getQuadrantMeta(selectedMail.quadrant).badgeClass}`}>
                   {getQuadrantMeta(selectedMail.quadrant).label}
                 </span>
-                <span className="text-sm text-zinc-500">{selectedMail.mailId}</span>
+                <span className="text-sm text-[color:var(--ink-subtle)]">{selectedMail.mailId}</span>
               </div>
-              <h3 className="mt-2 text-lg font-semibold text-zinc-900">{selectedMail.subject}</h3>
+              <h3 className="mt-2 text-lg font-semibold text-[color:var(--ink)]">{selectedMail.subject}</h3>
             </div>
 
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
-                <p className="text-zinc-500">发件人</p>
-                <p className="font-medium text-zinc-900">{getPersonName(selectedMail.personId)}</p>
+                <p className="text-[color:var(--ink-subtle)]">发件人</p>
+                <p className="font-medium text-[color:var(--ink)]">{getPersonName(selectedMail.personId)}</p>
               </div>
               <div>
-                <p className="text-zinc-500">接收时间</p>
-                <p className="font-medium text-zinc-900">{formatDate(selectedMail.receivedAt)}</p>
+                <p className="text-[color:var(--ink-subtle)]">接收时间</p>
+                <p className="font-medium text-[color:var(--ink)]">{formatDate(selectedMail.receivedAt)}</p>
               </div>
               <div>
-                <p className="text-zinc-500">重要性</p>
-                <p className="font-medium text-zinc-900">
+                <p className="text-[color:var(--ink-subtle)]">重要性</p>
+                <p className="font-medium text-[color:var(--ink)]">
                   {formatMailScore(
                     selectedMail.importanceScore,
                     resolveMailScoreScale(selectedMail)
@@ -127,8 +127,8 @@ export function MailsListPanel({ mails, persons, events }: MailsListPanelProps) 
                 </p>
               </div>
               <div>
-                <p className="text-zinc-500">紧急性</p>
-                <p className="font-medium text-zinc-900">
+                <p className="text-[color:var(--ink-subtle)]">紧急性</p>
+                <p className="font-medium text-[color:var(--ink)]">
                   {formatMailScore(
                     selectedMail.urgencyScore,
                     resolveMailScoreScale(selectedMail)
@@ -137,15 +137,15 @@ export function MailsListPanel({ mails, persons, events }: MailsListPanelProps) 
               </div>
               {selectedMail.eventId && (
                 <div className="col-span-2">
-                  <p className="text-zinc-500">关联事件</p>
-                  <p className="font-medium text-zinc-900">{getEventName(selectedMail.eventId) || selectedMail.eventId}</p>
+                  <p className="text-[color:var(--ink-subtle)]">关联事件</p>
+                  <p className="font-medium text-[color:var(--ink)]">{getEventName(selectedMail.eventId) || selectedMail.eventId}</p>
                 </div>
               )}
             </div>
 
             <div>
-              <p className="mb-2 text-sm font-medium text-zinc-900">摘要</p>
-              <div className="rounded-lg bg-zinc-50 p-4 text-sm text-zinc-700">
+              <p className="mb-2 text-sm font-medium text-[color:var(--ink)]">摘要</p>
+              <div className="rounded-[1rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] p-4 text-sm text-[color:var(--ink-muted)]">
                 {selectedMail.summary}
               </div>
             </div>
@@ -155,7 +155,7 @@ export function MailsListPanel({ mails, persons, events }: MailsListPanelProps) 
                 href={selectedMail.webLink}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800"
+                className="inline-flex items-center gap-2 rounded-full bg-[color:var(--button-primary)] px-4 py-2 text-sm font-medium text-[color:var(--button-primary-ink)] hover:bg-[color:var(--button-primary-hover)]"
               >
                 在Outlook中查看
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -165,7 +165,7 @@ export function MailsListPanel({ mails, persons, events }: MailsListPanelProps) 
             )}
           </div>
         ) : (
-          <div className="flex h-full items-center justify-center text-zinc-500">
+          <div className="flex h-full items-center justify-center text-[color:var(--ink-subtle)]">
             选择一封邮件查看详情
           </div>
         )}

@@ -8,6 +8,7 @@ import { useMail } from "../../contexts/MailContext";
 import { useApp } from "../../contexts/AppContext";
 import { MailDetailPage } from "./MailDetailPage";
 import { LoadingSpinner } from "../shared/LoadingSpinner";
+import { CalmButton } from "../ui/Calm";
 
 export function AllMailListView() {
   const { triage, isLoadingMail, activeSourceId, fetchTriage, selectedMail, setSelectedMail, prefetchMailBodies } = useMail();
@@ -54,6 +55,7 @@ export function AllMailListView() {
 
   const labels = {
     allMail: locale === "zh" ? "邮件历史" : locale === "ja" ? "メール履歴" : "Mail History",
+    archiveLabel: locale === "zh" ? "邮件归档" : locale === "ja" ? "メールアーカイブ" : "Mail Archive",
     searchPlaceholder: locale === "zh" ? "搜索邮件主题、发件人..." : locale === "ja" ? "メールを検索..." : "Search by subject, sender...",
     filterAll: locale === "zh" ? "全部" : locale === "ja" ? "すべて" : "All",
     filterUnread: locale === "zh" ? "未读" : locale === "ja" ? "未読" : "Unread",
@@ -82,35 +84,36 @@ export function AllMailListView() {
 
   return (
     <div className="space-y-4">
-      {/* 标题 */}
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
-          {labels.allMail}
-        </h2>
-        <span className="text-xs text-zinc-500 dark:text-zinc-400">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--ink-subtle)]">{labels.archiveLabel}</p>
+          <h2 className="mt-1 text-lg font-semibold tracking-tight text-[color:var(--ink)]">
+            {labels.allMail}
+          </h2>
+        </div>
+        <span className="text-xs text-[color:var(--ink-subtle)]">
           {filteredItems.length} / {allItems.length} {locale === "zh" ? "封邮件" : locale === "ja" ? "件のメール" : "emails"}
         </span>
       </div>
 
-      {/* 搜索和筛选 */}
       <div className="flex flex-wrap items-center gap-2">
         <input
           type="text"
           placeholder={labels.searchPlaceholder}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="flex-1 min-w-[200px] rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-300 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+          className="calm-input min-w-[200px] flex-1 px-4 py-2 text-sm"
         />
-        <div className="flex gap-1 rounded-lg border border-zinc-200 bg-white p-1 dark:border-zinc-700 dark:bg-zinc-800">
+        <div className="flex gap-1 rounded-[1rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] p-1">
           {(["all", "unread", "read"] as const).map((f) => (
             <button
               key={f}
               type="button"
               onClick={() => setFilter(f)}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
+              className={`rounded-[999px] px-3 py-1.5 text-xs font-medium transition ${
                 filter === f
-                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                  : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-700"
+                  ? "bg-[color:var(--button-primary)] text-[color:var(--button-primary-ink)]"
+                  : "text-[color:var(--ink-muted)] hover:bg-[color:var(--surface-elevated)] hover:text-[color:var(--ink)]"
               }`}
             >
               {f === "all" ? labels.filterAll : f === "unread" ? labels.filterUnread : labels.filterRead}
@@ -119,13 +122,12 @@ export function AllMailListView() {
         </div>
       </div>
 
-      {/* 邮件列表 */}
       {isLoadingMail && allItems.length === 0 ? (
         <div className="flex items-center justify-center py-12">
           <LoadingSpinner size="lg" />
         </div>
       ) : filteredItems.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-zinc-300 px-3 py-8 text-center text-sm text-zinc-500 dark:border-zinc-600 dark:text-zinc-400">
+        <div className="rounded-[1.25rem] border border-dashed border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-3 py-8 text-center text-sm text-[color:var(--ink-subtle)]">
           {labels.noMail}
         </div>
       ) : (
@@ -133,10 +135,10 @@ export function AllMailListView() {
           {filteredItems.map((item) => (
             <li
               key={item.id}
-              className={`rounded-xl border transition cursor-pointer hover:shadow-md ${
+              className={`cursor-pointer rounded-[1.25rem] border transition hover:-translate-y-0.5 hover:shadow-[var(--shadow-soft)] ${
                 item.isRead
-                  ? "border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800"
-                  : "border-zinc-300 bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900"
+                  ? "border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)]"
+                  : "border-[color:var(--border-info)] bg-[color:var(--surface-info)]"
               }`}
             >
               <div
@@ -146,17 +148,17 @@ export function AllMailListView() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     {!item.isRead && (
-                      <span className="h-2 w-2 shrink-0 rounded-full bg-blue-500" />
+                      <span className="h-2 w-2 shrink-0 rounded-full bg-[color:var(--button-primary)]" />
                     )}
                     <p
                       className={`truncate text-sm ${
-                        item.isRead ? "font-normal text-zinc-600 dark:text-zinc-400" : "font-semibold text-zinc-900 dark:text-zinc-100"
+                        item.isRead ? "font-medium text-[color:var(--ink-muted)]" : "font-semibold text-[color:var(--ink)]"
                       }`}
                     >
                       {item.subject || "(No Subject)"}
                     </p>
                   </div>
-                  <p className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">
+                  <p className="mt-0.5 truncate text-xs text-[color:var(--ink-subtle)]">
                     {item.fromName || item.fromAddress}
                     <span className="mx-1.5">·</span>
                     {item.receivedDateTime
@@ -167,28 +169,29 @@ export function AllMailListView() {
                       : ""}
                   </p>
                   {item.aiSummary ? (
-                    <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-300">
-                      <span className="mr-1 inline-flex items-center rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
+                    <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-[color:var(--ink-muted)]">
+                      <span className="mr-1 inline-flex items-center rounded-full bg-[color:var(--pill-info)] px-2 py-0.5 text-[10px] font-semibold text-[color:var(--pill-info-ink)]">
                         AI
                       </span>
                       {item.aiSummary}
                     </p>
                   ) : (
-                    <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-zinc-400 dark:text-zinc-500">
+                    <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-[color:var(--ink-subtle)]">
                       {item.bodyPreview?.slice(0, 100)}
                     </p>
                   )}
                 </div>
-                <button
+                <CalmButton
                   type="button"
+                  variant="secondary"
+                  className="shrink-0 px-3 py-1.5 text-xs"
                   onClick={(e) => {
                     e.stopPropagation();
                     setSelectedMail(item);
                   }}
-                  className="shrink-0 rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-600 dark:text-zinc-400"
                 >
                   {labels.viewDetail}
-                </button>
+                </CalmButton>
               </div>
             </li>
           ))}

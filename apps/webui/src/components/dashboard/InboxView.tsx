@@ -12,9 +12,15 @@ import { MailCard } from "../shared/MailCard";
 import { BellIcon } from "../shared/Icons";
 import { LoadingSpinner } from "../shared/LoadingSpinner";
 import { ErrorDisplay } from "../ErrorBoundary";
+import { BentoGrid, BentoPanel, MetricTile, StatusPill } from "../ui/Bento";
+import { CalmButton, CalmPill } from "../ui/Calm";
 
 interface InboxViewProps {
   onViewMailDetail: (item: TriageMailItem) => void;
+}
+
+function getCalendarDraftKey(draft: Pick<MailCalendarDraft, "messageId" | "type" | "dueAt">): string {
+  return `${draft.messageId}:${draft.type}:${draft.dueAt}`;
 }
 
 export function InboxView({ onViewMailDetail }: InboxViewProps) {
@@ -73,11 +79,11 @@ export function InboxView({ onViewMailDetail }: InboxViewProps) {
 
 	  useEffect(() => {
 	    setSyncingDraftIds(new Set());
-	    const autoSyncedIds = new Set(
-	      (processingResult?.calendarSync?.items ?? [])
-	        .filter((item) => item.ok)
-	        .map((item) => item.messageId)
-	    );
+    const autoSyncedIds = new Set(
+      (processingResult?.calendarSync?.items ?? [])
+        .filter((item) => item.ok)
+        .map((item) => getCalendarDraftKey(item))
+    );
 	    setSyncedDraftIds(autoSyncedIds);
 	    if (processingResult?.calendarSync && autoSyncedIds.size > 0) {
 	      const result = processingResult.calendarSync;
@@ -108,19 +114,20 @@ export function InboxView({ onViewMailDetail }: InboxViewProps) {
   }, [runMailProcessing]);
 
   const handleSyncDraft = useCallback(async (draft: MailCalendarDraft) => {
+    const draftKey = getCalendarDraftKey(draft);
     setDraftSyncError(null);
     setDraftSyncMessage(null);
-    setSyncingDraftIds((prev) => new Set(prev).add(draft.messageId));
+    setSyncingDraftIds((prev) => new Set(prev).add(draftKey));
     try {
       await syncToCalendar(draft.messageId, draft.subject, draft.type, draft.dueAt);
-      setSyncedDraftIds((prev) => new Set(prev).add(draft.messageId));
+      setSyncedDraftIds((prev) => new Set(prev).add(draftKey));
       setDraftSyncMessage(locale === "zh" ? `已写入日历：${draft.subject}` : `Added to calendar: ${draft.subject}`);
     } catch (err) {
       setDraftSyncError(err instanceof Error ? err.message : "同步到日历失败");
     } finally {
       setSyncingDraftIds((prev) => {
         const next = new Set(prev);
-        next.delete(draft.messageId);
+        next.delete(draftKey);
         return next;
       });
     }
@@ -131,7 +138,7 @@ export function InboxView({ onViewMailDetail }: InboxViewProps) {
       return;
     }
 
-    const pendingDrafts = processingResult.calendarDrafts.filter((draft) => !syncedDraftIds.has(draft.messageId));
+    const pendingDrafts = processingResult.calendarDrafts.filter((draft) => !syncedDraftIds.has(getCalendarDraftKey(draft)));
     if (pendingDrafts.length === 0) {
       setDraftSyncMessage(locale === "zh" ? "这些事项已经写入日历。" : "These items are already in your calendar.");
       return;
@@ -142,7 +149,7 @@ export function InboxView({ onViewMailDetail }: InboxViewProps) {
     setDraftSyncMessage(null);
     setSyncingDraftIds((prev) => {
       const next = new Set(prev);
-      pendingDrafts.forEach((draft) => next.add(draft.messageId));
+      pendingDrafts.forEach((draft) => next.add(getCalendarDraftKey(draft)));
       return next;
     });
 
@@ -150,14 +157,19 @@ export function InboxView({ onViewMailDetail }: InboxViewProps) {
       const result = await syncCalendarDrafts(pendingDrafts);
       setSyncedDraftIds((prev) => {
         const next = new Set(prev);
-        result.syncedIds.forEach((id) => next.add(id));
+        const syncedKeys = result.syncedKeys.length > 0
+          ? result.syncedKeys
+          : pendingDrafts
+              .filter((draft) => result.syncedIds.includes(draft.messageId))
+              .map(getCalendarDraftKey);
+        syncedKeys.forEach((key) => next.add(key));
         return next;
       });
 
       if (result.failedCount > 0) {
         setDraftSyncError(locale === "zh"
-          ? `已写入 ${result.syncedIds.length} 项，另有 ${result.failedCount} 项失败。`
-          : `Added ${result.syncedIds.length} items, ${result.failedCount} failed.`);
+          ? `已写入 ${result.syncedKeys.length || result.syncedIds.length} 项，另有 ${result.failedCount} 项失败。`
+          : `Added ${result.syncedKeys.length || result.syncedIds.length} items, ${result.failedCount} failed.`);
       } else {
         const suffix = result.deduplicatedCount > 0
           ? locale === "zh"
@@ -165,8 +177,8 @@ export function InboxView({ onViewMailDetail }: InboxViewProps) {
             : `, ${result.deduplicatedCount} already existed`
           : "";
         setDraftSyncMessage(locale === "zh"
-          ? `已写入日历 ${result.syncedIds.length} 项${suffix}。`
-          : `Added ${result.syncedIds.length} items to calendar${suffix}.`);
+          ? `已写入日历 ${result.syncedKeys.length || result.syncedIds.length} 项${suffix}。`
+          : `Added ${result.syncedKeys.length || result.syncedIds.length} items to calendar${suffix}.`);
       }
     } catch (err) {
       setDraftSyncError(err instanceof Error ? err.message : "批量同步失败");
@@ -174,7 +186,7 @@ export function InboxView({ onViewMailDetail }: InboxViewProps) {
       setIsBatchSyncingDrafts(false);
       setSyncingDraftIds((prev) => {
         const next = new Set(prev);
-        pendingDrafts.forEach((draft) => next.delete(draft.messageId));
+        pendingDrafts.forEach((draft) => next.delete(getCalendarDraftKey(draft)));
         return next;
       });
     }
@@ -192,6 +204,8 @@ export function InboxView({ onViewMailDetail }: InboxViewProps) {
   const urgentItems = triage?.quadrants.urgent_important ?? [];
   const importantItems = triage?.quadrants.not_urgent_important ?? [];
   const upcomingItems = insights?.upcoming ?? [];
+  const activeSource = sources.find((source) => source.id === activeSourceId);
+  const totalMailCount = triage?.total ?? Object.values(counts).reduce((sum, count) => sum + count, 0);
   const displayItems = urgentItems.length > 0
     ? urgentItems
     : importantItems.length > 0
@@ -213,18 +227,21 @@ export function InboxView({ onViewMailDetail }: InboxViewProps) {
 
   const renderUpcomingItem = useCallback(
     (item: MailInsightItem) => (
-      <li key={`${item.messageId}-${item.dueAt}`} className="rounded-xl border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-700 dark:bg-zinc-800">
+      <li
+        key={`${item.messageId}-${item.dueAt}`}
+        className="rounded-[1.1rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] px-3 py-2 shadow-[var(--shadow-inset)]"
+      >
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">{item.subject}</p>
-            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{item.dueDateLabel}</p>
+            <p className="truncate text-sm font-medium text-[color:var(--ink)]">{item.subject}</p>
+            <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">{item.dueDateLabel}</p>
             {item.aiSummary && (
-              <p className="mt-1 line-clamp-2 text-xs text-zinc-600 dark:text-zinc-300">{item.aiSummary}</p>
+              <p className="mt-1 line-clamp-2 text-xs text-[color:var(--ink-muted)]">{item.aiSummary}</p>
             )}
           </div>
-          <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] uppercase tracking-wide text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300">
+          <CalmPill tone={item.type === "ddl" ? "warning" : item.type === "meeting" ? "info" : item.type === "exam" ? "urgent" : "muted"}>
             {item.type}
-          </span>
+          </CalmPill>
         </div>
       </li>
     ),
@@ -234,9 +251,9 @@ export function InboxView({ onViewMailDetail }: InboxViewProps) {
   if (!activeSourceId || sources.length === 0) {
     return (
       <div className="flex min-h-[400px] flex-col items-center justify-center gap-4 p-8">
-        <div className="rounded-lg bg-amber-50 p-6 text-center dark:bg-amber-900/20">
-          <h2 className="mb-2 text-lg font-semibold text-amber-600 dark:text-amber-400">未绑定邮件源</h2>
-          <p className="text-sm text-amber-500 dark:text-amber-300">
+        <div className="rounded-[1.4rem] border border-[color:var(--border-warning)] bg-[color:var(--surface-warning)] p-6 text-center shadow-[var(--shadow-soft)]">
+          <h2 className="mb-2 text-lg font-semibold text-[color:var(--ink)]">未绑定邮件源</h2>
+          <p className="text-sm text-[color:var(--ink-muted)]">
             请先在设置中连接 Outlook 邮箱
           </p>
         </div>
@@ -252,80 +269,75 @@ export function InboxView({ onViewMailDetail }: InboxViewProps) {
     return (
       <div className="flex min-h-[400px] flex-col items-center justify-center gap-4">
         <LoadingSpinner size="lg" />
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">加载邮件数据...</p>
+        <p className="text-sm text-[color:var(--ink-subtle)]">加载邮件数据...</p>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <section className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-950/20">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-700 dark:text-emerald-300">
-              Mail Processing
-            </p>
-            <h2 className="mt-1 text-base font-semibold text-zinc-900 dark:text-zinc-100">
+    <BentoGrid>
+      <BentoPanel as="section" tone="success" className="lg:col-span-8">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusPill tone={activeSource?.ready ? "success" : "warning"} pulse={isProcessingMail}>
+                {activeSource?.ready
+                  ? locale === "zh" ? "邮箱在线" : "Mailbox ready"
+                  : locale === "zh" ? "等待验证" : "Needs verification"}
+              </StatusPill>
+              <StatusPill tone="info">{activeSource?.name || activeSource?.emailHint || "Outlook"}</StatusPill>
+            </div>
+            <h2 className="mt-4 text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
               {locale === "zh" ? "新邮件处理工作台" : "New Mail Processing"}
             </h2>
-            <p className="mt-1 max-w-2xl text-xs leading-5 text-emerald-800 dark:text-emerald-200">
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-emerald-900/80 dark:text-emerald-100/80">
               {locale === "zh"
-                ? "拉取最新邮件，更新知识库，识别紧急事项、每日摘要和可写入日历的事件。"
-                : "Fetch fresh mail, update the knowledge base, detect urgent items, digest signals, and calendar-ready events."}
+                ? "把最新邮件纳入知识库，识别紧急事项、每日摘要和可写入日历的事件。"
+                : "Bring fresh mail into the knowledge base, urgent queue, daily digest, and calendar-ready events."}
             </p>
           </div>
-          <button
+          <CalmButton
             type="button"
             onClick={() => void handleProcessNow()}
             disabled={isProcessingMail}
-            className="inline-flex items-center gap-2 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+            variant="primary"
+            className="min-h-10"
           >
             {isProcessingMail ? <LoadingSpinner size="sm" /> : null}
             {isProcessingMail
               ? locale === "zh" ? "处理中..." : "Processing..."
               : locale === "zh" ? "立即处理新邮件" : "Process now"}
-          </button>
+          </CalmButton>
         </div>
 
-        {processingResult ? (
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-lg bg-white/80 p-3 dark:bg-zinc-900/60">
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                {locale === "zh" ? "知识库新增" : "New KB mails"}
-              </p>
-              <p className="mt-1 text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
-                {processingResult.knowledgeBase.newMailCount}
-              </p>
-            </div>
-            <div className="rounded-lg bg-white/80 p-3 dark:bg-zinc-900/60">
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                {locale === "zh" ? "新紧急邮件" : "New urgent"}
-              </p>
-              <p className="mt-1 text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
-                {processingResult.urgent.newItems.length}
-              </p>
-            </div>
-            <div className="rounded-lg bg-white/80 p-3 dark:bg-zinc-900/60">
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                {locale === "zh" ? "日历候选" : "Calendar drafts"}
-              </p>
-              <p className="mt-1 text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
-                {processingResult.calendarDrafts.length}
-              </p>
-            </div>
-            <div className="rounded-lg bg-white/80 p-3 dark:bg-zinc-900/60">
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                {locale === "zh" ? "上次完成" : "Last run"}
-              </p>
-              <p className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                {new Date(processingResult.completedAt).toLocaleString(locale === "zh" ? "zh-CN" : "en-US")}
-              </p>
-            </div>
-          </div>
-        ) : null}
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <MetricTile
+            label={locale === "zh" ? "知识库新增" : "New KB mails"}
+            value={processingResult?.knowledgeBase.newMailCount ?? 0}
+            detail={locale === "zh" ? "本次写入" : "This run"}
+            tone="success"
+          />
+          <MetricTile
+            label={locale === "zh" ? "新紧急邮件" : "New urgent"}
+            value={processingResult?.urgent.newItems.length ?? urgentItems.length}
+            detail={locale === "zh" ? "需要注意" : "Needs attention"}
+            tone="urgent"
+          />
+          <MetricTile
+            label={locale === "zh" ? "日历候选" : "Calendar drafts"}
+            value={processingResult?.calendarDrafts.length ?? upcomingItems.length}
+            detail={locale === "zh" ? "可确认写入" : "Ready to confirm"}
+            tone="info"
+          />
+          <MetricTile
+            label={locale === "zh" ? "邮件总数" : "Total mails"}
+            value={totalMailCount}
+            detail={formatGeneratedAt(triage?.generatedAt) || (locale === "zh" ? "等待同步" : "Pending sync")}
+          />
+        </div>
 
         {processingResult?.knowledgeBase.status === "failed" ? (
-          <p className="mt-3 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
+          <p className="mt-4 rounded-[1rem] border border-[color:var(--border-warning)] bg-[color:var(--surface-warning)] px-3 py-2 text-xs text-[color:var(--ink)]">
             {locale === "zh"
               ? `知识库更新未完成：${processingResult.knowledgeBase.errors[0] ?? "未知错误"}`
               : `Knowledge-base update did not finish: ${processingResult.knowledgeBase.errors[0] ?? "Unknown error"}`}
@@ -333,7 +345,7 @@ export function InboxView({ onViewMailDetail }: InboxViewProps) {
         ) : null}
 
         {processingResult?.status === "partial" && processingResult.knowledgeBase.status !== "failed" && processingResult.warnings.length > 0 ? (
-          <p className="mt-3 rounded-lg bg-amber-100 px-3 py-2 text-xs text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
+          <p className="mt-4 rounded-[1rem] border border-[color:var(--border-warning)] bg-[color:var(--surface-warning)] px-3 py-2 text-xs text-[color:var(--ink)]">
             {locale === "zh"
               ? `部分处理完成：${processingResult.warnings[0]}`
               : `Partially completed: ${processingResult.warnings[0]}`}
@@ -341,196 +353,189 @@ export function InboxView({ onViewMailDetail }: InboxViewProps) {
         ) : null}
 
         {processingResult?.urgent.newItems.length ? (
-          <div className="mt-3 space-y-2">
+          <div className="mt-4 grid gap-2">
             {processingResult.urgent.newItems.slice(0, 3).map((item) => (
               <a
                 key={item.messageId}
                 href={item.webLink}
                 target="_blank"
                 rel="noreferrer"
-                className="block rounded-lg bg-white/80 px-3 py-2 text-sm text-zinc-800 transition hover:bg-white dark:bg-zinc-900/60 dark:text-zinc-100"
+                className="block rounded-[1rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] px-3 py-2 text-sm text-[color:var(--ink)] transition hover:bg-[color:var(--surface-soft)]"
               >
                 <span className="font-medium">{item.subject}</span>
-                <span className="ml-2 text-xs text-zinc-500 dark:text-zinc-400">{item.fromName || item.fromAddress}</span>
+                <span className="ml-2 text-xs text-[color:var(--ink-subtle)]">{item.fromName || item.fromAddress}</span>
               </a>
             ))}
           </div>
         ) : null}
+      </BentoPanel>
 
-        {processingResult?.calendarDrafts.length ? (
-          <div className="mt-4 rounded-lg border border-emerald-200 bg-white/80 p-3 dark:border-emerald-900/50 dark:bg-zinc-900/50">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-700 dark:text-emerald-300">
-                  Calendar Confirmation
-                </p>
-                <h3 className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                  {locale === "zh" ? "日历确认" : "Calendar Confirmation"}
-                </h3>
-                <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
-                  {locale === "zh"
-                    ? "确认这些新识别出的 DDL / 会议是否直接写入你的 Outlook 日历。"
-                    : "Confirm which newly detected DDLs and meetings should be written to Outlook."}
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setCurrentView("calendar")}
-                  className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
-                >
-                  {locale === "zh" ? "查看日历" : "Open Calendar"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleSyncAllDrafts()}
-                  disabled={isBatchSyncingDrafts}
-                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isBatchSyncingDrafts ? <LoadingSpinner size="sm" /> : null}
-                  {locale === "zh" ? "全部写入日历" : "Sync All"}
-                </button>
-              </div>
-            </div>
-
-            <div className="mt-3 space-y-2">
-              {processingResult.calendarDrafts.slice(0, 6).map((draft) => (
-                <div
-                  key={`${draft.messageId}-${draft.dueAt}`}
-                  className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-700 dark:bg-zinc-800"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">{draft.subject}</p>
-                    <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{draft.dueDateLabel}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300">
-                      {calendarTypeLabels[draft.type]}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => void handleSyncDraft(draft)}
-                      disabled={syncingDraftIds.has(draft.messageId) || syncedDraftIds.has(draft.messageId)}
-                      className="rounded-lg border border-emerald-300 px-2.5 py-1 text-[11px] font-medium text-emerald-700 transition hover:border-emerald-700 hover:text-emerald-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-700 dark:text-emerald-300"
-                    >
-                      {syncingDraftIds.has(draft.messageId)
-                        ? locale === "zh" ? "写入中..." : "Syncing..."
-                        : syncedDraftIds.has(draft.messageId)
-                          ? locale === "zh" ? "已写入" : "Synced"
-                          : locale === "zh" ? "写入日历" : "Sync"}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {processingResult.calendarDrafts.length > 6 ? (
-              <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                {locale === "zh"
-                  ? `还剩 ${processingResult.calendarDrafts.length - 6} 项可在日历页继续确认。`
-                  : `${processingResult.calendarDrafts.length - 6} more items are available in Calendar view.`}
-              </p>
-            ) : null}
-
-            {draftSyncMessage ? (
-              <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:bg-emerald-950/20 dark:text-emerald-300">
-                {draftSyncMessage}
-              </p>
-            ) : null}
-
-            {draftSyncError ? (
-              <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/20 dark:text-red-300">
-                {draftSyncError}
-              </p>
-            ) : null}
+      <BentoPanel tone="info" className="lg:col-span-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-700/80 dark:text-sky-300/80">Eisenhower</p>
+            <h3 className="mt-1 text-base font-semibold text-zinc-950 dark:text-zinc-50">
+              {viewLabels.inbox.label}
+            </h3>
           </div>
-        ) : null}
-      </section>
-
-      {/* 概览统计 */}
-      <section>
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
-            {viewLabels.inbox.label}
-          </h2>
-          <div className="flex items-center gap-2">
-            <p className="text-xs text-zinc-500 dark:text-zinc-400">{formatGeneratedAt(triage?.generatedAt)}</p>
-            <button
-              onClick={handleRefresh}
-              disabled={isLoadingMail}
-              className="rounded p-1 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600 disabled:opacity-50 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
-            >
-              <svg className={`h-4 w-4 ${isLoadingMail ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-            </button>
-          </div>
+          <CalmButton
+            onClick={handleRefresh}
+            disabled={isLoadingMail}
+            variant="secondary"
+            className="h-10 w-10 p-0 text-[color:var(--ink-muted)]"
+            aria-label={locale === "zh" ? "刷新" : "Refresh"}
+          >
+            <svg className={`h-4 w-4 ${isLoadingMail ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </CalmButton>
         </div>
-
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+        <div className="mt-4 grid grid-cols-2 gap-2">
           {(Object.keys(quadrantMeta) as MailQuadrant[]).map((key) => (
             <div
               key={key}
-              className={`rounded-xl border px-3 py-2 dark:border-zinc-700 dark:bg-zinc-800/50 ${
+              className={`rounded-[1rem] border px-3 py-2 ${
                 key === "urgent_important"
-                  ? "border-red-200 bg-red-50/50 dark:bg-red-900/10"
+                  ? "border-[color:var(--border-urgent)] bg-[color:var(--surface-urgent)]"
                   : key === "unprocessed"
-                    ? "border-violet-200 bg-violet-50/70 dark:bg-violet-900/10"
-                  : "border-zinc-200 bg-white dark:bg-zinc-800"
+                    ? "border-[color:var(--border-info)] bg-[color:var(--surface-info)]"
+                    : "border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)]"
               }`}
             >
-              <p className={`text-[11px] ${quadrantMeta[key].tone}`}>{quadrantLabels[key]}</p>
-              <p className={`text-xl font-semibold ${quadrantMeta[key].tone}`}>{counts[key]}</p>
+              <p className={`truncate text-[11px] ${quadrantMeta[key].tone}`}>{quadrantLabels[key]}</p>
+              <p className={`mt-1 text-xl font-semibold ${quadrantMeta[key].tone}`}>{counts[key]}</p>
             </div>
           ))}
         </div>
-      </section>
+      </BentoPanel>
 
-      {/* 优先邮件和近期日程 */}
-      <section className="grid gap-4 xl:grid-cols-2">
-        {/* 优先处理 */}
-        <div>
-          <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-              {locale === "zh" ? "优先处理" : "Priority Queue"}
-            </h3>
-            <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-[11px] text-red-700 ring-1 ring-red-200 dark:bg-red-900/20 dark:text-red-400 dark:ring-red-800">
-              <BellIcon />
-              {urgentItems.length}
-            </span>
+      {processingResult?.calendarDrafts.length ? (
+        <BentoPanel as="section" tone="success" className="lg:col-span-12">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-700 dark:text-emerald-300">
+                Calendar Confirmation
+              </p>
+              <h3 className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                {locale === "zh" ? "日历确认" : "Calendar Confirmation"}
+              </h3>
+              <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
+                {locale === "zh"
+                  ? "确认这些新识别出的 DDL / 会议是否直接写入你的 Outlook 日历。"
+                  : "Confirm which newly detected DDLs and meetings should be written to Outlook."}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <CalmButton
+                type="button"
+                onClick={() => setCurrentView("calendar")}
+                variant="secondary"
+                className="px-3 py-1.5 text-xs"
+              >
+                {locale === "zh" ? "查看日历" : "Open Calendar"}
+              </CalmButton>
+              <CalmButton
+                type="button"
+                onClick={() => void handleSyncAllDrafts()}
+                disabled={isBatchSyncingDrafts}
+                variant="primary"
+                className="px-3 py-1.5 text-xs"
+              >
+                {isBatchSyncingDrafts ? <LoadingSpinner size="sm" /> : null}
+                {locale === "zh" ? "全部写入日历" : "Sync All"}
+              </CalmButton>
+            </div>
           </div>
 
-          <ul className="space-y-2">
-            {displayItems.slice(0, 6).map(renderMailCard)}
-            {displayItems.length === 0 && (
-              <li className="rounded-xl border border-dashed border-zinc-300 px-3 py-5 text-center text-xs text-zinc-500 dark:border-zinc-600 dark:text-zinc-400">
-                {locale === "zh" ? "暂无需要优先处理或等待 Agent 处理的邮件" : "No priority or pending items"}
-              </li>
-            )}
-          </ul>
-        </div>
-
-        {/* 近期日程 */}
-        <div>
-          <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-              {locale === "zh" ? "近期日程 / DDL" : "Upcoming Schedule / DDL"}
-            </h3>
-            <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
-              {upcomingItems.length}
-            </span>
+          <div className="mt-4 grid gap-2 lg:grid-cols-2">
+            {processingResult.calendarDrafts.slice(0, 6).map((draft) => (
+              <div
+                key={getCalendarDraftKey(draft)}
+                className="flex flex-wrap items-start justify-between gap-3 rounded-[1rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] px-3 py-2 shadow-[var(--shadow-inset)]"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-[color:var(--ink)]">{draft.subject}</p>
+                  <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">{draft.dueDateLabel}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <CalmPill tone={draft.type === "ddl" ? "warning" : draft.type === "meeting" ? "info" : draft.type === "exam" ? "urgent" : "muted"}>
+                    {calendarTypeLabels[draft.type]}
+                  </CalmPill>
+                  <button
+                    type="button"
+                    onClick={() => void handleSyncDraft(draft)}
+                    disabled={syncingDraftIds.has(getCalendarDraftKey(draft)) || syncedDraftIds.has(getCalendarDraftKey(draft))}
+                    className="rounded-[999px] border border-[color:var(--border-success)] px-2.5 py-1 text-[11px] font-medium text-[color:var(--pill-success-ink)] transition hover:bg-[color:var(--surface-success)] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {syncingDraftIds.has(getCalendarDraftKey(draft))
+                      ? locale === "zh" ? "写入中..." : "Syncing..."
+                      : syncedDraftIds.has(getCalendarDraftKey(draft))
+                        ? locale === "zh" ? "已写入" : "Synced"
+                        : locale === "zh" ? "写入日历" : "Sync"}
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
 
-          <ul className="space-y-2">
-            {upcomingItems.slice(0, 6).map(renderUpcomingItem)}
-            {upcomingItems.length === 0 && (
-              <li className="rounded-xl border border-dashed border-zinc-300 px-3 py-5 text-center text-xs text-zinc-500 dark:border-zinc-600 dark:text-zinc-400">
-                {locale === "zh" ? "未来 7 天未识别到明确时间事项" : "No dated events detected in the next 7 days"}
-              </li>
-            )}
-          </ul>
+          {processingResult.calendarDrafts.length > 6 ? (
+            <p className="mt-2 text-xs text-[color:var(--ink-subtle)]">
+              {locale === "zh"
+                ? `还剩 ${processingResult.calendarDrafts.length - 6} 项可在日历页继续确认。`
+                : `${processingResult.calendarDrafts.length - 6} more items are available in Calendar view.`}
+            </p>
+          ) : null}
+
+          {draftSyncMessage ? (
+            <p className="mt-3 rounded-[1rem] border border-[color:var(--border-success)] bg-[color:var(--surface-success)] px-3 py-2 text-xs text-[color:var(--ink)]">
+              {draftSyncMessage}
+            </p>
+          ) : null}
+
+          {draftSyncError ? (
+            <p className="mt-3 rounded-[1rem] border border-[color:var(--border-urgent)] bg-[color:var(--surface-urgent)] px-3 py-2 text-xs text-[color:var(--ink)]">
+              {draftSyncError}
+            </p>
+          ) : null}
+        </BentoPanel>
+      ) : null}
+
+      <BentoPanel tone={urgentItems.length > 0 ? "urgent" : "default"} className="lg:col-span-6">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+            {locale === "zh" ? "优先处理" : "Priority Queue"}
+          </h3>
+          <StatusPill tone={urgentItems.length > 0 ? "urgent" : "muted"}>
+            <BellIcon />
+            {urgentItems.length}
+          </StatusPill>
         </div>
-      </section>
-    </div>
+        <ul className="space-y-2">
+          {displayItems.slice(0, 6).map(renderMailCard)}
+          {displayItems.length === 0 && (
+            <li className="rounded-[1rem] border border-dashed border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-3 py-5 text-center text-xs text-[color:var(--ink-subtle)]">
+              {locale === "zh" ? "暂无需要优先处理或等待 Agent 处理的邮件" : "No priority or pending items"}
+            </li>
+          )}
+        </ul>
+      </BentoPanel>
+
+      <BentoPanel tone="default" className="lg:col-span-6">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+            {locale === "zh" ? "近期日程 / DDL" : "Upcoming Schedule / DDL"}
+          </h3>
+          <StatusPill tone="info">{upcomingItems.length}</StatusPill>
+        </div>
+        <ul className="space-y-2">
+          {upcomingItems.slice(0, 6).map(renderUpcomingItem)}
+          {upcomingItems.length === 0 && (
+            <li className="rounded-[1rem] border border-dashed border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-3 py-5 text-center text-xs text-[color:var(--ink-subtle)]">
+              {locale === "zh" ? "未来 7 天未识别到明确时间事项" : "No dated events detected in the next 7 days"}
+            </li>
+          )}
+        </ul>
+      </BentoPanel>
+    </BentoGrid>
   );
 }

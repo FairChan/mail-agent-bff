@@ -9,6 +9,9 @@
 - [ ] `docker compose config` succeeds from `deploy/docker`.
 - [ ] `npm run check` and `npm run build` pass locally or in CI.
 - [ ] Prisma schema validates with `DATABASE_URL` set.
+- [ ] If using the host-based stack, `apps/bff/.env`, the systemd unit, and the Nginx site file all point at the same workspace/domain.
+- [ ] If using the host-based stack, Nginx terminates HTTPS or redirects HTTP to HTTPS before auth/OAuth testing.
+- [ ] If using GitHub Actions deploy, the selected GitHub Environment contains SSH secrets, pinned `SSH_KNOWN_HOSTS`, and `DEPLOY_*` variables.
 
 ## Deploy
 
@@ -17,6 +20,7 @@
 - [ ] `GET /api/live` returns 200.
 - [ ] `GET /api/ready` returns 200.
 - [ ] WebUI loads through Nginx on the public origin.
+- [ ] If using host deploy, `./deploy.sh` completes, `prisma migrate deploy` has run, `systemctl is-active` is green, and the public web root contains the latest `apps/webui/dist` assets.
 
 ## Functional Smoke
 

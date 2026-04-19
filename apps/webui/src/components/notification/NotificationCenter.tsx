@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import type { MailNotificationPollResult } from "@mail-agent/shared-types";
+import { CalmButton, CalmPill, CalmSurface } from "../ui/Calm";
 
 interface NotificationCenterProps {
   warnings?: Array<{ message: string }>;
@@ -87,7 +88,7 @@ export function NotificationCenter({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-300 bg-white text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+        className="relative inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-[color:var(--border-strong)] bg-[color:var(--surface-soft)] text-[color:var(--ink-muted)] transition hover:bg-[color:var(--surface-elevated)] hover:text-[color:var(--ink)]"
         aria-label="通知"
         aria-expanded={open}
       >
@@ -107,71 +108,59 @@ export function NotificationCenter({
       </button>
 
       {open && (
-        <div
+        <CalmSurface
           role="region"
           aria-label="通知中心"
-          className="absolute right-0 top-full z-50 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
+          className="absolute right-0 top-full z-50 mt-2 w-[min(22rem,calc(100vw-2rem))]"
+          beam
         >
-          <div className="flex items-start justify-between gap-3 border-b border-zinc-100 p-3 dark:border-zinc-800">
+          <div className="flex items-start justify-between gap-3 border-b border-[color:var(--border-soft)] p-3">
             <div className="min-w-0">
-              <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">通知</h3>
-              <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{triageLabel}</p>
+              <h3 className="text-sm font-semibold text-[color:var(--ink)]">通知</h3>
+              <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">{triageLabel}</p>
               {snapshot?.generatedAt && (
-                <p className="mt-0.5 text-[11px] text-zinc-400 dark:text-zinc-500">
+                <p className="mt-0.5 text-[11px] text-[color:var(--ink-subtle)]">
                   更新于 {formatDateTime(snapshot.generatedAt)}
                 </p>
               )}
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${streamTone}`}>
-                  {streamLabel}
-                </span>
+                <CalmPill tone={streamStatus === "connected" ? "success" : streamStatus === "error" ? "urgent" : "warning"}>{streamLabel}</CalmPill>
                 {desktopPermission === "granted" ? (
-                  <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
-                    桌面提醒已开启
-                  </span>
+                  <CalmPill tone="muted">桌面提醒已开启</CalmPill>
                 ) : null}
               </div>
             </div>
-            <button
-              type="button"
-              onClick={handleRefresh}
-              disabled={!sourceReady || loading}
-              className="shrink-0 rounded-lg border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300"
-            >
+            <CalmButton type="button" onClick={handleRefresh} disabled={!sourceReady || loading} variant="secondary" className="shrink-0 px-2 py-1 text-xs">
               {loading ? "同步中" : "同步"}
-            </button>
+            </CalmButton>
           </div>
 
-          <div className="max-h-96 overflow-y-auto">
+          <div className="calm-scrollbar max-h-96 overflow-y-auto">
             {!sourceReady ? (
-              <div className="p-4 text-sm text-zinc-500 dark:text-zinc-400">连接邮箱后开始接收提醒。</div>
+              <div className="p-4 text-sm text-[color:var(--ink-subtle)]">连接邮箱后开始接收提醒。</div>
             ) : !hasContent ? (
-              <div className="p-4 text-sm text-zinc-500 dark:text-zinc-400">暂无新的紧急事项。</div>
+              <div className="p-4 text-sm text-[color:var(--ink-subtle)]">暂无新的紧急事项。</div>
             ) : null}
 
             {sourceReady && desktopPermission === "default" && (
-              <div className="border-b border-zinc-100 p-3 dark:border-zinc-800">
-                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              <div className="border-b border-[color:var(--border-soft)] p-3">
+                <p className="text-xs text-[color:var(--ink-subtle)]">
                   允许浏览器桌面提醒后，紧急邮件和每日摘要会在系统通知中即时弹出。
                 </p>
-                <button
-                  type="button"
-                  onClick={handleEnableDesktop}
-                  className="mt-2 rounded-lg border border-zinc-300 px-2.5 py-1.5 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
-                >
+                <CalmButton type="button" onClick={handleEnableDesktop} variant="secondary" className="mt-2 px-2.5 py-1.5 text-xs">
                   启用桌面提醒
-                </button>
+                </CalmButton>
               </div>
             )}
 
             {sourceReady && desktopPermission === "denied" && (
-              <div className="border-b border-zinc-100 p-3 text-xs text-amber-700 dark:border-zinc-800 dark:text-amber-300">
+              <div className="border-b border-[color:var(--border-soft)] p-3 text-xs text-[color:var(--pill-warning-ink)]">
                 浏览器已阻止桌面提醒，请在浏览器权限设置中重新开启。
               </div>
             )}
 
             {streamError && (
-              <div className="border-b border-zinc-100 bg-red-50/80 p-3 text-xs text-red-700 dark:border-zinc-800 dark:bg-red-950/20 dark:text-red-300">
+              <div className="border-b border-[color:var(--border-soft)] bg-[color:var(--surface-urgent)] p-3 text-xs text-[color:var(--pill-urgent-ink)]">
                 {streamError}
               </div>
             )}
@@ -180,38 +169,38 @@ export function NotificationCenter({
               warnings.map((warning, index) => (
                 <div
                   key={`warning-${index}`}
-                  className="flex items-start gap-2 border-b border-amber-100 bg-amber-50 p-3 dark:border-amber-900/50 dark:bg-amber-950/20"
+                  className="flex items-start gap-2 border-b border-[color:var(--border-warning)] bg-[color:var(--surface-warning)] p-3"
                 >
                   <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-amber-500" />
-                  <p className="min-w-0 text-sm text-amber-900 dark:text-amber-100">{warning.message}</p>
+                  <p className="min-w-0 text-sm text-[color:var(--pill-warning-ink)]">{warning.message}</p>
                 </div>
               ))}
 
             {urgentItems.map((item) => (
-              <div key={item.messageId} className="border-b border-zinc-100 p-3 dark:border-zinc-800">
+              <div key={item.messageId} className="border-b border-[color:var(--border-soft)] p-3">
                 <div className="flex items-start gap-2">
                   <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-red-600" />
                   <div className="min-w-0">
-                    <p className="text-[11px] font-semibold text-red-700 dark:text-red-300">紧急重要</p>
+                    <p className="text-[11px] font-semibold text-[color:var(--pill-urgent-ink)]">紧急重要</p>
                     {item.webLink ? (
                       <a
                         href={item.webLink}
                         target="_blank"
                         rel="noreferrer"
-                        className="mt-1 block break-words text-sm font-semibold text-zinc-900 hover:underline dark:text-zinc-100"
+                        className="mt-1 block break-words text-sm font-semibold text-[color:var(--ink)] hover:underline"
                       >
                         {item.subject || "无主题邮件"}
                       </a>
                     ) : (
-                      <p className="mt-1 break-words text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                      <p className="mt-1 break-words text-sm font-semibold text-[color:var(--ink)]">
                         {item.subject || "无主题邮件"}
                       </p>
                     )}
-                    <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                    <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">
                       {item.fromName || item.fromAddress || "未知发件人"} · {formatDateTime(item.receivedDateTime)}
                     </p>
                     {item.reasons.length > 0 && (
-                      <p className="mt-2 break-words text-xs text-zinc-600 dark:text-zinc-300">
+                      <p className="mt-2 break-words text-xs text-[color:var(--ink-muted)]">
                         {item.reasons.join(" · ")}
                       </p>
                     )}
@@ -222,17 +211,17 @@ export function NotificationCenter({
 
             {digest && (
               <div className="p-3">
-                <p className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-300">每日摘要</p>
-                <p className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                <p className="text-[11px] font-semibold text-[color:var(--pill-success-ink)]">每日摘要</p>
+                <p className="mt-1 text-sm font-semibold text-[color:var(--ink)]">
                   今天 {digest.digest.total} 封邮件，{digest.digest.urgentImportant} 封紧急重要
                 </p>
-                <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">
                   未读 {digest.digest.unread} · 高优先级 {digest.digest.highImportance} · 近期事项 {digest.digest.upcomingCount}
                 </p>
                 {(digest.tomorrowDdl.length > 0 || digest.upcoming.length > 0) && (
                   <ul className="mt-2 space-y-1">
                     {[...digest.tomorrowDdl, ...digest.upcoming].slice(0, 4).map((item) => (
-                      <li key={`${item.messageId}-${item.dueDateLabel}`} className="break-words text-xs text-zinc-600 dark:text-zinc-300">
+                      <li key={`${item.messageId}-${item.dueDateLabel}`} className="break-words text-xs text-[color:var(--ink-muted)]">
                         {item.subject} · {item.dueDateLabel}
                       </li>
                     ))}
@@ -241,7 +230,7 @@ export function NotificationCenter({
               </div>
             )}
           </div>
-        </div>
+        </CalmSurface>
       )}
       {children}
     </div>

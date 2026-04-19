@@ -16,6 +16,7 @@
     "@mail-agent/shared-types": "*",
     "dompurify": "^3.2.6",
     "i18next": "^24.2.3",
+    "motion": "^12.38.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-i18next": "^15.4.1",

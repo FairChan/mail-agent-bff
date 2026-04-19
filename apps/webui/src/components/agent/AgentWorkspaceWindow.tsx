@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../../contexts/AuthContext";
 import { useMail } from "../../contexts/MailContext";
 import MailKBSummaryModal from "../dashboard/MailKBSummaryModal";
+import { CalmAnimatedList, CalmButton, CalmPill, CalmSurface } from "../ui/Calm";
 import { buildDashboardUrl, getRequestedAgentSourceId, updateAgentWindowSource } from "../../utils/agentWindow";
 import { useAgentConversation } from "./useAgentConversation";
 
@@ -202,15 +203,15 @@ export function AgentWorkspaceWindow({ apiBase, embedded = false }: AgentWorkspa
   };
 
   return (
-    <div className={`flex flex-col overflow-hidden bg-zinc-950 text-zinc-100 ${embedded ? "min-h-[calc(100vh-8rem)] rounded-xl border border-zinc-800" : "h-screen"}`}>
-      <header className="border-b border-zinc-800 bg-zinc-950/95 px-5 py-4 backdrop-blur sm:px-6">
+    <div className={`flex flex-col overflow-hidden text-[color:var(--ink)] ${embedded ? "min-h-[calc(100vh-8rem)] rounded-[1.6rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-base)]" : "h-screen bg-transparent"}`}>
+      <header className="border-b border-[color:var(--border-soft)] bg-[color:var(--surface-base)] px-5 py-4 backdrop-blur sm:px-6">
         <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-4">
           <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--ink-subtle)]">
               Agent Window
             </p>
-            <h1 className="mt-1 text-xl font-semibold text-white">Mail Copilot</h1>
-            <p className="mt-1 truncate text-sm text-zinc-400">
+            <h1 className="mt-1 text-xl font-semibold text-[color:var(--ink)]">Mail Copilot</h1>
+            <p className="mt-1 truncate text-sm text-[color:var(--ink-muted)]">
               {user?.displayName || user?.email || "Signed-in user"} · {activeSource?.name || activeSource?.emailHint || "No mailbox selected"}
             </p>
           </div>
@@ -219,32 +220,28 @@ export function AgentWorkspaceWindow({ apiBase, embedded = false }: AgentWorkspa
             {!embedded ? (
               <a
                 href={buildDashboardUrl()}
-                className="inline-flex h-10 items-center justify-center rounded-lg border border-zinc-700 px-4 text-sm font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900"
+                className="inline-flex h-10 items-center justify-center rounded-full border border-[color:var(--border-soft)] px-4 text-sm font-medium text-[color:var(--ink-muted)] transition hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--ink)]"
               >
                 Back to dashboard
               </a>
             ) : null}
-            <button
-              type="button"
-              onClick={handleNewThread}
-              className="inline-flex h-10 items-center justify-center rounded-lg border border-zinc-700 px-4 text-sm font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900"
-            >
+            <CalmButton type="button" onClick={handleNewThread} variant="secondary">
               New thread
-            </button>
+            </CalmButton>
           </div>
         </div>
       </header>
 
       <main className="flex flex-1 overflow-hidden">
-        <aside className="hidden w-80 shrink-0 border-r border-zinc-800 bg-zinc-950/60 lg:flex lg:flex-col">
-          <div className="border-b border-zinc-800 px-5 py-5">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Mailbox</p>
+        <aside className="hidden w-80 shrink-0 border-r border-[color:var(--border-soft)] bg-[color:var(--surface-muted)]/60 lg:flex lg:flex-col">
+          <div className="border-b border-[color:var(--border-soft)] px-5 py-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--ink-subtle)]">Mailbox</p>
             <div className="mt-3 space-y-3">
               <select
                 value={activeSourceId ?? ""}
                 onChange={handleSourceChange}
                 disabled={isLoadingSources || sources.length === 0}
-                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none transition focus:border-zinc-500"
+                className="calm-input w-full px-3 py-2 text-sm"
               >
                 {sources.length === 0 ? (
                   <option value="">No mailbox source</option>
@@ -257,99 +254,90 @@ export function AgentWorkspaceWindow({ apiBase, embedded = false }: AgentWorkspa
                 )}
               </select>
 
-              <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3 text-sm text-zinc-300">
-                <p className="font-medium text-zinc-100">
+              <CalmSurface className="p-3 text-sm" tone={activeSource?.ready ? "info" : "warning"}>
+                <p className="font-medium text-[color:var(--ink)]">
                   {activeSource?.ready ? "Mailbox ready" : "Mailbox needs verification"}
                 </p>
-                <p className="mt-1 text-xs text-zinc-400">
+                <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">
                   {activeSource?.ready
                     ? "The agent can search and read messages from this source."
                     : "Run verification before asking mailbox questions if the source was just connected."}
                 </p>
                 {!activeSource?.ready && activeSourceId && (
-                  <button
-                    type="button"
-                    onClick={handleVerifySource}
-                    disabled={isVerifying}
-                    className="mt-3 inline-flex h-9 items-center justify-center rounded-lg bg-white px-3 text-sm font-medium text-zinc-950 transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:bg-zinc-500"
-                  >
+                  <CalmButton type="button" onClick={handleVerifySource} disabled={isVerifying} className="mt-3">
                     {isVerifying ? "Verifying" : "Verify mailbox"}
-                  </button>
+                  </CalmButton>
                 )}
                 {verifyMessage && (
-                  <p className="mt-2 text-xs text-zinc-400">{verifyMessage}</p>
+                  <p className="mt-2 text-xs text-[color:var(--ink-subtle)]">{verifyMessage}</p>
                 )}
-              </div>
+              </CalmSurface>
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-5 py-5">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Capabilities</p>
-            <div className="mt-3 space-y-2">
+          <div className="calm-scrollbar flex-1 overflow-y-auto px-5 py-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--ink-subtle)]">Capabilities</p>
+            <CalmAnimatedList className="mt-3">
               {skillsError && (
-                <p className="rounded-lg border border-rose-900/60 bg-rose-950/50 px-3 py-2 text-xs text-rose-200">
+                <p className="rounded-[1rem] border border-[color:var(--border-urgent)] bg-[color:var(--surface-urgent)] px-3 py-2 text-xs text-[color:var(--pill-urgent-ink)]">
                   {skillsError}
                 </p>
               )}
               {skills.slice(0, 12).map((skill) => (
-                <div key={skill.id} className="rounded-lg border border-zinc-800 bg-zinc-900/70 px-3 py-3">
-                  <p className="text-sm font-medium text-zinc-100">{skill.name}</p>
-                  <p className="mt-1 text-xs leading-5 text-zinc-400">{skill.description}</p>
-                </div>
+                <CalmSurface key={skill.id} className="px-3 py-3" tone="muted">
+                  <p className="text-sm font-medium text-[color:var(--ink)]">{skill.name}</p>
+                  <p className="mt-1 text-xs leading-5 text-[color:var(--ink-subtle)]">{skill.description}</p>
+                </CalmSurface>
               ))}
-            </div>
+            </CalmAnimatedList>
           </div>
 
-          <div className="border-t border-zinc-800 px-5 py-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Live activity</p>
-            <div className="mt-3 space-y-2">
+          <div className="border-t border-[color:var(--border-soft)] px-5 py-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--ink-subtle)]">Live activity</p>
+            <CalmAnimatedList className="mt-3">
               {activities.length === 0 ? (
-                <p className="text-xs text-zinc-500">Tool activity from the agent will appear here.</p>
+                <p className="text-xs text-[color:var(--ink-subtle)]">Tool activity from the agent will appear here.</p>
               ) : (
                 activities.slice(0, 6).map((activity) => (
-                  <div key={activity.id} className="rounded-lg border border-zinc-800 bg-zinc-900/70 px-3 py-2">
+                  <CalmSurface key={activity.id} className="px-3 py-2" tone="muted">
                     <div className="flex items-center justify-between gap-2">
-                      <p className="text-sm font-medium text-zinc-100">{activity.tool}</p>
-                      <span className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">
+                      <p className="text-sm font-medium text-[color:var(--ink)]">{activity.tool}</p>
+                      <CalmPill tone={activity.status === "completed" ? "success" : "info"}>
                         {activity.status}
-                      </span>
+                      </CalmPill>
                     </div>
-                    <p className="mt-1 text-xs text-zinc-500">{formatActivityTime(activity.at)}</p>
-                  </div>
+                    <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">{formatActivityTime(activity.at)}</p>
+                  </CalmSurface>
                 ))
               )}
-            </div>
+            </CalmAnimatedList>
 
             {knowledgeBaseJobId && (
-              <div className="mt-4 rounded-lg border border-emerald-800/70 bg-emerald-950/40 px-3 py-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-300">
+              <CalmSurface className="mt-4 px-3 py-3" tone="success">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[color:var(--pill-success-ink)]">
                   History Backfill
                 </p>
-                <p className="mt-2 text-sm text-emerald-100">
+                <p className="mt-2 text-sm text-[color:var(--ink)]">
                   The agent started the historical mailbox summarization pipeline.
                 </p>
-                <p className="mt-1 break-all text-xs text-emerald-300/80">{knowledgeBaseJobId}</p>
-                <button
-                  type="button"
-                  onClick={() => setShowKnowledgeBaseModal(true)}
-                  className="mt-3 inline-flex h-9 items-center justify-center rounded-lg border border-emerald-700 px-3 text-sm font-medium text-emerald-100 transition hover:border-emerald-500 hover:bg-emerald-900/50"
-                >
+                <p className="mt-1 break-all text-xs text-[color:var(--ink-subtle)]">{knowledgeBaseJobId}</p>
+                <CalmButton type="button" onClick={() => setShowKnowledgeBaseModal(true)} variant="secondary" className="mt-3">
                   Open live progress
-                </button>
-              </div>
+                </CalmButton>
+              </CalmSurface>
             )}
           </div>
         </aside>
 
-        <section className="flex min-w-0 flex-1 flex-col bg-zinc-950">
-          <div className="border-b border-zinc-800 px-5 py-4 sm:px-6">
+        <section className="flex min-w-0 flex-1 flex-col bg-transparent">
+          <div className="border-b border-[color:var(--border-soft)] px-5 py-4 sm:px-6">
             <div className="mx-auto w-full max-w-4xl">
               <div className="mb-3 grid gap-3 lg:hidden">
                 <select
                   value={activeSourceId ?? ""}
                   onChange={handleSourceChange}
                   disabled={isLoadingSources || sources.length === 0}
-                  className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none transition focus:border-zinc-500"
+                  className="calm-input w-full px-3 py-2 text-sm"
                 >
                   {sources.length === 0 ? (
                     <option value="">No mailbox source</option>
@@ -362,14 +350,9 @@ export function AgentWorkspaceWindow({ apiBase, embedded = false }: AgentWorkspa
                   )}
                 </select>
                 {!activeSource?.ready && activeSourceId && (
-                  <button
-                    type="button"
-                    onClick={handleVerifySource}
-                    disabled={isVerifying}
-                    className="inline-flex h-10 items-center justify-center rounded-lg border border-zinc-700 px-4 text-sm font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
+                  <CalmButton type="button" onClick={handleVerifySource} disabled={isVerifying} variant="secondary">
                     {isVerifying ? "Verifying mailbox" : "Verify mailbox"}
-                  </button>
+                  </CalmButton>
                 )}
               </div>
 
@@ -382,7 +365,7 @@ export function AgentWorkspaceWindow({ apiBase, embedded = false }: AgentWorkspa
                     void handleSuggestion(suggestion);
                   }}
                   disabled={busy || !canChat}
-                  className="rounded-lg border border-zinc-700 px-3 py-2 text-left text-sm text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-full border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-3 py-2 text-left text-sm text-[color:var(--ink-muted)] transition hover:bg-[color:var(--surface-elevated)] hover:text-[color:var(--ink)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {suggestion}
                 </button>
@@ -391,15 +374,15 @@ export function AgentWorkspaceWindow({ apiBase, embedded = false }: AgentWorkspa
             </div>
           </div>
 
-          <div ref={transcriptRef} className="flex-1 overflow-y-auto px-5 py-6 sm:px-6">
+          <div ref={transcriptRef} className="calm-scrollbar flex-1 overflow-y-auto px-5 py-6 sm:px-6">
             <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
               {messages.map((message) => (
                 <div
                   key={message.id}
-                  className={`max-w-[min(90%,52rem)] rounded-lg px-4 py-3 text-sm leading-7 ${
+                  className={`max-w-[min(90%,52rem)] rounded-[1.2rem] px-4 py-3 text-sm leading-7 shadow-[var(--shadow-soft)] ${
                     message.role === "user"
-                      ? "ml-auto bg-white text-zinc-950"
-                      : "border border-zinc-800 bg-zinc-900 text-zinc-100"
+                      ? "ml-auto bg-[color:var(--button-primary)] text-[color:var(--button-primary-ink)]"
+                      : "border border-[color:var(--border-strong)] bg-[color:var(--surface-elevated)] text-[color:var(--ink)]"
                   }`}
                 >
                   <p className="whitespace-pre-wrap">{message.content || (busy ? "Thinking..." : "")}</p>
@@ -408,10 +391,10 @@ export function AgentWorkspaceWindow({ apiBase, embedded = false }: AgentWorkspa
             </div>
           </div>
 
-          <div className="border-t border-zinc-800 bg-zinc-950/95 px-5 py-4 sm:px-6">
+          <div className="border-t border-[color:var(--border-soft)] bg-[color:var(--surface-base)] px-5 py-4 sm:px-6">
             <div className="mx-auto w-full max-w-4xl">
               {!canChat && (
-                <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                <div className="mb-3 rounded-[1.1rem] border border-[color:var(--border-warning)] bg-[color:var(--surface-warning)] px-4 py-3 text-sm text-[color:var(--pill-warning-ink)]">
                   {activeSourceId
                     ? "This mailbox is not ready yet. Verify the source before sending questions."
                     : "Connect and select a mailbox source first."}
@@ -419,7 +402,7 @@ export function AgentWorkspaceWindow({ apiBase, embedded = false }: AgentWorkspa
               )}
 
               {error && (
-                <div className="mb-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                <div className="mb-3 rounded-[1.1rem] border border-[color:var(--border-urgent)] bg-[color:var(--surface-urgent)] px-4 py-3 text-sm text-[color:var(--pill-urgent-ink)]">
                   {error}
                 </div>
               )}
@@ -433,7 +416,7 @@ export function AgentWorkspaceWindow({ apiBase, embedded = false }: AgentWorkspa
                   value={input}
                   onChange={(event) => setInput(event.target.value)}
                   disabled={busy || !canChat}
-                  className="min-h-32 w-full resize-none rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 outline-none transition focus:border-zinc-500"
+                  className="calm-input min-h-32 w-full resize-none px-4 py-3 text-sm"
                   placeholder={
                     canChat
                       ? "Ask anything about your mail: deadlines, meetings, sender history, action items, old-mail backfills, or message details."
@@ -442,27 +425,19 @@ export function AgentWorkspaceWindow({ apiBase, embedded = false }: AgentWorkspa
                 />
 
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-xs text-zinc-500">
+                  <p className="text-xs text-[color:var(--ink-subtle)]">
                     The agent uses your current mailbox source, can trigger a historical backfill, and keeps thread context inside this window.
                   </p>
 
                   <div className="flex items-center gap-2">
                     {busy && (
-                      <button
-                        type="button"
-                        onClick={cancel}
-                        className="inline-flex h-10 items-center justify-center rounded-lg border border-zinc-700 px-4 text-sm font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-900"
-                      >
+                      <CalmButton type="button" onClick={cancel} variant="secondary">
                         Cancel
-                      </button>
+                      </CalmButton>
                     )}
-                    <button
-                      type="submit"
-                      disabled={busy || !input.trim() || !canChat}
-                      className="inline-flex h-10 items-center justify-center rounded-lg bg-white px-5 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:bg-zinc-500"
-                    >
+                    <CalmButton type="submit" disabled={busy || !input.trim() || !canChat} variant="primary">
                       {busy ? "Thinking" : "Send to agent"}
-                    </button>
+                    </CalmButton>
                   </div>
                 </div>
               </form>

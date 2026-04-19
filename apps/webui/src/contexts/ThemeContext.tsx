@@ -31,6 +31,17 @@ function resolveTheme(theme: Theme): ResolvedTheme {
   return theme;
 }
 
+function applyResolvedTheme(resolvedTheme: ResolvedTheme) {
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  const root = document.documentElement;
+  root.classList.remove("light", "dark");
+  root.classList.add(resolvedTheme);
+  document.body.setAttribute("data-theme", resolvedTheme);
+}
+
 interface ThemeProviderProps {
   children: React.ReactNode;
 }
@@ -45,12 +56,7 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() => resolveTheme(theme));
 
   useEffect(() => {
-    const root = document.documentElement;
-
-    root.classList.remove("light", "dark");
-    root.classList.add(resolvedTheme);
-
-    document.body.setAttribute("data-theme", resolvedTheme);
+    applyResolvedTheme(resolvedTheme);
   }, [resolvedTheme]);
 
   useEffect(() => {
@@ -67,8 +73,10 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
   }, [theme]);
 
   const setTheme = useCallback((newTheme: Theme) => {
+    const nextResolvedTheme = resolveTheme(newTheme);
     setThemeState(newTheme);
-    setResolvedTheme(resolveTheme(newTheme));
+    setResolvedTheme(nextResolvedTheme);
+    applyResolvedTheme(nextResolvedTheme);
     localStorage.setItem(STORAGE_KEY, newTheme);
   }, []);
 

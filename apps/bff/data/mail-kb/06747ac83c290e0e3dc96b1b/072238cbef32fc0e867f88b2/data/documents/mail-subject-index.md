@@ -1,9 +1,13 @@
 # 邮件题目索引（题目 + 标识码）
 
-生成时间：2026-04-19T06:57:44.804Z
+生成时间：2026-04-19T12:31:35.542Z
 
 | 标识码 | 题目 | 接收时间 | 知识卡片 |
 | --- | --- | --- | --- |
+| MSG_35jya4 | \[Binance\] Login Attempted from New IP address 27\.125\.242\.30 \- 2026\-04\-19 11:43:01\(UTC\) | 2026-04-19T11:43:06.000Z | 否 |
+| MSG_1orlyl8 | Clearance Bonanza: Treat Yourself\! | 2026-04-19T10:15:56.000Z | 否 |
+| MSG_1fn9qiz | \[FairChan/mail\-agent\-bff\] Run failed: CI \- master \(b352688\) | 2026-04-19T06:59:16.000Z | 否 |
+| MSG_1287ouz | \[FairChan/mail\-agent\-bff\] Run failed: \.github/workflows/codeql\.yml \- master \(b352688\) | 2026-04-19T06:58:24.000Z | 否 |
 | MSG_ftnmm6 | Your Decathlon Account Creation | 2026-04-19T06:04:20.000Z | 否 |
 | MSG_t8poa6 | \[FairChan/mail\-agent\-bff\] Run failed: Load Tests \- master \(779cc63\) | 2026-04-19T06:02:31.000Z | 否 |
 | MSG_h80mzc | \[FairChan/mail\-agent\-bff\] Run failed: Security Scan \- master \(779cc63\) | 2026-04-19T05:31:14.000Z | 否 |

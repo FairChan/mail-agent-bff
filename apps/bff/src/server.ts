@@ -50,6 +50,16 @@ import { getPrismaClient, isPrismaUniqueConstraintError } from "./persistence.js
 import { createRedisAuthSessionStore } from "./redis-session-store.js";
 import { getDefaultMemoryStore, type AgentMemoryRecord } from "./runtime/memory-store.js";
 import {
+  appendTenantAuditEvent,
+  hashNetworkIdentifier,
+  personalTenantIdForUser,
+  publicMailKbArtifactPath,
+  readTenantAuditEvents,
+  stableScopeHash,
+  tenantScopedRouteKey,
+  type PersistedTenantAuditEvent,
+} from "./tenant-isolation.js";
+import {
   answerMailQuestion,
   buildMailInsights,
   createCalendarEventFromInsight,
@@ -1429,11 +1439,95 @@ function isSessionActiveWithoutTouch(sessionToken: string, now: number): boolean
 }
 
 function scopedRouteKey(base: string, sessionToken: string | null): string {
-  if (!sessionToken) {
-    return `${base}:anon`;
+  const userId = sessionToken ? getUserIdForSessionToken(sessionToken) : null;
+  return tenantScopedRouteKey({
+    base,
+    sessionToken,
+    userId,
+  });
+}
+
+function tenantIdForUser(userId: string): string {
+  return personalTenantIdForUser(userId);
+}
+
+function auditTenantEvent(
+  request: FastifyRequest,
+  input: {
+    userId: string;
+    sourceId?: string | null;
+    sessionToken?: string | null;
+    action: string;
+    resourceType: string;
+    resourceId?: string | null;
+    outcome?: "success" | "failure" | "denied";
+    metadata?: Record<string, unknown>;
+  }
+) {
+  const persisted = appendTenantAuditEvent(
+    {
+      tenantId: tenantIdForUser(input.userId),
+      actorUserId: input.userId,
+      sourceId: input.sourceId ?? null,
+      action: input.action,
+      resourceType: input.resourceType,
+      resourceId: input.resourceId ?? null,
+      outcome: input.outcome ?? "success",
+      requestId: request.id,
+      ipHash: hashNetworkIdentifier(request.ip),
+      userAgentHash: hashNetworkIdentifier(request.headers["user-agent"]?.toString()),
+      sessionHash: input.sessionToken ? stableScopeHash(`session:${input.sessionToken}`, 20) : null,
+      ...(input.metadata ? { metadata: input.metadata } : {}),
+    },
+    server.log
+  );
+  if (persisted) {
+    void mirrorTenantAuditEventToPrisma(persisted);
+  }
+}
+
+async function mirrorTenantAuditEventToPrisma(event: PersistedTenantAuditEvent): Promise<void> {
+  let prisma: any = null;
+  try {
+    prisma = (await getPrismaClient(server.log)) as any;
+  } catch {
+    return;
   }
 
-  return `${base}:${sessionToken.slice(0, 16)}`;
+  if (!prisma?.auditLog?.create) {
+    return;
+  }
+
+  try {
+    await prisma.auditLog.create({
+      data: {
+        id: event.id,
+        tenantId: event.tenantId,
+        userId: event.actorUserId ?? null,
+        sourceId: event.sourceId ?? null,
+        action: event.action,
+        resourceType: event.resourceType,
+        resourceId: event.resourceId ?? null,
+        outcome: event.outcome,
+        requestId: event.requestId ?? null,
+        ipHash: event.ipHash ?? null,
+        userAgentHash: event.userAgentHash ?? null,
+        sessionHash: event.sessionHash ?? null,
+        metadataJson: event.metadata ? JSON.stringify(event.metadata) : null,
+        createdAt: new Date(event.at),
+      },
+    });
+  } catch (error) {
+    server.log.warn(
+      {
+        tenantId: event.tenantId,
+        action: event.action,
+        resourceType: event.resourceType,
+        message: error instanceof Error ? error.message : String(error),
+      },
+      "Tenant audit log database mirror failed"
+    );
+  }
 }
 
 function resolveAllowedToolName(candidate: string): string | null {
@@ -2743,6 +2837,7 @@ async function summarizeRecordsWithLlmGateway(
   const tenant: TenantContext | null = userId
     ? {
         ...buildMailSourceContext(sessionToken, sourceId),
+        tenantId: tenantIdForUser(userId),
         userId,
         sessionToken,
         sourceId,
@@ -3438,6 +3533,7 @@ function buildTenantContextForRequest(
   const sourceContext = buildMailSourceContext(sessionToken, sourceId);
   return {
     ...sourceContext,
+    tenantId: tenantIdForUser(userId),
     userId,
     sessionToken,
     sourceId,
@@ -3463,6 +3559,7 @@ function buildTenantContextForSession(
   const sourceContext = buildMailSourceContext(sessionToken, sourceId);
   return {
     ...sourceContext,
+    tenantId: tenantIdForUser(userId),
     userId,
     sessionToken,
     sourceId,
@@ -4826,6 +4923,7 @@ function buildDurableTenantContext(
   }
 
   return {
+    tenantId: tenantIdForUser(userId),
     userId,
     sourceId: source.id,
     sessionToken: durableSessionTokenForSource(userId, source.id),
@@ -7061,6 +7159,14 @@ server.post("/api/auth/login", async (request, reply) => {
     userId: user.id,
   });
   reply.header("Set-Cookie", buildSessionCookie(sessionToken, maxAgeSeconds, secureCookie));
+  auditTenantEvent(request, {
+    userId: user.id,
+    sessionToken,
+    action: "auth.login",
+    resourceType: "session",
+    resourceId: stableScopeHash(`session:${sessionToken}`, 20),
+    metadata: { remember },
+  });
 
   return {
     user: toAuthUserView(user),
@@ -7071,6 +7177,7 @@ server.post("/api/auth/logout", async (request, reply) => {
   const now = Date.now();
   maybePurgeExpiredSessions(now);
   const token = getSessionToken(request.headers.cookie);
+  const userId = token ? getUserIdForSessionToken(token) : null;
   const secureCookie = shouldUseSecureCookie(request);
   if (token) {
     const sessionTtlMs = await resolveSessionTtlMsForToken(token, now);
@@ -7089,6 +7196,15 @@ server.post("/api/auth/logout", async (request, reply) => {
   }
 
   reply.header("Set-Cookie", clearSessionCookie(secureCookie));
+  if (userId) {
+    auditTenantEvent(request, {
+      userId,
+      sessionToken: token,
+      action: "auth.logout",
+      resourceType: "session",
+      resourceId: token ? stableScopeHash(`session:${token}`, 20) : null,
+    });
+  }
   return {
     ok: true,
   };
@@ -7099,6 +7215,52 @@ server.get("/api/meta", async () => {
     ok: true,
     agentId: env.OPENCLAW_AGENT_ID,
     allowedTools: Array.from(env.allowedTools),
+  };
+});
+
+server.get("/api/security/audit-log", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  if (!sessionToken) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+      errorCode: "UNAUTHORIZED",
+    };
+  }
+
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId || userId.startsWith("legacy:")) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+      errorCode: "UNAUTHORIZED",
+    };
+  }
+
+  const parsed = z
+    .object({
+      limit: z.coerce.number().int().min(1).max(500).default(100),
+    })
+    .safeParse(request.query ?? {});
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid query parameters",
+      details: parsed.error.issues,
+    };
+  }
+
+  const tenantId = tenantIdForUser(userId);
+  const events = readTenantAuditEvents(tenantId, parsed.data.limit);
+  return {
+    ok: true,
+    result: {
+      tenantId,
+      events,
+    },
   };
 });
 
@@ -7213,6 +7375,18 @@ server.post("/api/mail/sources", async (request, reply) => {
         },
       });
     }
+    auditTenantEvent(request, {
+      userId,
+      sourceId: result.source.id,
+      sessionToken,
+      action: "mail_source.create",
+      resourceType: "mail_source",
+      resourceId: result.source.id,
+      metadata: {
+        provider: result.source.provider,
+        connectionType: result.source.connectionType,
+      },
+    });
 
     return {
       ok: true,
@@ -7323,6 +7497,19 @@ server.post("/api/mail/sources/update", async (request, reply) => {
           });
         }
       }
+      auditTenantEvent(request, {
+        userId,
+        sourceId: result.source.id,
+        sessionToken,
+        action: "mail_source.update",
+        resourceType: "mail_source",
+        resourceId: result.source.id,
+        metadata: {
+          provider: result.source.provider,
+          connectionType: result.source.connectionType,
+          enabled: result.source.enabled,
+        },
+      });
       return {
         ok: true,
         result: {
@@ -7426,6 +7613,18 @@ server.post("/api/mail/sources/delete", async (request, reply) => {
           },
         });
       }
+      auditTenantEvent(request, {
+        userId,
+        sourceId: parsed.data.id,
+        sessionToken,
+        action: "mail_source.delete",
+        resourceType: "mail_source",
+        resourceId: parsed.data.id,
+        metadata: {
+          provider: existing?.provider,
+          connectionType: existing?.connectionType,
+        },
+      });
       return {
         ok: true,
         result: {
@@ -7527,6 +7726,14 @@ server.post("/api/mail/sources/select", async (request, reply) => {
   try {
     await mailSourceService.selectForUser(userId, resolved.sourceId);
     await hydrateMailSourcesForSession(sessionToken);
+    auditTenantEvent(request, {
+      userId,
+      sourceId: resolved.sourceId,
+      sessionToken,
+      action: "mail_source.select",
+      resourceType: "mail_source",
+      resourceId: resolved.sourceId,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     reply.status(message === "MAIL_SOURCE_NOT_FOUND" ? 404 : 502);
@@ -7592,6 +7799,24 @@ server.post("/api/mail/sources/verify", async (request, reply) => {
 
   try {
     const routingStatus = await verifySourceRoutingForSession(sessionToken, sourceId);
+    const userId = getUserIdForSessionToken(sessionToken);
+    if (userId) {
+      auditTenantEvent(request, {
+        userId,
+        sourceId,
+        sessionToken,
+        action: "mail_source.verify",
+        resourceType: "mail_source",
+        resourceId: sourceId,
+        outcome: routingStatus.routingVerified && !routingStatus.failFast ? "success" : "failure",
+        metadata: {
+          routingVerified: routingStatus.routingVerified,
+          failFast: routingStatus.failFast,
+          mailboxVerified: routingStatus.mailbox.verified,
+          connectedAccountVerified: routingStatus.connectedAccount.verified,
+        },
+      });
+    }
     return {
       ok: true,
       result: {
@@ -7823,6 +8048,22 @@ server.get("/api/mail/connections/outlook/direct/callback", async (request, repl
       completed.sessionToken,
       completed.account.accountId
     );
+    const userId = getUserIdForSessionToken(completed.sessionToken);
+    if (userId) {
+      auditTenantEvent(request, {
+        userId,
+        sourceId: sourceResult.source.id,
+        sessionToken: completed.sessionToken,
+        action: "microsoft_outlook.connect",
+        resourceType: "mail_source",
+        resourceId: sourceResult.source.id,
+        metadata: {
+          accountId: completed.account.accountId,
+          mailboxUserIdHint: completed.account.mailboxUserIdHint,
+          ready: sourceResult.ready,
+        },
+      });
+    }
     return htmlReply({
       ok: true,
       appOrigin: completed.appOrigin,
@@ -8492,6 +8733,21 @@ server.post("/api/mail/sources/auto-connect/outlook", async (request, reply) => 
       await mailSourceService.selectForUser(userId, sourceResult.source.id);
       await hydrateMailSourcesForSession(sessionToken);
     }
+    auditTenantEvent(request, {
+      userId,
+      sourceId: sourceResult.source.id,
+      sessionToken,
+      action: created ? "composio_outlook_source.create" : "composio_outlook_source.update",
+      resourceType: "mail_source",
+      resourceId: sourceResult.source.id,
+      outcome: ready ? "success" : "failure",
+      metadata: {
+        ready,
+        autoSelect,
+        connectionStatus: connection.status,
+        phase: ready ? "ready" : "verification_failed",
+      },
+    });
 
     return {
       ok: true,
@@ -8689,6 +8945,22 @@ server.post("/api/mail/priority-rules", async (request, reply) => {
 
   setLruEntry(ruleStore, id, rule);
   enforceMapLimit(ruleStore, maxPriorityRuleEntriesPerSession);
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (userId) {
+    auditTenantEvent(request, {
+      userId,
+      sourceId,
+      sessionToken,
+      action: "priority_rule.create",
+      resourceType: "priority_rule",
+      resourceId: id,
+      metadata: {
+        field: rule.field,
+        quadrant: rule.quadrant,
+        enabled: rule.enabled,
+      },
+    });
+  }
 
   return {
     ok: true,
@@ -8783,6 +9055,22 @@ server.post("/api/mail/priority-rules/update", async (request, reply) => {
 
   ruleStore.set(parsed.data.id, next);
   enforceMapLimit(ruleStore, maxPriorityRuleEntriesPerSession);
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (userId) {
+    auditTenantEvent(request, {
+      userId,
+      sourceId,
+      sessionToken,
+      action: "priority_rule.update",
+      resourceType: "priority_rule",
+      resourceId: next.id,
+      metadata: {
+        field: next.field,
+        quadrant: next.quadrant,
+        enabled: next.enabled,
+      },
+    });
+  }
 
   return {
     ok: true,
@@ -8846,6 +9134,17 @@ server.post("/api/mail/priority-rules/delete", async (request, reply) => {
       ok: false,
       error: "Priority rule not found",
     };
+  }
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (userId) {
+    auditTenantEvent(request, {
+      userId,
+      sourceId,
+      sessionToken,
+      action: "priority_rule.delete",
+      resourceType: "priority_rule",
+      resourceId: parsed.data.id,
+    });
   }
 
   return {
@@ -9001,6 +9300,24 @@ server.post("/api/mail/notifications/preferences", async (request, reply) => {
 
   notificationPrefsBySession.set(sourceScopedSessionKey(sessionToken, sourceId), next);
   enforceMapLimit(notificationPrefsBySession, maxNotificationSessionEntries);
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (userId) {
+    auditTenantEvent(request, {
+      userId,
+      sourceId,
+      sessionToken,
+      action: "notification_preferences.update",
+      resourceType: "mail_source",
+      resourceId: sourceId,
+      metadata: {
+        urgentPushEnabled: next.urgentPushEnabled,
+        dailyDigestEnabled: next.dailyDigestEnabled,
+        digestHour: next.digestHour,
+        digestMinute: next.digestMinute,
+        digestTimeZone: next.digestTimeZone,
+      },
+    });
+  }
 
   const state = getNotificationStateBySession(sessionToken, sourceId, true);
   return {
@@ -11210,6 +11527,15 @@ server.post("/api/mail-kb/knowledge-card", async (request, reply) => {
       errorCode: "MAIL_KB_RECORD_NOT_FOUND",
     };
   }
+  auditTenantEvent(request, {
+    userId: tenant.userId,
+    sourceId: tenant.sourceId,
+    sessionToken: tenant.sessionToken,
+    action: "mail_kb.knowledge_card.save",
+    resourceType: "mail_summary",
+    resourceId: record.mailId,
+    metadata: { tags },
+  });
 
   await agentFileMemoryStore.append(
     { userId: tenant.userId, sourceId: tenant.sourceId },
@@ -11308,16 +11634,15 @@ server.get("/api/mail-kb/artifacts", async (request, reply) => {
   }
 
   const store = await getMailKnowledgeBaseStore(resolved.tenant.userId, resolved.tenant.sourceId);
-  const paths = store.getPaths();
   const baselineStatus = store.readBaselineStatus();
   const artifacts = [
-    { key: "mailIds", label: "邮件标识码清单", path: paths.mailIdsDocPath },
-    { key: "subjects", label: "邮件题目索引", path: paths.mailSubjectDocPath },
-    { key: "scores", label: "邮件评分索引", path: paths.mailScoreDocPath },
-    { key: "summaries", label: "邮件总结正文库", path: paths.mailSummaryDocPath },
-    { key: "events", label: "事件聚类索引", path: paths.eventDocPath },
-    { key: "senders", label: "发件人画像索引", path: paths.senderDocPath },
-    { key: "baseline", label: "旧邮件归档状态", path: paths.baselineStatusPath },
+    { key: "mailIds", label: "邮件标识码清单", path: publicMailKbArtifactPath("mail-ids.md") },
+    { key: "subjects", label: "邮件题目索引", path: publicMailKbArtifactPath("mail-subject-index.md") },
+    { key: "scores", label: "邮件评分索引", path: publicMailKbArtifactPath("mail-score-index.md") },
+    { key: "summaries", label: "邮件总结正文库", path: publicMailKbArtifactPath("mail-summaries.md") },
+    { key: "events", label: "事件聚类索引", path: publicMailKbArtifactPath("event-clusters.md") },
+    { key: "senders", label: "发件人画像索引", path: publicMailKbArtifactPath("sender-profiles.md") },
+    { key: "baseline", label: "旧邮件归档状态", path: publicMailKbArtifactPath("baseline-status.json") },
   ];
 
   return {
@@ -11355,13 +11680,13 @@ server.get("/api/mail-kb/artifacts/content", async (request, reply) => {
   const store = await getMailKnowledgeBaseStore(resolved.tenant.userId, resolved.tenant.sourceId);
   const paths = store.getPaths();
   const artifactMap = {
-    mailIds: { label: "邮件标识码清单", path: paths.mailIdsDocPath, kind: "markdown" },
-    subjects: { label: "邮件题目索引", path: paths.mailSubjectDocPath, kind: "markdown" },
-    scores: { label: "邮件评分索引", path: paths.mailScoreDocPath, kind: "markdown" },
-    summaries: { label: "邮件总结正文库", path: paths.mailSummaryDocPath, kind: "markdown" },
-    events: { label: "事件聚类索引", path: paths.eventDocPath, kind: "markdown" },
-    senders: { label: "发件人画像索引", path: paths.senderDocPath, kind: "markdown" },
-    baseline: { label: "旧邮件归档状态", path: paths.baselineStatusPath, kind: "json" },
+    mailIds: { label: "邮件标识码清单", path: paths.mailIdsDocPath, publicPath: publicMailKbArtifactPath("mail-ids.md"), kind: "markdown" },
+    subjects: { label: "邮件题目索引", path: paths.mailSubjectDocPath, publicPath: publicMailKbArtifactPath("mail-subject-index.md"), kind: "markdown" },
+    scores: { label: "邮件评分索引", path: paths.mailScoreDocPath, publicPath: publicMailKbArtifactPath("mail-score-index.md"), kind: "markdown" },
+    summaries: { label: "邮件总结正文库", path: paths.mailSummaryDocPath, publicPath: publicMailKbArtifactPath("mail-summaries.md"), kind: "markdown" },
+    events: { label: "事件聚类索引", path: paths.eventDocPath, publicPath: publicMailKbArtifactPath("event-clusters.md"), kind: "markdown" },
+    senders: { label: "发件人画像索引", path: paths.senderDocPath, publicPath: publicMailKbArtifactPath("sender-profiles.md"), kind: "markdown" },
+    baseline: { label: "旧邮件归档状态", path: paths.baselineStatusPath, publicPath: publicMailKbArtifactPath("baseline-status.json"), kind: "json" },
   } as const;
   const artifact = artifactMap[parsed.data.key];
   const content = existsSync(artifact.path) ? readFileSync(artifact.path, "utf-8") : "";
@@ -11371,7 +11696,7 @@ server.get("/api/mail-kb/artifacts/content", async (request, reply) => {
     result: {
       key: parsed.data.key,
       label: artifact.label,
-      path: artifact.path,
+      path: artifact.publicPath,
       kind: artifact.kind,
       content,
     },
@@ -11412,6 +11737,19 @@ server.get("/api/mail-kb/export", async (request, reply) => {
   });
   const baselineStatus = store.readBaselineStatus();
   const { files: _files, ...reportView } = report;
+  auditTenantEvent(request, {
+    userId: resolved.tenant.userId,
+    sourceId: resolved.tenant.sourceId,
+    sessionToken: resolved.tenant.sessionToken,
+    action: "mail_kb.export",
+    resourceType: "mail_kb",
+    resourceId: resolved.tenant.sourceId,
+    metadata: {
+      mailCount: report.mailCount,
+      eventCount: report.eventCount,
+      personCount: report.personCount,
+    },
+  });
 
   return { ok: true, report: reportView, baselineStatus, result: { report: reportView, baselineStatus } };
 });
@@ -11455,6 +11793,18 @@ server.post("/api/mail/knowledge-base/trigger", async (request, reply) => {
     ...(body.data.windowDays ? { windowDays: body.data.windowDays } : {}),
   });
   const job = getKnowledgeBaseJob(jobId, resolved.tenant.userId);
+  auditTenantEvent(request, {
+    userId: resolved.tenant.userId,
+    sourceId: resolved.tenant.sourceId,
+    sessionToken: resolved.tenant.sessionToken,
+    action: "mail_kb.backfill.trigger",
+    resourceType: "mail_kb_job",
+    resourceId: jobId,
+    metadata: {
+      limit: body.data.limit ?? null,
+      windowDays: body.data.windowDays ?? null,
+    },
+  });
 
   return {
     ok: true,
@@ -11708,6 +12058,18 @@ server.post("/api/agent/memory", async (request, reply) => {
       metadata: { key },
     }
   );
+  auditTenantEvent(request, {
+    userId: tenant.userId,
+    sourceId: tenant.sourceId,
+    sessionToken: tenant.sessionToken,
+    action: "agent_memory.create",
+    resourceType: "agent_memory",
+    resourceId: key,
+    metadata: {
+      kind: parsed.data.kind ?? "fact",
+      tags,
+    },
+  });
 
   let prisma: any = null;
   try {
@@ -12023,7 +12385,7 @@ server.post("/api/agent/query-openclaw-legacy", async (request, reply) => {
   try {
     const result = await queryAgent({
       message: parsed.data.message,
-      user: `${tenant.userId}:${tenant.sourceId}`,
+      user: `${tenant.tenantId}:${tenant.sourceId}`,
       sessionKey: `${tenant.sessionToken}${sourceScopeSeparator}${tenant.sourceId}`,
       timeoutMs: env.AGENT_TIMEOUT_MS,
     });

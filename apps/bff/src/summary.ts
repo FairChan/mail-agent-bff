@@ -1,6 +1,7 @@
 import type { FastifyBaseLogger } from "fastify";
 import { LlmGatewayService } from "./agent/llm-gateway.js";
 import type { TenantContext } from "./agent/types.js";
+import { personalTenantIdForUser } from "./tenant-isolation.js";
 import {
   getMailMessageById,
   queryInboxMessagesPageForSource,
@@ -507,6 +508,7 @@ export async function summarizeMailInbox(
   const llmGateway = new LlmGatewayService(logger);
   const tenant: TenantContext = {
     ...sourceContext,
+    tenantId: personalTenantIdForUser(userId),
     userId,
     sourceId: sourceContext.sourceId,
     sessionToken: sessionKey,
@@ -686,6 +688,7 @@ export async function summarizeSingleMail(
   const llmGateway = new LlmGatewayService(logger);
   const tenant: TenantContext = {
     ...(sourceContext ?? { sourceId }),
+    tenantId: personalTenantIdForUser(userId),
     userId,
     sourceId,
     sessionToken: sessionKey,

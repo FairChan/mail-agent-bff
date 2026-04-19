@@ -8,6 +8,7 @@ import { useMail } from "../../contexts/MailContext";
 import { useApp } from "../../contexts/AppContext";
 import type { MailInsightItem, MailInsightType } from "@mail-agent/shared-types";
 import { LoadingSpinner } from "../shared/LoadingSpinner";
+import { CalmPill } from "../ui/Calm";
 
 type CalendarMonth = {
   year: number;
@@ -331,8 +332,8 @@ export function CalendarView() {
       const isSynced = syncedIds.has(syncKey);
       const className =
         tone === "primary"
-          ? "mt-3 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-red-700 disabled:opacity-50"
-          : "mt-3 rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-400 dark:hover:border-zinc-400";
+          ? "mt-3 rounded-full bg-[color:var(--button-primary)] px-3 py-1.5 text-xs font-medium text-[color:var(--button-primary-ink)] transition hover:bg-[color:var(--button-primary-hover)] disabled:opacity-50"
+          : "mt-3 rounded-full border border-[color:var(--border-soft)] px-3 py-1.5 text-xs font-medium text-[color:var(--ink-muted)] transition hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--ink)] disabled:opacity-50";
 
       return (
         <button onClick={() => void handleSync(item)} disabled={isSyncing || isSynced} className={className}>
@@ -358,10 +359,10 @@ export function CalendarView() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
+        <h2 className="text-lg font-semibold tracking-tight text-[color:var(--ink)]">
           {locale === "zh" ? "日历" : locale === "ja" ? "カレンダー" : "Calendar"}
         </h2>
-        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+        <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">
           {locale === "zh"
             ? "将邮件中的 DDL、会议、考试等同步到 Outlook 日历"
             : locale === "ja"
@@ -370,13 +371,13 @@ export function CalendarView() {
         </p>
       </div>
 
-      <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+      <section className="rounded-[1.4rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] p-4 shadow-[var(--shadow-soft)]">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+            <h3 className="text-sm font-semibold text-[color:var(--ink)]">
               {locale === "zh" ? "月视图" : locale === "ja" ? "月表示" : "Month View"}
             </h3>
-            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+            <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">
               {locale === "zh"
                 ? "月视图会把当前窗口内识别出的事项直接铺在日期格子中。"
                 : locale === "ja"
@@ -387,7 +388,7 @@ export function CalendarView() {
           <div className="flex items-center gap-2 self-start md:self-auto">
             <button
               onClick={() => setVisibleMonth((current) => shiftMonth(current, -1))}
-              className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-400"
+              className="rounded-full border border-[color:var(--border-soft)] px-3 py-1.5 text-xs font-medium text-[color:var(--ink-muted)] transition hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--ink)]"
             >
               {locale === "zh" ? "上个月" : locale === "ja" ? "前月" : "Prev"}
             </button>
@@ -397,13 +398,13 @@ export function CalendarView() {
                 setVisibleMonth({ year: nextToday.year, month: nextToday.month });
                 setSelectedDayKey(getCalendarKey(nextToday.year, nextToday.month, nextToday.day));
               }}
-              className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-400"
+              className="rounded-full border border-[color:var(--border-soft)] px-3 py-1.5 text-xs font-medium text-[color:var(--ink-muted)] transition hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--ink)]"
             >
               {locale === "zh" ? "今天" : locale === "ja" ? "今日" : "Today"}
             </button>
             <button
               onClick={() => setVisibleMonth((current) => shiftMonth(current, 1))}
-              className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-400"
+              className="rounded-full border border-[color:var(--border-soft)] px-3 py-1.5 text-xs font-medium text-[color:var(--ink-muted)] transition hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--ink)]"
             >
               {locale === "zh" ? "下个月" : locale === "ja" ? "次月" : "Next"}
             </button>
@@ -411,11 +412,11 @@ export function CalendarView() {
         </div>
 
         <div className="mt-4 flex items-center justify-between gap-3">
-          <h4 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">{formatMonthLabel(visibleMonth)}</h4>
-          <span className="text-xs text-zinc-500 dark:text-zinc-400">{timeZone}</span>
+          <h4 className="text-base font-semibold text-[color:var(--ink)]">{formatMonthLabel(visibleMonth)}</h4>
+          <span className="text-xs text-[color:var(--ink-subtle)]">{timeZone}</span>
         </div>
 
-        <div className="mt-4 grid grid-cols-7 gap-2 text-center text-xs font-medium text-zinc-500 dark:text-zinc-400">
+        <div className="mt-4 grid grid-cols-7 gap-2 text-center text-xs font-medium text-[color:var(--ink-subtle)]">
           {weekdayLabels.map((label) => (
             <div key={label} className="py-1">
               {label}
@@ -451,9 +452,9 @@ export function CalendarView() {
                     DAY_CELL_MIN_HEIGHT,
                     "rounded-xl border px-2 py-2 text-left transition",
                     isSelected
-                      ? "border-zinc-900 bg-zinc-900/5 dark:border-zinc-100 dark:bg-zinc-100/10"
-                      : "border-zinc-200 bg-zinc-50/60 hover:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900/40 dark:hover:border-zinc-600",
-                    cell.inCurrentMonth ? "text-zinc-900 dark:text-zinc-100" : "text-zinc-400 dark:text-zinc-500",
+                      ? "border-[color:var(--border-info)] bg-[color:var(--surface-info)]"
+                      : "border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] hover:bg-[color:var(--surface-elevated)]",
+                    cell.inCurrentMonth ? "text-[color:var(--ink)]" : "text-[color:var(--ink-subtle)]",
                   ].join(" ")}
                 >
                   <div className="flex items-center justify-between gap-2">
@@ -466,7 +467,7 @@ export function CalendarView() {
                       {cell.day}
                     </span>
                     {cellItems.length > 0 ? (
-                      <span className="rounded-full bg-zinc-900 px-2 py-0.5 text-[11px] font-medium text-white dark:bg-zinc-200 dark:text-zinc-900">
+                      <span className="rounded-full bg-[color:var(--button-primary)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--button-primary-ink)]">
                         {cellItems.length}
                       </span>
                     ) : null}
@@ -482,7 +483,7 @@ export function CalendarView() {
                             ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
                             : item.type === "exam"
                               ? "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300"
-                              : "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300";
+                              : "bg-[color:var(--pill-default)] text-[color:var(--pill-default-ink)]";
 
                       return (
                         <span
@@ -496,7 +497,7 @@ export function CalendarView() {
                       );
                     })}
                     {cellItems.length > 3 ? (
-                      <span className="block text-[11px] text-zinc-500 dark:text-zinc-400">
+                      <span className="block text-[11px] text-[color:var(--ink-subtle)]">
                         {locale === "zh"
                           ? `还有 ${cellItems.length - 3} 项`
                           : locale === "ja"
@@ -513,10 +514,10 @@ export function CalendarView() {
       </section>
 
       <section className="grid gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(18rem,0.85fr)]">
-        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="rounded-[1.4rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] p-4 shadow-[var(--shadow-soft)]">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              <h3 className="text-sm font-semibold text-[color:var(--ink)]">
                 {locale === "zh" ? "当日事项" : locale === "ja" ? "当日の予定" : "Selected Day"}
               </h3>
               <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{formatSelectedDayLabel(selectedDayKey)}</p>
@@ -527,7 +528,7 @@ export function CalendarView() {
           </div>
 
           {selectedDayItems.length === 0 ? (
-            <div className="mt-4 rounded-xl border border-dashed border-zinc-300 py-8 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+            <div className="mt-4 rounded-[1.2rem] border border-dashed border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] py-8 text-center text-sm text-[color:var(--ink-subtle)]">
               {locale === "zh"
                 ? "这一天暂时没有识别到邮件事项"
                 : locale === "ja"
@@ -539,19 +540,29 @@ export function CalendarView() {
               {selectedDayItems.map((item) => (
                 <div
                   key={getInsightKey(item)}
-                  className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-950/60"
+                  className="rounded-[1.2rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] p-4 shadow-[var(--shadow-inset)]"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
-                      <p className="font-medium text-zinc-900 dark:text-zinc-100">{item.subject}</p>
-                      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{formatDueAt(item.dueAt)}</p>
+                      <p className="font-medium text-[color:var(--ink)]">{item.subject}</p>
+                      <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">{formatDueAt(item.dueAt)}</p>
                       {item.evidence ? (
-                        <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">{item.evidence}</p>
+                        <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">{item.evidence}</p>
                       ) : null}
                     </div>
-                    <span className="rounded-full bg-zinc-900 px-2 py-0.5 text-xs text-white dark:bg-zinc-100 dark:text-zinc-900">
+                    <CalmPill
+                      tone={
+                        item.type === "ddl"
+                          ? "warning"
+                          : item.type === "meeting"
+                            ? "info"
+                            : item.type === "exam"
+                              ? "urgent"
+                              : "muted"
+                      }
+                    >
                       {typeLabels[item.type]}
-                    </span>
+                    </CalmPill>
                   </div>
                   {renderSyncButton(item, "secondary")}
                 </div>
@@ -562,8 +573,8 @@ export function CalendarView() {
 
         <div className="space-y-6">
           {tomorrowDdl.length > 0 ? (
-            <section className="rounded-xl border border-red-200 bg-red-50 p-4 shadow-sm dark:border-red-900/70 dark:bg-red-950/30">
-              <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-red-600 dark:text-red-400">
+            <section className="rounded-[1.4rem] border border-[color:var(--border-urgent)] bg-[color:var(--surface-urgent)] p-4 shadow-[var(--shadow-soft)]">
+              <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-[color:var(--ink)]">
                 <span className="flex h-2 w-2 animate-pulse rounded-full bg-red-500" />
                 {locale === "zh" ? "明天的截止日期" : locale === "ja" ? "明日の締切" : "Tomorrow's Deadlines"}
               </h3>
@@ -571,17 +582,17 @@ export function CalendarView() {
                 {tomorrowDdl.map((item) => (
                   <div
                     key={getInsightKey(item)}
-                    className="rounded-xl border border-red-200 bg-white/80 p-4 dark:border-red-900 dark:bg-red-950/20"
+                    className="rounded-[1.2rem] border border-[color:var(--border-urgent)] bg-[color:var(--surface-elevated)] p-4"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
-                        <p className="font-medium text-red-900 dark:text-red-100">{item.subject}</p>
-                        <p className="mt-1 text-xs text-red-600 dark:text-red-300">{formatDueAt(item.dueAt)}</p>
-                        {item.evidence ? <p className="mt-1 text-xs text-red-500 dark:text-red-300">{item.evidence}</p> : null}
+                        <p className="font-medium text-[color:var(--ink)]">{item.subject}</p>
+                        <p className="mt-1 text-xs text-[color:var(--pill-urgent-ink)]">{formatDueAt(item.dueAt)}</p>
+                        {item.evidence ? <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">{item.evidence}</p> : null}
                       </div>
-                      <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-700 dark:bg-red-900/50 dark:text-red-300">
+                      <CalmPill tone="urgent">
                         {typeLabels[item.type]}
-                      </span>
+                      </CalmPill>
                     </div>
                     {renderSyncButton(item, "primary")}
                   </div>
@@ -590,8 +601,8 @@ export function CalendarView() {
             </section>
           ) : null}
 
-          <section className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-            <h3 className="mb-2 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+          <section className="rounded-[1.4rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] p-4 shadow-[var(--shadow-soft)]">
+            <h3 className="mb-2 text-sm font-semibold text-[color:var(--ink)]">
               {locale === "zh" ? "近期事项" : locale === "ja" ? "今後のイベント" : "Upcoming Events"}
             </h3>
 
@@ -600,7 +611,7 @@ export function CalendarView() {
                 <LoadingSpinner size="lg" />
               </div>
             ) : upcomingItems.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-zinc-300 py-8 text-center text-sm text-zinc-500 dark:border-zinc-600 dark:text-zinc-400">
+              <div className="rounded-[1.2rem] border border-dashed border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] py-8 text-center text-sm text-[color:var(--ink-subtle)]">
                 {locale === "zh"
                   ? "未来 30 天没有识别到需要同步的事项"
                   : locale === "ja"
@@ -612,29 +623,29 @@ export function CalendarView() {
                 {upcomingItems.map((item) => (
                   <div
                     key={getInsightKey(item)}
-                    className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-950/60"
+                    className="rounded-[1.2rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] p-4 shadow-[var(--shadow-inset)]"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
-                        <p className="font-medium text-zinc-900 dark:text-zinc-100">{item.subject}</p>
-                        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{formatDueAt(item.dueAt)}</p>
+                        <p className="font-medium text-[color:var(--ink)]">{item.subject}</p>
+                        <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">{formatDueAt(item.dueAt)}</p>
                         {item.evidence ? (
-                          <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">{item.evidence}</p>
+                          <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">{item.evidence}</p>
                         ) : null}
                       </div>
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-xs ${
+                      <CalmPill
+                        tone={
                           item.type === "ddl"
-                            ? "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"
+                            ? "warning"
                             : item.type === "exam"
-                              ? "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400"
+                              ? "urgent"
                               : item.type === "meeting"
-                                ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
-                                : "bg-zinc-100 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300"
-                        }`}
+                                ? "info"
+                                : "muted"
+                        }
                       >
                         {typeLabels[item.type]}
-                      </span>
+                      </CalmPill>
                     </div>
                     {renderSyncButton(item, "secondary")}
                   </div>
@@ -646,7 +657,7 @@ export function CalendarView() {
       </section>
 
       {syncError ? (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
+        <div className="rounded-[1.1rem] border border-[color:var(--border-urgent)] bg-[color:var(--surface-urgent)] p-3 text-sm text-[color:var(--ink)]">
           {syncError}
         </div>
       ) : null}

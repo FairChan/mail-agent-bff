@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { viewItems, viewLabelsByLocale, type ViewKey } from "@mail-agent/shared-types";
+import type { ViewKey } from "@mail-agent/shared-types";
 import { useApp } from "../../contexts/AppContext";
 import { useAuth } from "../../contexts/AuthContext";
 import { useMail } from "../../contexts/MailContext";
 import { cn } from "../../lib/utils";
+import { CalmButton, CalmPill, CalmSurface } from "../ui/Calm";
 
 interface SidebarProps {
   onClose?: () => void;
@@ -11,17 +12,6 @@ interface SidebarProps {
 
 const EXPANDED_WIDTH = 224;
 const COLLAPSED_WIDTH = 64;
-
-const NAV_ICON_BY_VIEW: Record<ViewKey, (active: boolean) => React.ReactNode> = {
-  tutorial: (active) => <GuideIcon active={active} />,
-  inbox: (active) => <InboxIcon active={active} />,
-  allmail: (active) => <MailIcon active={active} />,
-  agent: (active) => <AgentIcon active={active} />,
-  stats: (active) => <KnowledgeIcon active={active} />,
-  knowledgebase: (active) => <KnowledgeIcon active={active} />,
-  calendar: (active) => <CalendarIcon active={active} />,
-  settings: (active) => <SettingsIcon active={active} />,
-};
 
 function AccountActionModal({
   open,
@@ -103,28 +93,24 @@ function AccountActionModal({
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center">
       <div className="absolute inset-0 bg-black/45 backdrop-blur-sm" onClick={onClose} />
-      <div
+      <CalmSurface
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="connect-mail-dialog-title"
-        className="relative z-10 w-full max-w-md rounded-3xl border border-white/60 bg-white/92 p-6 shadow-[0_30px_80px_rgba(15,23,42,0.28)] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/92"
+        className="relative z-10 w-full max-w-md p-6"
+        beam
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p id="connect-mail-dialog-title" className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">连接邮箱</p>
-            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+            <p id="connect-mail-dialog-title" className="text-lg font-semibold text-[color:var(--ink)]">连接邮箱</p>
+            <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">
               优先使用 Microsoft 直连，底层会继续走当前已验证的邮箱链路。
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-xl p-2 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
-            aria-label="关闭连接邮箱弹窗"
-          >
+          <CalmButton type="button" onClick={onClose} variant="ghost" className="h-10 w-10 rounded-2xl p-0" aria-label="关闭连接邮箱弹窗">
             <CloseIcon />
-          </button>
+          </CalmButton>
         </div>
 
         <div className="mt-5 space-y-3">
@@ -132,31 +118,31 @@ function AccountActionModal({
             type="button"
             onClick={onOutlookLogin}
             disabled={busy}
-            className="flex w-full items-center gap-3 rounded-2xl border border-blue-200 bg-blue-50/90 p-4 text-left transition hover:border-blue-300 hover:bg-blue-100/80 disabled:cursor-not-allowed disabled:opacity-60 dark:border-blue-900/60 dark:bg-blue-950/40 dark:hover:bg-blue-950/60"
+            className="flex w-full items-center gap-3 rounded-[1.2rem] border border-[color:var(--border-info)] bg-[color:var(--surface-info)] p-4 text-left transition hover:translate-y-[-1px] hover:shadow-[var(--shadow-soft)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-white">
               <MailIcon active />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Microsoft Outlook</p>
-              <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              <p className="text-sm font-semibold text-[color:var(--ink)]">Microsoft Outlook</p>
+              <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">
                 跳转微软官方登录页，授权后自动回到当前产品。
               </p>
             </div>
-            <span className="text-xs font-medium text-blue-700 dark:text-blue-300">{busy ? "连接中" : "直连"}</span>
+            <CalmPill tone="info">{busy ? "连接中" : "直连"}</CalmPill>
           </button>
 
           <button
             type="button"
             onClick={onOpenSettings}
-            className="flex w-full items-center gap-3 rounded-2xl border border-zinc-200 bg-zinc-50/90 p-4 text-left transition hover:border-zinc-300 hover:bg-zinc-100/90 dark:border-zinc-800 dark:bg-zinc-900/70 dark:hover:bg-zinc-900"
+            className="flex w-full items-center gap-3 rounded-[1.2rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-muted)] p-4 text-left transition hover:translate-y-[-1px] hover:shadow-[var(--shadow-soft)]"
           >
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[color:var(--button-primary)] text-[color:var(--button-primary-ink)]">
               <SettingsIcon active />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">高级设置</p>
-              <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              <p className="text-sm font-semibold text-[color:var(--ink)]">高级设置</p>
+              <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">
                 进入设置页管理数据源、通知、语言和主题。
               </p>
             </div>
@@ -164,25 +150,23 @@ function AccountActionModal({
         </div>
 
         {info ? (
-          <p className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
+          <p className="mt-4 rounded-[1.1rem] border border-[color:var(--border-success)] bg-[color:var(--surface-success)] px-4 py-3 text-xs text-[color:var(--pill-success-ink)]">
             {info}
           </p>
         ) : null}
         {error ? (
-          <p className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+          <p className="mt-4 rounded-[1.1rem] border border-[color:var(--border-urgent)] bg-[color:var(--surface-urgent)] px-4 py-3 text-xs text-[color:var(--pill-urgent-ink)]">
             {error}
           </p>
         ) : null}
-      </div>
+      </CalmSurface>
     </div>
   );
 }
 
 export function Sidebar({ onClose }: SidebarProps) {
   const {
-    currentView,
     setCurrentView,
-    locale,
     sidebarCollapsed,
     toggleSidebarCollapsed,
     isMobile,
@@ -202,7 +186,6 @@ export function Sidebar({ onClose }: SidebarProps) {
 
   const collapsed = !isMobile && sidebarCollapsed;
   const sidebarWidth = collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH;
-  const viewLabels = viewLabelsByLocale[locale];
   const currentSourceLabel = activeSource?.name || activeSource?.emailHint || "未连接邮箱";
 
   const handleViewChange = (view: ViewKey) => {
@@ -243,23 +226,23 @@ export function Sidebar({ onClose }: SidebarProps) {
     <>
       <aside
         className={cn(
-          "relative z-20 flex h-full flex-col overflow-hidden border-r border-sky-200/35 backdrop-blur-2xl transition-all duration-300 dark:border-sky-400/15",
+          "relative z-20 flex h-full flex-col overflow-hidden border-r border-[color:var(--border-soft)] backdrop-blur-2xl transition-all duration-300",
           collapsed
-            ? "bg-sky-400/12 dark:bg-sky-950/35"
-            : "bg-gradient-to-br from-sky-400/14 via-sky-300/10 to-indigo-400/10 dark:from-sky-950/45 dark:via-indigo-950/35 dark:to-purple-950/30"
+            ? "bg-[linear-gradient(180deg,rgba(255,255,255,0.34),rgba(255,255,255,0.12))] dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))]"
+            : "bg-[linear-gradient(180deg,rgba(255,255,255,0.42),rgba(245,248,252,0.18))] dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02))]"
         )}
         style={{ width: sidebarWidth, minWidth: sidebarWidth, maxWidth: sidebarWidth }}
         role="navigation"
         aria-label="导航菜单"
       >
-        <div className={cn("flex h-14 items-center border-b border-blue-200/30 dark:border-blue-400/15", collapsed ? "justify-center px-0" : "px-3")}>
-          <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-white/80 shadow-sm ring-1 ring-white/70 dark:bg-white/8 dark:ring-white/10">
+        <div className={cn("flex h-16 items-center border-b border-[color:var(--border-soft)]", collapsed ? "justify-center px-0" : "px-3")}>
+          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[color:var(--surface-elevated)] shadow-[var(--shadow-soft)]">
             <BrandIcon />
           </div>
           {!collapsed ? (
             <div className="ml-2.5 min-w-0 flex-1">
-              <p className="truncate text-sm font-bold text-blue-950 dark:text-blue-50">Mery</p>
-              <p className="truncate text-[10px] uppercase tracking-[0.18em] text-blue-500/80 dark:text-blue-200/60">
+              <p className="truncate text-sm font-bold text-[color:var(--ink)]">Mery</p>
+              <p className="truncate text-[10px] uppercase tracking-[0.18em] text-[color:var(--ink-subtle)]">
                 Mail Intelligence
               </p>
             </div>
@@ -269,7 +252,7 @@ export function Sidebar({ onClose }: SidebarProps) {
               type="button"
               onClick={toggleSidebarCollapsed}
               className={cn(
-                "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-blue-500 transition hover:bg-blue-100 hover:text-blue-700 dark:hover:bg-blue-950 dark:hover:text-blue-300",
+                "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-[color:var(--ink-subtle)] transition hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--ink)]",
                 collapsed ? "ml-0 mt-1" : "ml-1"
               )}
               aria-label={collapsed ? "展开侧边栏" : "收起侧边栏"}
@@ -279,10 +262,10 @@ export function Sidebar({ onClose }: SidebarProps) {
           ) : null}
         </div>
 
-        <div className={cn("border-b border-blue-200/30 py-2 dark:border-blue-400/15", collapsed ? "px-1" : "px-2")}>
+        <div className={cn("border-b border-[color:var(--border-soft)] py-3", collapsed ? "px-1" : "px-2")}>
           {!collapsed ? (
             <div className="mb-1.5 flex items-center justify-between px-1">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.22em] text-blue-500/70 dark:text-blue-300/60">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[color:var(--ink-subtle)]">
                 邮箱账户
               </span>
               <button
@@ -292,7 +275,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                   setConnectInfo(null);
                   setShowAccountModal(true);
                 }}
-                className="flex h-5 w-5 items-center justify-center rounded text-blue-500/70 transition hover:bg-blue-100 hover:text-blue-700 dark:hover:bg-blue-950 dark:hover:text-blue-300"
+                className="flex h-6 w-6 items-center justify-center rounded-lg text-[color:var(--ink-subtle)] transition hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--ink)]"
                 aria-label="添加邮箱账户"
               >
                 <PlusIcon />
@@ -313,8 +296,8 @@ export function Sidebar({ onClose }: SidebarProps) {
                     "group flex items-center gap-2.5 rounded-xl px-2 py-2 transition-all",
                     collapsed ? "justify-center" : "w-full",
                     isActive
-                      ? "bg-blue-100/70 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300"
-                      : "text-blue-900/80 hover:bg-blue-50 dark:text-blue-100/80 dark:hover:bg-blue-950/35"
+                      ? "bg-[color:var(--surface-info)] text-[color:var(--pill-info-ink)] shadow-[var(--shadow-soft)]"
+                      : "text-[color:var(--ink-muted)] hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--ink)]"
                   )}
                   title={collapsed ? source.name || source.emailHint || source.id : undefined}
                   aria-label={isActive ? `当前邮箱源：${source.name || source.emailHint || source.id}` : `切换邮箱源：${source.name || source.emailHint || source.id}`}
@@ -333,10 +316,10 @@ export function Sidebar({ onClose }: SidebarProps) {
 
                   {!collapsed ? (
                     <div className="min-w-0 flex-1 text-left">
-                      <p className={cn("truncate text-sm font-medium", isActive ? "text-blue-700 dark:text-blue-300" : "text-blue-950 dark:text-blue-50")}>
+                      <p className={cn("truncate text-sm font-medium", isActive ? "text-[color:var(--pill-info-ink)]" : "text-[color:var(--ink)]")}>
                         {source.name || source.emailHint || source.id}
                       </p>
-                      <p className="truncate text-[10px] text-blue-600/60 dark:text-blue-200/55">
+                      <p className="truncate text-[10px] text-[color:var(--ink-subtle)]">
                         {source.emailHint || source.id}
                       </p>
                     </div>
@@ -353,13 +336,13 @@ export function Sidebar({ onClose }: SidebarProps) {
                 setShowAccountModal(true);
               }}
               className={cn(
-                "flex items-center gap-2.5 rounded-xl py-2 text-blue-500/75 transition hover:bg-blue-50 hover:text-blue-700 dark:hover:bg-blue-950/40 dark:hover:text-blue-300",
+                "flex items-center gap-2.5 rounded-xl py-2 text-[color:var(--ink-subtle)] transition hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--ink)]",
                 collapsed ? "justify-center px-2" : "px-2"
               )}
               title={collapsed ? "连接邮箱" : undefined}
               aria-label="连接邮箱"
             >
-              <div className={cn("flex shrink-0 items-center justify-center rounded-full border-2 border-dashed border-blue-300 text-blue-500 dark:border-blue-600", collapsed ? "h-9 w-9" : "h-8 w-8")}>
+              <div className={cn("flex shrink-0 items-center justify-center rounded-full border-2 border-dashed border-[color:var(--border-info)] text-[color:var(--pill-info-ink)]", collapsed ? "h-9 w-9" : "h-8 w-8")}>
                 <PlusIcon />
               </div>
               {!collapsed ? <span className="text-sm">连接邮箱</span> : null}
@@ -367,49 +350,14 @@ export function Sidebar({ onClose }: SidebarProps) {
           </div>
         </div>
 
-        <div className={cn("flex-1 overflow-y-auto py-2", collapsed ? "px-1" : "px-2")}>
-          {!collapsed ? (
-            <p className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-blue-500/70 dark:text-blue-300/60">
-              导航
-            </p>
-          ) : null}
-          <div className="space-y-1">
-            {viewItems.map((item) => {
-              const isActive = currentView === item.key;
-              const icon = NAV_ICON_BY_VIEW[item.key]?.(isActive) ?? <InboxIcon active={isActive} />;
-              return (
-                <button
-                  key={item.key}
-                  type="button"
-                  onClick={() => handleViewChange(item.key)}
-                  className={cn(
-                    "group flex items-center gap-2.5 rounded-xl px-2 py-2 transition-all",
-                    collapsed ? "justify-center" : "w-full",
-                    isActive
-                      ? "bg-blue-100/70 text-blue-700 shadow-sm dark:bg-blue-950/70 dark:text-blue-300"
-                      : "text-blue-900/80 hover:bg-blue-50 dark:text-blue-100/80 dark:hover:bg-blue-950/35"
-                  )}
-                  title={collapsed ? viewLabels[item.key].label : undefined}
-                  aria-label={viewLabels[item.key].label}
-                >
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">{icon}</div>
-                  {!collapsed ? (
-                    <div className="min-w-0 flex-1 text-left">
-                      <p className="truncate text-sm font-medium">{viewLabels[item.key].label}</p>
-                    </div>
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        <div className="min-h-0 flex-1" />
 
-        <div className={cn("border-t border-blue-200/30 px-2 py-3 dark:border-blue-400/15", collapsed ? "space-y-2" : "space-y-3")}>
+        <div className={cn("border-t border-[color:var(--border-soft)] px-2 py-3", collapsed ? "space-y-2" : "space-y-3")}>
           {!collapsed ? (
-            <div className="rounded-2xl border border-white/70 bg-white/72 px-3 py-3 shadow-sm backdrop-blur dark:border-white/10 dark:bg-white/5">
-              <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400">当前邮箱</p>
-              <p className="mt-1 truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">{currentSourceLabel}</p>
-              <p className="mt-1 truncate text-[11px] text-zinc-500 dark:text-zinc-400">{user?.displayName || user?.email || "未登录"}</p>
+            <div className="calm-panel px-3 py-3">
+              <p className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--ink-subtle)]">当前邮箱</p>
+              <p className="mt-1 truncate text-sm font-semibold text-[color:var(--ink)]">{currentSourceLabel}</p>
+              <p className="mt-1 truncate text-[11px] text-[color:var(--ink-subtle)]">{user?.displayName || user?.email || "未登录"}</p>
             </div>
           ) : null}
 
@@ -417,7 +365,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             type="button"
             onClick={() => handleViewChange("settings")}
             className={cn(
-              "flex items-center gap-2.5 rounded-xl px-2 py-2 text-zinc-700 transition hover:bg-white/70 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-white/5",
+              "flex items-center gap-2.5 rounded-xl px-2 py-2 text-[color:var(--ink-muted)] transition hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--ink)]",
               collapsed ? "justify-center" : "w-full"
             )}
             title={collapsed ? "账户中心" : undefined}
@@ -433,7 +381,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             type="button"
             onClick={() => void handleLogout()}
             className={cn(
-              "flex items-center gap-2.5 rounded-xl px-2 py-2 text-red-600 transition hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/20",
+              "flex items-center gap-2.5 rounded-xl px-2 py-2 text-[color:var(--pill-urgent-ink)] transition hover:bg-[color:var(--surface-urgent)]",
               collapsed ? "justify-center" : "w-full"
             )}
             title={collapsed ? "退出登录" : undefined}

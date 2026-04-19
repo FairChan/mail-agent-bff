@@ -128,6 +128,13 @@ function mailReducer(state: MailState, action: MailAction): MailState {
         isLoadingSources: false,
         ...(state.activeSourceId !== action.payload.activeSourceId
           ? {
+              inbox: null,
+              triage: null,
+              insights: null,
+              selectedMail: null,
+              isLoadingMail: false,
+              isLoadingDetail: false,
+              isProcessingMail: false,
               notificationPrefs: null,
               notificationSnapshot: null,
               notificationStreamStatus: "idle",
@@ -137,6 +144,7 @@ function mailReducer(state: MailState, action: MailAction): MailState {
               kbMails: [],
               kbEvents: [],
               kbPersons: [],
+              error: null,
             }
           : {}),
       };
@@ -144,6 +152,13 @@ function mailReducer(state: MailState, action: MailAction): MailState {
       return {
         ...state,
         activeSourceId: action.payload,
+        inbox: null,
+        triage: null,
+        insights: null,
+        selectedMail: null,
+        isLoadingMail: false,
+        isLoadingDetail: false,
+        isProcessingMail: false,
         notificationPrefs: null,
         notificationSnapshot: null,
         notificationStreamStatus: "idle",
@@ -153,6 +168,7 @@ function mailReducer(state: MailState, action: MailAction): MailState {
         kbMails: [],
         kbEvents: [],
         kbPersons: [],
+        error: null,
       };
     case "SET_LOADING_SOURCES":
       return { ...state, isLoadingSources: action.payload };
@@ -165,7 +181,7 @@ function mailReducer(state: MailState, action: MailAction): MailState {
     case "SET_SELECTED_MAIL":
       return { ...state, selectedMail: action.payload, isLoadingDetail: false };
     case "SET_LOADING_MAIL":
-      return { ...state, isLoadingMail: action.payload };
+      return { ...state, isLoadingMail: action.payload, ...(action.payload ? { error: null } : {}) };
     case "SET_LOADING_DETAIL":
       return { ...state, isLoadingDetail: action.payload };
     case "SET_PRIORITY_RULES":
@@ -255,6 +271,8 @@ interface MailContextValue extends MailState {
 	  syncCalendarDrafts: (items: MailCalendarDraft[]) => Promise<{
     syncedIds: string[];
     failedIds: string[];
+    syncedKeys: string[];
+    failedKeys: string[];
     createdCount: number;
     deduplicatedCount: number;
     failedCount: number;
@@ -302,6 +320,10 @@ const MailContext = createContext<MailContextValue | null>(null);
 const notificationFallbackProcessingIntervalMs = 45_000;
 const notificationFallbackProcessingLimit = 20;
 const notificationFallbackProcessingWindowDays = 2;
+
+function calendarDraftKey(item: Pick<MailCalendarDraft, "messageId" | "type" | "dueAt">): string {
+  return `${item.messageId}:${item.type}:${item.dueAt}`;
+}
 
 async function apiFetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const response = await fetch(endpoint, {
@@ -377,6 +399,7 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
         return;
       }
       if (data.ok) {
+        activeSourceIdRef.current = data.result.activeSourceId;
         dispatch({
           type: "SET_SOURCES",
           payload: { sources: data.result.sources, activeSourceId: data.result.activeSourceId },
@@ -416,6 +439,7 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
         method: "POST",
         body: JSON.stringify({ id: sourceId }),
       });
+      activeSourceIdRef.current = sourceId;
       dispatch({ type: "SET_ACTIVE_SOURCE", payload: sourceId });
     } catch (err) {
       dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to select source" });
@@ -598,45 +622,78 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
   // ========== 邮件操作 ==========
 
   const fetchInbox = useCallback(async (limit = 30) => {
+    const requestedSourceId = activeSourceIdRef.current;
+    if (!requestedSourceId) {
+      return;
+    }
+
     dispatch({ type: "SET_LOADING_MAIL", payload: true });
     try {
       const data = await apiFetch<{ ok: boolean; result: MailInboxViewerResponse }>(
         `${apiBase}/mail/inbox/view?limit=${limit}`
       );
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        return;
+      }
       if (data.ok) {
         dispatch({ type: "SET_INBOX", payload: data.result });
       }
     } catch (err) {
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        return;
+      }
       dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to fetch inbox" });
       dispatch({ type: "SET_LOADING_MAIL", payload: false });
     }
   }, [apiBase]);
 
   const fetchTriage = useCallback(async (limit = 50) => {
+    const requestedSourceId = activeSourceIdRef.current;
+    if (!requestedSourceId) {
+      return;
+    }
+
     dispatch({ type: "SET_LOADING_MAIL", payload: true });
     try {
       const data = await apiFetch<{ ok: boolean; result: MailTriageResult }>(
         `${apiBase}/mail/triage?limit=${limit}`
       );
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        return;
+      }
       if (data.ok) {
         dispatch({ type: "SET_TRIAGE", payload: data.result });
       }
     } catch (err) {
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        return;
+      }
       dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to fetch triage" });
       dispatch({ type: "SET_LOADING_MAIL", payload: false });
     }
   }, [apiBase]);
 
   const fetchInsights = useCallback(async (limit = 50, horizonDays = 7) => {
+    const requestedSourceId = activeSourceIdRef.current;
+    if (!requestedSourceId) {
+      return;
+    }
+
     dispatch({ type: "SET_LOADING_MAIL", payload: true });
     try {
       const data = await apiFetch<{ ok: boolean; result: MailInsightsResult }>(
         `${apiBase}/mail/insights?limit=${limit}&horizonDays=${horizonDays}`
       );
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        return;
+      }
       if (data.ok) {
         dispatch({ type: "SET_INSIGHTS", payload: data.result });
       }
     } catch (err) {
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        return;
+      }
       dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to fetch insights" });
       dispatch({ type: "SET_LOADING_MAIL", payload: false });
     }
@@ -833,6 +890,8 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
       return {
         syncedIds: [],
         failedIds: items.map((item) => item.messageId),
+        syncedKeys: [],
+        failedKeys: items.map((item) => calendarDraftKey(item)),
         createdCount: 0,
         deduplicatedCount: 0,
         failedCount: items.length,
@@ -841,6 +900,8 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
 
     const syncedIds = new Set<string>();
     const failedIds = new Set<string>();
+    const syncedKeys = new Set<string>();
+    const failedKeys = new Set<string>();
     let createdCount = 0;
     let deduplicatedCount = 0;
     let failedCount = 0;
@@ -856,11 +917,17 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
             failedCount: number;
             items: Array<
               | {
+                  key: string;
                   messageId: string;
+                  type: MailCalendarDraft["type"];
+                  dueAt: string;
                   ok: true;
                 }
               | {
+                  key: string;
                   messageId: string;
+                  type: MailCalendarDraft["type"];
+                  dueAt: string;
                   ok: false;
                 }
             >;
@@ -888,14 +955,17 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
         for (const entry of data.result.items) {
           if (entry.ok) {
             syncedIds.add(entry.messageId);
+            syncedKeys.add(calendarDraftKey(entry));
           } else {
             failedIds.add(entry.messageId);
+            failedKeys.add(calendarDraftKey(entry));
           }
         }
       } catch {
         failedCount += chunk.length;
         for (const item of chunk) {
           failedIds.add(item.messageId);
+          failedKeys.add(calendarDraftKey(item));
         }
       }
     }
@@ -903,6 +973,8 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     return {
       syncedIds: Array.from(syncedIds),
       failedIds: Array.from(failedIds),
+      syncedKeys: Array.from(syncedKeys),
+      failedKeys: Array.from(failedKeys),
       createdCount,
       deduplicatedCount,
       failedCount,
@@ -1106,6 +1178,7 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
   // ========== 新邮件处理 ==========
 
   const runMailProcessing = useCallback(async (limit = 30, horizonDays = 14): Promise<MailProcessingRunResult> => {
+    const requestedSourceId = activeSourceIdRef.current;
     dispatch({ type: "SET_PROCESSING_MAIL", payload: true });
     try {
       const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Shanghai";
@@ -1117,22 +1190,26 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
             limit,
             horizonDays,
             tz: timeZone,
-            sourceId: state.activeSourceId ?? undefined,
+            sourceId: requestedSourceId ?? undefined,
           }),
         }
       );
       if (!data.ok) {
         throw new Error("Mail processing failed");
       }
-      dispatch({ type: "SET_PROCESSING_RESULT", payload: data.result });
+      if (activeSourceIdRef.current === requestedSourceId && (!requestedSourceId || data.result.sourceId === requestedSourceId)) {
+        dispatch({ type: "SET_PROCESSING_RESULT", payload: data.result });
+      }
       return data.result;
     } catch (err) {
-      dispatch({ type: "SET_PROCESSING_MAIL", payload: false });
-      dispatch({ type: "SET_PROCESSING_RESULT", payload: null });
-      dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to process mail" });
+      if (activeSourceIdRef.current === requestedSourceId) {
+        dispatch({ type: "SET_PROCESSING_MAIL", payload: false });
+        dispatch({ type: "SET_PROCESSING_RESULT", payload: null });
+        dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to process mail" });
+      }
       throw err;
     }
-  }, [apiBase, state.activeSourceId]);
+  }, [apiBase]);
 
   // ========== 知识库 ==========
 

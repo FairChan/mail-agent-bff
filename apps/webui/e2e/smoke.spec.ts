@@ -994,12 +994,309 @@ test.describe("webui smoke", () => {
     await expect(page.getByText("这些事项已经写入日历。")).toBeVisible();
   });
 
+  test("keeps same-message calendar drafts independently syncable", async ({ page }) => {
+    await mockAuthenticatedApp(page);
+
+    await page.route("**/api/mail/processing/run", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          sourceId: "smoke-source",
+          result: {
+            status: "completed",
+            trigger: "manual",
+            warnings: [],
+            sourceId: "smoke-source",
+            startedAt: "2026-04-17T00:00:00.000Z",
+            completedAt: "2026-04-17T00:01:00.000Z",
+            limit: 30,
+            horizonDays: 14,
+            timeZone: "Asia/Shanghai",
+            knowledgeBase: {
+              status: "completed",
+              processedCount: 1,
+              newMailCount: 1,
+              updatedMailCount: 0,
+              newEventCount: 2,
+              updatedEventCount: 0,
+              newSenderCount: 1,
+              updatedSenderCount: 0,
+              errors: [],
+            },
+            triage: {
+              total: 1,
+              counts: {
+                unprocessed: 0,
+                urgent_important: 1,
+                not_urgent_important: 0,
+                urgent_not_important: 0,
+                not_urgent_not_important: 0,
+              },
+            },
+            urgent: {
+              totalUrgentImportant: 0,
+              newItems: [],
+            },
+            dailyDigest: null,
+            calendarDrafts: [
+              {
+                messageId: "multi-draft-1",
+                subject: "Shared event mail",
+                type: "ddl",
+                dueAt: "2026-04-18T10:00:00.000Z",
+                dueDateLabel: "2026年4月18日 10:00",
+                confidence: 0.91,
+              },
+              {
+                messageId: "multi-draft-1",
+                subject: "Shared event mail",
+                type: "meeting",
+                dueAt: "2026-04-19T14:00:00.000Z",
+                dueDateLabel: "2026年4月19日 14:00",
+                confidence: 0.88,
+              },
+            ],
+            calendarSync: null,
+            automation: {
+              triggeredBy: "manual",
+              windowDays: 14,
+              newMailDetected: true,
+              calendarAutoSyncEnabled: false,
+              calendarAutoSyncThreshold: 0.72,
+            },
+          },
+        }),
+      });
+    });
+
+    await page.route("**/api/mail/calendar/sync/batch", async (route) => {
+      const body = route.request().postDataJSON() as {
+        sourceId?: string;
+        items?: Array<{ messageId: string; type: string; dueAt: string; subject: string }>;
+      };
+      expect(body.sourceId).toBe("smoke-source");
+      expect(body.items).toHaveLength(2);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          result: {
+            sourceId: "smoke-source",
+            total: body.items?.length ?? 0,
+            createdCount: 2,
+            deduplicatedCount: 0,
+            failedCount: 0,
+            items: (body.items ?? []).map((item, index) => ({
+              key: `${item.messageId}:${item.type}:${item.dueAt}`,
+              messageId: item.messageId,
+              type: item.type,
+              dueAt: item.dueAt,
+              ok: true,
+              deduplicated: false,
+              result: {
+                eventId: `evt-multi-${index}`,
+                eventSubject: item.subject,
+                eventWebLink: `https://outlook.example/calendar/evt-multi-${index}`,
+                start: { dateTime: item.dueAt, timeZone: "Asia/Shanghai" },
+                end: { dateTime: item.dueAt, timeZone: "Asia/Shanghai" },
+              },
+            })),
+          },
+        }),
+      });
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "立即处理新邮件" }).click();
+
+    const confirmation = page.locator("section").filter({ hasText: "日历确认" });
+    await expect(confirmation.getByText("2026年4月18日 10:00")).toBeVisible();
+    await expect(confirmation.getByText("2026年4月19日 14:00")).toBeVisible();
+    await confirmation.getByRole("button", { name: "全部写入日历" }).click();
+    await expect(confirmation.getByText("已写入日历 2 项。")).toBeVisible();
+  });
+
+  test("ignores stale mail results after switching mailbox sources", async ({ page }) => {
+    await mockAuthenticatedApp(page);
+
+    const buildTriageResult = (subject: string) => ({
+      generatedAt: "2026-04-17T00:00:00.000Z",
+      total: 1,
+      counts: {
+        unprocessed: 0,
+        urgent_important: 1,
+        not_urgent_important: 0,
+        urgent_not_important: 0,
+        not_urgent_not_important: 0,
+      },
+      quadrants: {
+        unprocessed: [],
+        urgent_important: [
+          {
+            id: `${subject.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-1`,
+            messageId: `${subject.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-1`,
+            subject,
+            fromName: "Source Test",
+            fromAddress: "source-test@example.com",
+            bodyPreview: "Source isolation regression marker.",
+            webLink: "https://outlook.example/messages/source-switch",
+            quadrant: "urgent_important",
+            receivedDateTime: "2026-04-17T00:00:00.000Z",
+            aiSummary: "Source isolation regression marker.",
+            reasons: ["source-switch"],
+          },
+        ],
+        not_urgent_important: [],
+        urgent_not_important: [],
+        not_urgent_not_important: [],
+      },
+      allItems: [],
+    });
+
+    let triageRequests = 0;
+    let releaseStaleTriage: (() => void) | undefined;
+    const staleTriageReleased = new Promise<void>((resolve) => {
+      releaseStaleTriage = resolve;
+    });
+
+    await page.route("**/api/mail/triage**", async (route) => {
+      triageRequests += 1;
+      if (triageRequests === 1) {
+        await staleTriageReleased;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            result: buildTriageResult("Stale smoke source deadline"),
+          }),
+        });
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          result: buildTriageResult("Archive source deadline"),
+        }),
+      });
+    });
+
+    await page.goto("/");
+    await expect(page.getByText("新邮件处理工作台")).toBeVisible({ timeout: 15000 });
+
+    await page.getByRole("navigation", { name: "应用 Dock" }).getByRole("button", { name: "Dock Settings" }).click();
+    await page.getByRole("button", { name: "设为默认" }).click();
+    await page.getByRole("navigation", { name: "应用 Dock" }).getByRole("button", { name: "Dock Inbox" }).click();
+
+    await expect(page.getByText("Archive source deadline")).toBeVisible({ timeout: 15000 });
+    releaseStaleTriage?.();
+    await page.waitForTimeout(250);
+
+    await expect(page.getByText("Archive source deadline")).toBeVisible();
+    await expect(page.getByText("Stale smoke source deadline")).toHaveCount(0);
+  });
+
+  test("ignores stale manual processing results after switching mailbox sources", async ({ page }) => {
+    await mockAuthenticatedApp(page);
+
+    let releaseProcessing: (() => void) | undefined;
+    const processingReleased = new Promise<void>((resolve) => {
+      releaseProcessing = resolve;
+    });
+
+    await page.route("**/api/mail/processing/run", async (route) => {
+      await processingReleased;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          sourceId: "smoke-source",
+          result: {
+            status: "completed",
+            trigger: "manual",
+            warnings: [],
+            sourceId: "smoke-source",
+            startedAt: "2026-04-17T00:00:00.000Z",
+            completedAt: "2026-04-17T00:01:00.000Z",
+            limit: 30,
+            horizonDays: 14,
+            timeZone: "Asia/Shanghai",
+            knowledgeBase: {
+              status: "completed",
+              processedCount: 1,
+              newMailCount: 1,
+              updatedMailCount: 0,
+              newEventCount: 0,
+              updatedEventCount: 0,
+              newSenderCount: 0,
+              updatedSenderCount: 0,
+              errors: [],
+            },
+            triage: {
+              total: 1,
+              counts: {
+                unprocessed: 0,
+                urgent_important: 1,
+                not_urgent_important: 0,
+                urgent_not_important: 0,
+                not_urgent_not_important: 0,
+              },
+            },
+            urgent: {
+              totalUrgentImportant: 1,
+              newItems: [
+                {
+                  messageId: "stale-processing-1",
+                  subject: "Stale processing urgent",
+                  fromName: "Old Source",
+                  fromAddress: "old-source@example.com",
+                  receivedDateTime: "2026-04-17T00:00:00.000Z",
+                  webLink: "https://outlook.example/messages/stale-processing-1",
+                  reasons: ["source-switch"],
+                },
+              ],
+            },
+            dailyDigest: null,
+            calendarDrafts: [],
+            calendarSync: null,
+            automation: {
+              triggeredBy: "manual",
+              windowDays: 14,
+              newMailDetected: true,
+              calendarAutoSyncEnabled: false,
+              calendarAutoSyncThreshold: 0.72,
+            },
+          },
+        }),
+      });
+    });
+
+    await page.goto("/");
+    await expect(page.getByText("新邮件处理工作台")).toBeVisible({ timeout: 15000 });
+    await page.getByRole("button", { name: "立即处理新邮件" }).click();
+
+    await page.getByRole("navigation", { name: "应用 Dock" }).getByRole("button", { name: "Dock Settings" }).click();
+    await page.getByRole("button", { name: "设为默认" }).click();
+    releaseProcessing?.();
+    await page.waitForTimeout(250);
+
+    await page.getByRole("navigation", { name: "应用 Dock" }).getByRole("button", { name: "Dock Inbox" }).click();
+    await expect(page.getByText("新邮件处理工作台")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText("Stale processing urgent")).toHaveCount(0);
+  });
+
   test("opens the knowledge-base mail tab from the mails navigation entry", async ({ page }) => {
     await mockAuthenticatedApp(page);
 
     await page.goto("/");
-    const sidebar = page.getByRole("navigation", { name: "导航菜单" });
-    await sidebar.getByRole("button", { name: "邮件", exact: true }).click();
+    await page.getByRole("navigation", { name: "应用 Dock" }).getByRole("button", { name: "Dock Mails" }).click();
 
     await expect(page.getByRole("heading", { name: "邮件" })).toBeVisible();
     await expect(page.getByText("暂无邮件数据，请先执行邮件总结任务")).toBeVisible();
@@ -1007,6 +1304,40 @@ test.describe("webui smoke", () => {
     await expect(page.getByRole("button", { name: "事件" })).not.toBeVisible();
     await expect(page.getByRole("button", { name: "联系人" })).not.toBeVisible();
     await expect(page.getByRole("button", { name: "文档" })).not.toBeVisible();
+  });
+
+  test("switches primary workspace views from the migrated dock", async ({ page }) => {
+    await mockAuthenticatedApp(page);
+
+    await page.goto("/");
+    const dock = page.getByRole("navigation", { name: "应用 Dock" });
+    await expect(dock).toBeVisible({ timeout: 15000 });
+
+    await dock.getByRole("button", { name: "Dock Calendar" }).click();
+    await expect(page.locator("#workspace-window-title")).toHaveText("日历");
+
+    await dock.getByRole("button", { name: "Dock Inbox" }).click();
+    await expect(page.getByText("新邮件处理工作台")).toBeVisible();
+  });
+
+  test("keeps dock tooltips visible within the dock frame", async ({ page }) => {
+    await mockAuthenticatedApp(page);
+
+    await page.goto("/");
+    const dock = page.getByRole("navigation", { name: "应用 Dock" });
+    const calendarButton = dock.getByRole("button", { name: "Dock Calendar" });
+    const tooltip = dock.getByTestId("dock-tooltip-calendar");
+
+    await calendarButton.hover();
+    await expect(tooltip).toBeVisible();
+
+    const dockBox = await dock.boundingBox();
+    const tooltipBox = await tooltip.boundingBox();
+
+    expect(dockBox).not.toBeNull();
+    expect(tooltipBox).not.toBeNull();
+    expect(tooltipBox!.y).toBeGreaterThanOrEqual(dockBox!.y);
+    expect(tooltipBox!.y + tooltipBox!.height).toBeLessThanOrEqual(dockBox!.y + dockBox!.height);
   });
 
   test("runs the migrated semantic omni-search against the real mail query API", async ({ page }) => {
@@ -1103,8 +1434,7 @@ test.describe("webui smoke", () => {
     });
 
     await page.goto("/");
-    const sidebar = page.getByRole("navigation", { name: "导航菜单" });
-    await sidebar.getByRole("button", { name: "日历", exact: true }).click();
+    await page.getByRole("navigation", { name: "应用 Dock" }).getByRole("button", { name: "Dock Calendar" }).click();
 
     await expect(page.getByText("月视图会把当前窗口内识别出的事项直接铺在日期格子中。")).toBeVisible();
     await expect(page.locator('[data-mail-calendar-chip="true"]')).toHaveCount(2);
@@ -1138,8 +1468,7 @@ test.describe("webui smoke", () => {
     await mockAuthenticatedApp(page);
 
     await page.goto("/");
-    const sidebar = page.getByRole("navigation", { name: "导航菜单" });
-    await sidebar.getByRole("button", { name: "日历", exact: true }).click();
+    await page.getByRole("navigation", { name: "应用 Dock" }).getByRole("button", { name: "Dock Calendar" }).click();
 
     const spilloverDay = page.locator('[data-calendar-day-key="2026-03-31"]');
     await spilloverDay.click();
@@ -1173,6 +1502,9 @@ test.describe("webui smoke", () => {
     await expect(toast).toBeVisible({ timeout: 15000 });
     await expect(toast.getByRole("link", { name: "New scholarship deadline" })).toBeVisible();
     await expect(toast.getByText("自动预处理已完成")).toBeVisible();
+    const dockZIndex = await page.getByTestId("app-dock-layer").evaluate((element) => Number(window.getComputedStyle(element).zIndex));
+    const toastZIndex = await page.getByTestId("urgent-mail-toast-stack").evaluate((element) => Number(window.getComputedStyle(element).zIndex));
+    expect(toastZIndex).toBeGreaterThan(dockZIndex);
     await toast.getByRole("button", { name: "存为知识卡片" }).click();
     await expect(toast.getByRole("button", { name: "已存为知识卡片" })).toBeVisible();
   });
@@ -1201,7 +1533,7 @@ test.describe("webui smoke", () => {
     await mockAuthenticatedApp(page);
 
     await page.goto("/");
-    await page.getByRole("button", { name: "设置" }).click();
+    await page.getByRole("navigation", { name: "应用 Dock" }).getByRole("button", { name: "Dock Settings" }).click();
 
     await expect(page.getByRole("heading", { name: "通知设置" })).toBeVisible();
     await expect(page.getByLabel("摘要时间")).toBeEnabled();
@@ -1220,7 +1552,7 @@ test.describe("webui smoke", () => {
     await mockAuthenticatedApp(page);
 
     await page.goto("/");
-    await page.getByRole("button", { name: "设置" }).click();
+    await page.getByRole("navigation", { name: "应用 Dock" }).getByRole("button", { name: "Dock Settings" }).click();
 
     await expect(page.getByLabel("摘要时间")).toBeEnabled();
     await page.getByRole("checkbox", { name: "紧急邮件即时提醒" }).uncheck();
@@ -1320,7 +1652,7 @@ test.describe("webui smoke", () => {
     });
 
     await page.goto("/");
-    await page.getByRole("button", { name: "知识库" }).click();
+    await page.getByRole("navigation", { name: "应用 Dock" }).getByRole("button", { name: "Dock Knowledge" }).click();
     await page.getByRole("button", { name: "文档" }).click();
 
     await expect(page.getByText("1. MSG_1")).toBeVisible();
@@ -1375,7 +1707,7 @@ test.describe("webui smoke", () => {
     });
 
     await page.goto("/");
-    await page.getByRole("button", { name: "知识库" }).click();
+    await page.getByRole("navigation", { name: "应用 Dock" }).getByRole("button", { name: "Dock Knowledge" }).click();
     await page.getByRole("button", { name: "文档" }).click();
 
     await expect(page.getByText("1. MSG_1")).toBeVisible();
@@ -1463,7 +1795,7 @@ test.describe("webui smoke", () => {
     });
 
     await page.goto("/");
-    await page.getByRole("button", { name: "知识库" }).click();
+    await page.getByRole("navigation", { name: "应用 Dock" }).getByRole("button", { name: "Dock Knowledge" }).click();
     await page.getByRole("button", { name: "文档" }).click();
 
     await expect(page.getByRole("button", { name: /邮件题目索引/ })).toBeVisible();
@@ -1687,7 +2019,7 @@ test.describe("webui smoke", () => {
     });
 
     await page.goto("/");
-    await page.getByRole("button", { name: "知识库" }).click();
+    await page.getByRole("navigation", { name: "应用 Dock" }).getByRole("button", { name: "Dock Knowledge" }).click();
 
     await expect(page.getByText("按重要度、紧急度与处理状态排布邮件")).toBeVisible({ timeout: 15000 });
     await expect(page.getByRole("button", { name: /Tomorrow final report deadline/ })).toBeVisible();

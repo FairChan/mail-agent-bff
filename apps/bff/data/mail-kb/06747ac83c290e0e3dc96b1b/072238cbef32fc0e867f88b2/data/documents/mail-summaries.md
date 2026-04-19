@@ -1,7 +1,63 @@
 # 邮件总结正文库
 
-生成时间：2026-04-19T06:57:44.804Z
-邮件总数：68
+生成时间：2026-04-19T12:31:35.542Z
+邮件总数：72
+
+## MSG_35jya4 | \[Binance\] Login Attempted from New IP address 27\.125\.242\.30 \- 2026\-04\-19 11:43:01\(UTC\)
+- 原始ID：AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABk0ga1QAAAA==
+- 发件人ID：PER_001014
+- 事件ID：EVT_001014
+- 分数制：0-1 比例
+- 重要性：0.9/1
+- 紧急性：0.9/1
+- 象限：urgent_important
+- 接收时间：2026-04-19T11:43:06.000Z
+- 知识卡片：未保存
+- 知识标签：无
+
+Binance安全警告：账户ssemaster@outlook\.com于2026\-04\-19从新IP地址27\.125\.242\.30登录。若非本人操作，需立即重置密码并联系客服，提示防范钓鱼网站。
+
+## MSG_1orlyl8 | Clearance Bonanza: Treat Yourself\!
+- 原始ID：AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABk0ga1AAAAA==
+- 发件人ID：PER_001004
+- 事件ID：EVT_001004
+- 分数制：0-1 比例
+- 重要性：0.1/1
+- 紧急性：0.2/1
+- 象限：not_urgent_not_important
+- 接收时间：2026-04-19T10:15:56.000Z
+- 知识卡片：未保存
+- 知识标签：无
+
+SHEIN发送清仓大促营销邮件，主推精选商品新价格优惠，引导用户优先挑选并立即抢购，属于常规商业推广。
+
+## MSG_1fn9qiz | \[FairChan/mail\-agent\-bff\] Run failed: CI \- master \(b352688\)
+- 原始ID：AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABk0ga0wAAAA==
+- 发件人ID：PER_002
+- 事件ID：EVT_002
+- 分数制：0-1 比例
+- 重要性：0.8/1
+- 紧急性：0.7/1
+- 象限：urgent_important
+- 接收时间：2026-04-19T06:59:16.000Z
+- 知识卡片：未保存
+- 知识标签：无
+
+mail\-agent\-bff项目CI工作流再次失败，verify任务于48秒后失败并产生2个注解，项目CI异常问题仍在持续。
+
+## MSG_1287ouz | \[FairChan/mail\-agent\-bff\] Run failed: \.github/workflows/codeql\.yml \- master \(b352688\)
+- 原始ID：AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABk0ga0gAAAA==
+- 发件人ID：PER_002
+- 事件ID：EVT_001014
+- 分数制：0-1 比例
+- 重要性：0.7/1
+- 紧急性：0.5/1
+- 象限：not_urgent_important
+- 接收时间：2026-04-19T06:58:24.000Z
+- 知识卡片：未保存
+- 知识标签：无
+
+FairChan/mail\-agent\-bff项目的CodeQL工作流运行失败，提示“No jobs were run”，未执行任何任务，需排查工作流配置或运行环境异常。
 
 ## MSG_ftnmm6 | Your Decathlon Account Creation
 - 原始ID：AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABkz5zFwAAAA==

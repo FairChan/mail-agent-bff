@@ -1,22 +1,75 @@
 # 事件聚类索引（事件ID + 归纳总结）
 
-生成时间：2026-04-19T06:57:44.804Z
+生成时间：2026-04-19T12:31:35.542Z
 事件总数：34
 
-## EVT_001014 | Decathlon账号注册成功通知
-- 关联邮件数：1
-- 最后更新：2026-04-19T06:04:20.000Z
-- 标签：not\_urgent\_not\_important
+## EVT_001014 | Binance账户异常IP登录安全警告
+- 关联邮件数：3
+- 最后更新：2026-04-19T11:43:06.000Z
+- 标签：not\_urgent\_not\_important, not\_urgent\_important, urgent\_important
 
 ### 事件归纳
-用户成功创建Decathlon账户，官方发送欢迎邮件及账户信息确认。
+Binance账户检测到来自新IP地址的登录行为，提示用户核实安全性，若非本人操作需立即重置密码。
 
 ### 关键信息
 - platform: Decathlon
 - account\_id: 2094600728134
+- project: FairChan/mail\-agent\-bff
+- workflow: codeql\.yml
+- branch: master
+- commit: b352688
+- error: No jobs were run
+- account: ssemaster@outlook\.com
+- login\_ip: 27\.125\.242\.30
+- login\_time: 2026\-04\-19 11:43:01\(UTC\)
 
 ### 关联邮件ID
 - MSG_ftnmm6
+- MSG_1287ouz
+- MSG_35jya4
+
+## EVT_001004 | Clearance Bonanza: Treat Yourself\!
+- 关联邮件数：7
+- 最后更新：2026-04-19T10:15:56.000Z
+- 标签：not\_urgent\_not\_important
+
+### 事件归纳
+SHEIN继续推送促销，新增清仓大促活动，强调精选商品新价格及优先挑选权，催促用户抢购。
+
+### 关键信息
+- type: promotion
+- season: Spring
+
+### 关联邮件ID
+- MSG_6hfsxt
+- MSG_1xd4ox7
+- MSG_1mvy1yi
+- MSG_1mlmddb
+- MSG_8kp2tz
+- MSG_budzat
+- MSG_1orlyl8
+
+## EVT_002 | \[FairChan/mail\-agent\-bff\] Run failed: CI \- master \(b352688\)
+- 关联邮件数：7
+- 最后更新：2026-04-19T06:59:16.000Z
+- 标签：urgent\_important, not\_urgent\_important
+
+### 事件归纳
+CI工作流再次失败，verify任务于48秒后失败并产生2个注解，项目CI异常问题仍在持续。
+
+### 关键信息
+- repo: FairChan/mail\-agent\-bff
+- branch: master
+- status: failed
+
+### 关联邮件ID
+- MSG_noqj2c
+- MSG_m4q6le
+- MSG_kxrmhf
+- MSG_115lw76
+- MSG_gww2fz
+- MSG_uby43z
+- MSG_1fn9qiz
 
 ## EVT_001001 | \[FairChan/mail\-agent\-bff\] Run failed: Load Tests \- master \(779cc63\)
 - 关联邮件数：5
@@ -102,27 +155,6 @@ Coursera限时6折促销即将结束，本期重点推荐Google的AI及数据分
 - MSG_asqioo
 - MSG_o7skco
 - MSG_1fq54wz
-
-## EVT_002 | \[FairChan/mail\-agent\-bff\] Run failed: CI \- master \(779cc63\)
-- 关联邮件数：6
-- 最后更新：2026-04-18T13:09:39.000Z
-- 标签：urgent\_important, not\_urgent\_important
-
-### 事件归纳
-CI工作流再次失败，verify任务于46秒后失败并产生2个注解，项目CI异常问题仍在持续。
-
-### 关键信息
-- repo: FairChan/mail\-agent\-bff
-- branch: master
-- status: failed
-
-### 关联邮件ID
-- MSG_noqj2c
-- MSG_m4q6le
-- MSG_kxrmhf
-- MSG_115lw76
-- MSG_gww2fz
-- MSG_uby43z
 
 ## EVT_001 | AirAsia RedRun: Fly, run, repeat 🏃‍♂️☀️
 - 关联邮件数：1
@@ -510,26 +542,6 @@ SEAGM再次提醒用户有TNG充值订单未完成，催促尽快结账以免失
 ### 关联邮件ID
 - MSG_ht9gjw
 - MSG_4e7evw
-
-## EVT_001004 | Shop Sell\-Out Styles Here\!
-- 关联邮件数：6
-- 最后更新：2026-04-05T10:17:21.000Z
-- 标签：not\_urgent\_not\_important
-
-### 事件归纳
-SHEIN继续推送促销，新增当季热销爆款商品推荐，强调库存紧张催促购买。
-
-### 关键信息
-- type: promotion
-- season: Spring
-
-### 关联邮件ID
-- MSG_6hfsxt
-- MSG_1xd4ox7
-- MSG_1mvy1yi
-- MSG_1mlmddb
-- MSG_8kp2tz
-- MSG_budzat
 
 ## EVT_001013 | Lazada购物体验满意度调查
 - 关联邮件数：1

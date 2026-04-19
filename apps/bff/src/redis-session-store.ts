@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { FastifyBaseLogger } from "fastify";
 import { createClient } from "redis";
 import { env } from "./config.js";
@@ -32,11 +33,19 @@ type DestroyableRedisClient = RedisClient & {
 };
 
 function redisSessionKey(sessionToken: string): string {
-  return `${env.REDIS_KEY_PREFIX}:auth_session:${sessionToken}`;
+  return `${env.REDIS_KEY_PREFIX}:auth_session:${hashSessionToken(sessionToken)}`;
 }
 
 function redisSessionTombstoneKey(sessionToken: string): string {
-  return `${env.REDIS_KEY_PREFIX}:auth_session_cleared:${sessionToken}`;
+  return `${env.REDIS_KEY_PREFIX}:auth_session_cleared:${hashSessionToken(sessionToken)}`;
+}
+
+function legacyRedisSessionKey(sessionToken: string): string {
+  return `${env.REDIS_KEY_PREFIX}:auth_session:${sessionToken}`;
+}
+
+function hashSessionToken(sessionToken: string): string {
+  return createHash("sha256").update(sessionToken).digest("hex");
 }
 
 function parsePersistedAuthSession(payload: string): PersistedAuthSession | null {
@@ -193,13 +202,14 @@ export async function createRedisAuthSessionStore(logger: FastifyBaseLogger): Pr
     enabled: true,
     async load(sessionToken: string) {
       const raw = await redisClient.get(redisSessionKey(sessionToken));
-      if (!raw) {
+      const payload = raw ?? (await redisClient.get(legacyRedisSessionKey(sessionToken)));
+      if (!payload) {
         return null;
       }
 
-      const parsed = parsePersistedAuthSession(raw);
+      const parsed = parsePersistedAuthSession(payload);
       if (!parsed) {
-        await redisClient.del(redisSessionKey(sessionToken));
+        await redisClient.del([redisSessionKey(sessionToken), legacyRedisSessionKey(sessionToken)]);
         return null;
       }
 
@@ -218,18 +228,23 @@ export async function createRedisAuthSessionStore(logger: FastifyBaseLogger): Pr
         return;
       }
 
-      await redisClient.set(redisSessionKey(sessionToken), JSON.stringify(record), {
-        PX: Math.max(1000, Math.floor(ttlMs)),
-      });
+      await redisClient
+        .multi()
+        .set(redisSessionKey(sessionToken), JSON.stringify(record), {
+          PX: Math.max(1000, Math.floor(ttlMs)),
+        })
+        .del(legacyRedisSessionKey(sessionToken))
+        .exec();
     },
     async remove(sessionToken: string) {
-      await redisClient.del(redisSessionKey(sessionToken));
+      await redisClient.del([redisSessionKey(sessionToken), legacyRedisSessionKey(sessionToken)]);
     },
     async markCleared(sessionToken: string, ttlMs: number) {
       const tombstoneTtlMs = Math.max(1000, Math.floor(ttlMs));
       const key = redisSessionKey(sessionToken);
+      const legacyKey = legacyRedisSessionKey(sessionToken);
       const tombstoneKey = redisSessionTombstoneKey(sessionToken);
-      await redisClient.multi().set(tombstoneKey, "1", { PX: tombstoneTtlMs }).del(key).exec();
+      await redisClient.multi().set(tombstoneKey, "1", { PX: tombstoneTtlMs }).del([key, legacyKey]).exec();
     },
     async isCleared(sessionToken: string) {
       const exists = await redisClient.exists(redisSessionTombstoneKey(sessionToken));

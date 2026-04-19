@@ -3,6 +3,7 @@ import { useMail } from "../../contexts/MailContext";
 import { useApp } from "../../contexts/AppContext";
 import MailKBSummaryModal from "./MailKBSummaryModal";
 import { LoadingSpinner } from "../shared/LoadingSpinner";
+import { CalmButton, CalmPill } from "../ui/Calm";
 
 type KnowledgeBaseArtifact = {
   key: string;
@@ -144,34 +145,26 @@ export function TutorialView({ apiBase, onComplete, completed }: TutorialViewPro
 
   return (
     <div className="space-y-6">
-      <section className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-700 dark:bg-zinc-800">
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Tutorial</p>
-        <h2 className="mt-2 text-2xl font-semibold text-zinc-900 dark:text-zinc-100">{copy.headline}</h2>
-        <p className="mt-3 max-w-3xl text-sm leading-7 text-zinc-600 dark:text-zinc-300">{copy.description}</p>
+      <section className="rounded-[1.4rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] p-6 shadow-[var(--shadow-soft)]">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--ink-subtle)]">Tutorial</p>
+        <h2 className="mt-2 text-2xl font-semibold text-[color:var(--ink)]">{copy.headline}</h2>
+        <p className="mt-3 max-w-3xl text-sm leading-7 text-[color:var(--ink-muted)]">{copy.description}</p>
         <div className="mt-4 flex flex-wrap gap-3">
-          <button
-            type="button"
-            onClick={() => setCurrentView("settings")}
-            className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
-          >
+          <CalmButton type="button" onClick={() => setCurrentView("settings")} variant="primary">
             {locale === "zh" ? "前往绑定邮箱" : "Open Settings"}
-          </button>
-          <button
-            type="button"
-            onClick={onComplete}
-            className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-600 dark:text-zinc-200 dark:hover:border-zinc-300"
-          >
+          </CalmButton>
+          <CalmButton type="button" onClick={onComplete} variant="secondary">
             {completed ? (locale === "zh" ? "再次进入收件箱" : "Back to inbox") : (locale === "zh" ? "暂时跳过教程" : "Skip for now")}
-          </button>
+          </CalmButton>
         </div>
       </section>
 
       <section className="grid gap-4 xl:grid-cols-2">
-        <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-700 dark:bg-zinc-800">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">{copy.sourceTitle}</p>
-          <p className="mt-3 text-sm leading-7 text-zinc-700 dark:text-zinc-200">{copy.sourceBody}</p>
+        <div className="rounded-[1.3rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] p-5 shadow-[var(--shadow-soft)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--ink-subtle)]">{copy.sourceTitle}</p>
+          <p className="mt-3 text-sm leading-7 text-[color:var(--ink-muted)]">{copy.sourceBody}</p>
           {activeSource ? (
-            <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
+            <div className="mt-4 rounded-[1rem] border border-[color:var(--border-success)] bg-[color:var(--surface-success)] px-4 py-3 text-sm text-[color:var(--pill-success-ink)]">
               {activeSource.ready
                 ? locale === "zh"
                   ? "邮箱已经可读，可以直接开始历史归纳。"
@@ -183,9 +176,9 @@ export function TutorialView({ apiBase, onComplete, completed }: TutorialViewPro
           ) : null}
         </div>
 
-        <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-700 dark:bg-zinc-800">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">{copy.summaryTitle}</p>
-          <p className="mt-3 text-sm leading-7 text-zinc-700 dark:text-zinc-200">{copy.summaryBody}</p>
+        <div className="rounded-[1.3rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] p-5 shadow-[var(--shadow-soft)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--ink-subtle)]">{copy.summaryTitle}</p>
+          <p className="mt-3 text-sm leading-7 text-[color:var(--ink-muted)]">{copy.summaryBody}</p>
           <div className="mt-4 flex flex-wrap gap-2">
             {DAY_OPTIONS.map((days) => (
               <button
@@ -194,8 +187,8 @@ export function TutorialView({ apiBase, onComplete, completed }: TutorialViewPro
                 onClick={() => setSelectedDays(days)}
                 className={`rounded-lg px-3 py-2 text-sm font-medium transition ${
                   selectedDays === days
-                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    : "border border-zinc-300 text-zinc-700 hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-600 dark:text-zinc-200 dark:hover:border-zinc-300"
+                    ? "bg-[color:var(--button-primary)] text-[color:var(--button-primary-ink)]"
+                    : "border border-[color:var(--border-soft)] text-[color:var(--ink-muted)] hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--ink)]"
                 }`}
               >
                 {locale === "zh" ? `近 ${days} 天` : `${days} days`}
@@ -203,24 +196,20 @@ export function TutorialView({ apiBase, onComplete, completed }: TutorialViewPro
             ))}
           </div>
           <div className="mt-4 flex flex-wrap gap-3">
-            <button
+            <CalmButton
               type="button"
               onClick={() => {
                 void handleStartSummary();
               }}
               disabled={!activeSourceId || isStarting}
-              className="inline-flex items-center gap-2 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+              variant="primary"
             >
               {isStarting ? <LoadingSpinner size="sm" /> : null}
               {locale === "zh" ? "开始归纳旧邮件" : "Start history summary"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setCurrentView("stats")}
-              className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-600 dark:text-zinc-200 dark:hover:border-zinc-300"
-            >
+            </CalmButton>
+            <CalmButton type="button" onClick={() => setCurrentView("stats")} variant="secondary">
               {locale === "zh" ? "查看归纳结果" : "Open summary results"}
-            </button>
+            </CalmButton>
           </div>
         </div>
       </section>

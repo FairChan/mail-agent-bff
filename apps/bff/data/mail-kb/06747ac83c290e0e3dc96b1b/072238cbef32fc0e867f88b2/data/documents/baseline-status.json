@@ -1,10 +1,10 @@
 {
   "backfillCompleted": true,
-  "exportedAt": "2026-04-19T06:57:44.804Z",
+  "exportedAt": "2026-04-19T12:31:35.542Z",
   "userId": "d5d42116-53cd-498d-9f52-36ed9ce53ff7",
   "sourceId": "mem_outlook-ssemaster-outloo_f97d45",
-  "mailCount": 68,
+  "mailCount": 72,
   "eventCount": 34,
-  "personCount": 26,
+  "personCount": 27,
   "note": "旧有邮件信息已完成归档，可直接用于问答检索。"
 }

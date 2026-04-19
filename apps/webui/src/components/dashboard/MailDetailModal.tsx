@@ -8,7 +8,7 @@ import DOMPurify from "dompurify";
 import { useMail } from "../../contexts/MailContext";
 import { useApp } from "../../contexts/AppContext";
 import { sanitizeExternalLink } from "../../utils/sanitize";
-import type { TriageMailItem } from "@mail-agent/shared-types";
+import { CalmButton, CalmPill, CalmSectionLabel, CalmSurface } from "../ui/Calm";
 
 function formatBodyContent(content: string): string {
   if (!content) return "";
@@ -35,7 +35,7 @@ function formatBodyContent(content: string): string {
 }
 
 export function MailDetailModal() {
-  const { selectedMail, isLoadingDetail, fetchMailDetail, clearSelectedMail, mailBodyCache } = useMail();
+  const { selectedMail, fetchMailDetail, clearSelectedMail, mailBodyCache } = useMail();
   const { locale } = useApp();
 
   const modalRef = useRef<HTMLDivElement>(null);
@@ -127,31 +127,40 @@ export function MailDetailModal() {
 
   const labels = {
     close: locale === "zh" ? "关闭" : locale === "ja" ? "閉じる" : "Close",
+    detailLabel: locale === "zh" ? "邮件详情" : locale === "ja" ? "メール詳細" : "Mail Detail",
     aiSummary: locale === "zh" ? "AI 摘要" : locale === "ja" ? "AI要約" : "AI Summary",
     originalContent: locale === "zh" ? "原始内容" : locale === "ja" ? "元の内容" : "Original Content",
     openInOutlook: locale === "zh" ? "在 Outlook 中打开" : locale === "ja" ? "Outlookで開く" : "Open in Outlook",
     summaryGenerating: locale === "zh" ? "摘要生成中..." : locale === "ja" ? "要約生成中..." : "Generating...",
   };
 
+  const importanceTone =
+    selectedMail.importance === "high"
+      ? "urgent"
+      : selectedMail.importance === "low"
+        ? "info"
+        : "muted";
+
   return (
     <div
       ref={modalRef}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(12,18,27,0.48)] p-4 backdrop-blur-md"
       onClick={(e) => e.target === e.currentTarget && handleClose()}
       role="dialog"
       aria-modal="true"
       tabIndex={-1}
     >
-      <div className="max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-zinc-800">
+      <CalmSurface className="max-h-[90vh] w-full max-w-3xl overflow-hidden" beam>
         {/* Header */}
-        <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-700">
+        <div className="border-b border-[color:var(--border-soft)] px-5 py-4">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 flex-1">
-              <h2 className="truncate text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+              <CalmSectionLabel>{labels.detailLabel}</CalmSectionLabel>
+              <h2 className="mt-2 truncate text-lg font-semibold text-[color:var(--ink)]">
                 {selectedMail.subject || "(No Subject)"}
               </h2>
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
-                <span className="font-medium text-zinc-700 dark:text-zinc-300">
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[color:var(--ink-subtle)]">
+                <span className="font-medium text-[color:var(--ink)]">
                   {selectedMail.fromName || selectedMail.fromAddress}
                 </span>
                 {selectedMail.fromName && (
@@ -159,52 +168,45 @@ export function MailDetailModal() {
                 )}
                 <span>·</span>
                 <span>{formatDate(selectedMail.receivedDateTime)}</span>
-                <span
-                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                    selectedMail.importance === "high"
-                      ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
-                      : selectedMail.importance === "low"
-                        ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
-                        : "bg-zinc-100 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-400"
-                  }`}
-                >
+                <CalmPill tone={importanceTone}>
                   {selectedMail.importance === "high"
                     ? locale === "zh" ? "高" : locale === "ja" ? "高" : "High"
                     : selectedMail.importance === "low"
                       ? locale === "zh" ? "低" : locale === "ja" ? "低" : "Low"
                       : locale === "zh" ? "普通" : locale === "ja" ? "普通" : "Normal"}
-                </span>
+                </CalmPill>
               </div>
             </div>
-            <button
+            <CalmButton
               type="button"
               onClick={handleClose}
-              className="shrink-0 rounded-lg border border-zinc-200 p-2 text-zinc-400 transition hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-600 dark:border-zinc-700 dark:hover:bg-zinc-700"
+              variant="ghost"
+              className="h-10 w-10 shrink-0 rounded-full p-0 text-[color:var(--ink-subtle)]"
               aria-label={labels.close}
             >
               <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
-            </button>
+            </CalmButton>
           </div>
         </div>
 
         {/* AI Summary */}
-        <div className="border-b border-zinc-100 bg-gradient-to-r from-blue-50/50 to-indigo-50/50 px-5 py-4 dark:border-zinc-700 dark:from-blue-900/20 dark:to-indigo-900/20">
+        <div className="border-b border-[color:var(--border-soft)] bg-[color:var(--surface-info)] px-5 py-4">
           <div className="mb-1.5 flex items-center gap-2">
-            <span className="inline-flex items-center gap-1 rounded bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+            <CalmPill tone="info">
               <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
               </svg>
               {labels.aiSummary}
-            </span>
+            </CalmPill>
           </div>
           {selectedMail.aiSummary ? (
-            <p className="text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
+            <p className="text-sm leading-relaxed text-[color:var(--ink)]">
               {selectedMail.aiSummary}
             </p>
           ) : (
-            <p className="text-sm italic text-zinc-400 dark:text-zinc-500">
+            <p className="text-sm italic text-[color:var(--ink-subtle)]">
               {labels.summaryGenerating}
             </p>
           )}
@@ -212,50 +214,50 @@ export function MailDetailModal() {
 
         {/* Body */}
         <div className="overflow-y-auto px-5 py-4" style={{ maxHeight: "calc(90vh - 280px)" }}>
-          <h3 className="mb-2 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+          <h3 className="mb-2 text-sm font-semibold text-[color:var(--ink)]">
             {labels.originalContent}
           </h3>
           {loading ? (
             <div className="space-y-3">
               {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="h-4 w-full animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
+                <div key={i} className="h-4 w-full animate-pulse rounded-full bg-[color:var(--surface-muted)]" />
               ))}
             </div>
           ) : error ? (
             <p className="text-sm text-red-500">{error}</p>
           ) : (
             <div
-              className="prose prose-sm max-w-none whitespace-pre-wrap text-sm leading-relaxed text-zinc-700 dark:text-zinc-300"
+              className="prose prose-sm max-w-none whitespace-pre-wrap text-sm leading-relaxed text-[color:var(--ink-muted)] prose-a:text-[color:var(--button-primary)]"
               dangerouslySetInnerHTML={{ __html: formatBodyContent(bodyContent || "") }}
             />
           )}
         </div>
 
         {/* Footer */}
-        <div className="border-t border-zinc-200 bg-zinc-50/50 px-5 py-4 dark:border-zinc-700 dark:bg-zinc-900/50">
+        <div className="border-t border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-5 py-4">
           <div className="flex items-center justify-between gap-3">
-            <button
+            <CalmButton
               type="button"
               onClick={handleClose}
-              className="rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-700 transition hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+              variant="secondary"
             >
               {labels.close}
-            </button>
+            </CalmButton>
             {selectedMail.webLink && (
-              <button
+              <CalmButton
                 type="button"
                 onClick={handleOpenInOutlook}
-                className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700"
+                variant="primary"
               >
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                 </svg>
                 {labels.openInOutlook}
-              </button>
+              </CalmButton>
             )}
           </div>
         </div>
-      </div>
+      </CalmSurface>
     </div>
   );
 }

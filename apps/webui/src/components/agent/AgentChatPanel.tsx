@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { openAgentWindow } from "../../utils/agentWindow";
+import { CalmButton, CalmSurface } from "../ui/Calm";
 import { useAgentConversation } from "./useAgentConversation";
 
 type AgentChatPanelProps = {
@@ -51,40 +52,32 @@ export function AgentChatPanel({ apiBase, activeSourceId }: AgentChatPanelProps)
   return (
     <div className="fixed bottom-5 right-5 z-30 flex max-w-[calc(100vw-2.5rem)] flex-col items-end gap-3">
       {isOpen && (
-        <section className="glass-panel flex h-[520px] w-[380px] max-w-full flex-col overflow-hidden rounded-3xl">
-          <header className="flex items-center justify-between border-b border-zinc-200/70 px-4 py-3">
+        <CalmSurface className="flex h-[520px] w-[380px] max-w-full flex-col overflow-hidden p-0" beam>
+          <header className="flex items-center justify-between border-b border-[color:var(--border-soft)] px-4 py-3">
             <div>
-              <p className="text-sm font-bold text-zinc-950">Mail Agent</p>
-              <p className="text-xs text-zinc-500">
+              <p className="text-sm font-bold text-[color:var(--ink)]">Mail Agent</p>
+              <p className="text-xs text-[color:var(--ink-subtle)]">
                 {activeSourceId ? `Source: ${activeSourceId}` : "Select a mailbox source before chatting"}
               </p>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                className="rounded-full px-3 py-1 text-sm font-semibold text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
-                onClick={() => openAgentWindow(activeSourceId)}
-              >
+              <CalmButton type="button" variant="ghost" className="px-3 py-1.5 text-sm" onClick={() => openAgentWindow(activeSourceId)}>
                 Pop Out
-              </button>
-              <button
-                type="button"
-                className="rounded-full px-3 py-1 text-sm font-semibold text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
-                onClick={() => setIsOpen(false)}
-              >
+              </CalmButton>
+              <CalmButton type="button" variant="ghost" className="px-3 py-1.5 text-sm" onClick={() => setIsOpen(false)}>
                 Close
-              </button>
+              </CalmButton>
             </div>
           </header>
 
-          <div ref={transcriptRef} className="flex-1 space-y-3 overflow-y-auto bg-white/60 p-4">
+          <div ref={transcriptRef} className="calm-scrollbar flex-1 space-y-3 overflow-y-auto bg-[color:var(--surface-soft)]/50 p-4">
             {messages.map((message) => (
               <div
                 key={message.id}
                 className={`rounded-2xl px-4 py-3 text-sm leading-6 ${
                   message.role === "user"
-                    ? "ml-8 bg-zinc-950 text-white"
-                    : "mr-8 border border-zinc-200 bg-white text-zinc-800"
+                    ? "ml-8 bg-[color:var(--button-primary)] text-[color:var(--button-primary-ink)]"
+                    : "mr-8 border border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] text-[color:var(--ink)]"
                 }`}
               >
                 <p className="whitespace-pre-wrap">{message.content || (busy ? "Thinking..." : "")}</p>
@@ -93,64 +86,48 @@ export function AgentChatPanel({ apiBase, activeSourceId }: AgentChatPanelProps)
           </div>
 
           {error && (
-            <div className="border-t border-rose-100 bg-rose-50 px-4 py-2 text-xs font-medium text-rose-700">
+            <div className="border-t border-[color:var(--border-urgent)] bg-[color:var(--surface-urgent)] px-4 py-2 text-xs font-medium text-[color:var(--pill-urgent-ink)]">
               {error}
             </div>
           )}
 
           {!error && activities[0] && (
-            <div className="border-t border-zinc-200/70 bg-zinc-50 px-4 py-2 text-xs font-medium text-zinc-500">
+            <div className="border-t border-[color:var(--border-soft)] bg-[color:var(--surface-muted)] px-4 py-2 text-xs font-medium text-[color:var(--ink-subtle)]">
               Tool {activities[0].status}: {activities[0].tool}
             </div>
           )}
 
-          <form onSubmit={submit} className="border-t border-zinc-200/70 bg-white p-3">
+          <form onSubmit={submit} className="border-t border-[color:var(--border-soft)] bg-[color:var(--surface-base)] p-3">
             <textarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
               disabled={busy || !activeSourceId}
-              className="min-h-20 w-full resize-none rounded-2xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm outline-none transition focus:border-zinc-900 focus:bg-white"
+              className="calm-input min-h-20 w-full resize-none px-3 py-2 text-sm"
               placeholder={activeSourceId ? "Ask about your mail..." : "Select a mailbox source first"}
             />
             <div className="mt-2 flex items-center justify-between">
               {busy ? (
-                <button
-                  type="button"
-                  onClick={cancel}
-                  className="rounded-full border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-100"
-                >
+                <CalmButton type="button" onClick={cancel} variant="secondary">
                   Cancel
-                </button>
+                </CalmButton>
               ) : (
-                <span className="text-xs text-zinc-400">Streaming via SSE. Open the window for a full agent workspace.</span>
+                <span className="text-xs text-[color:var(--ink-subtle)]">Streaming via SSE. Open the window for a full agent workspace.</span>
               )}
-              <button
-                type="submit"
-                disabled={busy || !input.trim() || !activeSourceId}
-                className="rounded-full bg-zinc-950 px-5 py-2 text-sm font-bold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-300"
-              >
+              <CalmButton type="submit" disabled={busy || !input.trim() || !activeSourceId} variant="primary">
                 {busy ? "Sending" : "Send"}
-              </button>
+              </CalmButton>
             </div>
           </form>
-        </section>
+        </CalmSurface>
       )}
 
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => openAgentWindow(activeSourceId)}
-          className="rounded-full border border-zinc-300 bg-white px-4 py-3 text-sm font-semibold text-zinc-900 shadow-[0_18px_40px_rgba(15,23,42,0.14)] transition hover:-translate-y-0.5 hover:border-zinc-900"
-        >
+        <CalmButton type="button" onClick={() => openAgentWindow(activeSourceId)} variant="secondary" className="shadow-[var(--shadow-soft)]">
           Agent Window
-        </button>
-        <button
-          type="button"
-          onClick={() => setIsOpen((value) => !value)}
-          className="rounded-full bg-zinc-950 px-5 py-3 text-sm font-bold text-white shadow-[0_18px_40px_rgba(15,23,42,0.22)] transition hover:-translate-y-0.5 hover:bg-zinc-800"
-        >
+        </CalmButton>
+        <CalmButton type="button" onClick={() => setIsOpen((value) => !value)} variant="primary" className="shadow-[var(--shadow-soft)]">
           {isOpen ? "Hide Agent" : "Open Agent"}
-        </button>
+        </CalmButton>
       </div>
     </div>
   );

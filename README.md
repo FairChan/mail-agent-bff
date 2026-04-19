@@ -11,6 +11,7 @@ OpenClaw is retained only as a legacy fallback. The default production runtime i
 - `apps/bff`: Fastify BFF, Prisma, Mastra runtime, Microsoft Graph integration, tenant guards, LLM gateway, and KB worker.
 - `apps/webui`: React + Vite browser UI.
 - `packages/shared-types`: shared TypeScript schemas and types.
+- `deploy/host`: host-based deployment assets for the established `Nginx + static WebUI + systemd BFF` stack.
 - `deploy/docker`: single-node Docker Compose deployment for WebUI, BFF, Postgres, and Redis.
 - `deploy/docs/DEPLOYMENT.md`: production runbook.
 - `deploy/CHECKLIST.md`: operator checklist.
@@ -67,6 +68,28 @@ DATABASE_URL=postgresql://user:pass@localhost:5432/mail_agent_validate npx prism
 ```
 
 On Windows PowerShell, use `npm.cmd`/`npx.cmd` if script execution policy blocks `.ps1` shims.
+
+## Production Host
+
+This is the previously used production shape:
+
+`Nginx -> static WebUI files in /var/www/... + /api proxy -> systemd BFF on 127.0.0.1:8787`
+
+Copy the example assets from `deploy/host/` to your server as needed:
+
+- `openclaw-mail-bff.service.example`
+- `nginx-mail-agent.conf.example`
+
+Then run the host deploy entrypoint from the repository root:
+
+```bash
+PUBLIC_WEB_DIR=/var/www/true-sight.asia \
+SYSTEMD_SERVICE_NAME=openclaw-mail-bff.service \
+PUBLIC_HEALTHCHECK_URL=https://true-sight.asia/api/ready \
+./deploy.sh
+```
+
+The script installs dependencies, builds both apps, syncs `apps/webui/dist/` into the public web root, restarts the BFF systemd service, and waits for readiness on `http://127.0.0.1:8787/api/ready`.
 
 ## Production Docker
 

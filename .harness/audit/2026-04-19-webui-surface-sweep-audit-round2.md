@@ -1,0 +1,3 @@
+- Low: The KB overview is still mixed-language in `en`/`ja`. `KnowledgeBaseStatsCard` hardcodes `formatDate()` to `zh-CN` and keeps Chinese sublabels/date-range copy, and `EisenhowerMatrixPanel` does the same for its dates plus empty-state/detail text. English/Japanese users will still see localized section headers over Chinese content. See [KnowledgeBaseStatsCard.tsx](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/components/dashboard/knowledgebase/KnowledgeBaseStatsCard.tsx#L18) and [EisenhowerMatrixPanel.tsx](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/components/dashboard/knowledgebase/EisenhowerMatrixPanel.tsx#L27).
+
+No other findings.

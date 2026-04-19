@@ -7,10 +7,10 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../../contexts/AuthContext";
 import { useApp } from "../../contexts/AppContext";
 import { useMail } from "../../contexts/MailContext";
-import { useTheme } from "../../contexts/ThemeContext";
-import { openAgentWindow } from "../../utils/agentWindow";
 import { NotificationCenter } from "../notification";
 import { RefreshIcon } from "../shared/Icons";
+import { AnimatedThemeToggle } from "../ui/AnimatedThemeToggle";
+import { CalmButton, CalmPill } from "../ui/Calm";
 
 interface HeaderProps {
   onMenuToggle?: () => void;
@@ -18,7 +18,7 @@ interface HeaderProps {
 
 export function Header({ onMenuToggle }: HeaderProps) {
   const { user, logout } = useAuth();
-  const { locale, setLocale } = useApp();
+  const { locale } = useApp();
   const {
     activeSourceId,
     sources,
@@ -31,7 +31,6 @@ export function Header({ onMenuToggle }: HeaderProps) {
     notificationStreamError,
     pollNotifications,
   } = useMail();
-  const { setTheme, resolvedTheme } = useTheme();
   const [desktopPermission, setDesktopPermission] = useState<NotificationPermission | "unsupported">("unsupported");
   const seenUrgentNotificationKeysRef = useRef<Set<string>>(new Set());
   const seenDigestNotificationKeysRef = useRef<Set<string>>(new Set());
@@ -42,59 +41,44 @@ export function Header({ onMenuToggle }: HeaderProps) {
       ? {
           sourceReady: "Mailbox ready",
           sourcePending: "Needs verification",
-          streamConnected: "Realtime syncing",
-          streamConnecting: "Connecting stream",
-          streamError: "Stream error",
-          streamIdle: "Stream idle",
-          desktopGranted: "Desktop alerts enabled",
-          desktopDenied: "Desktop alerts blocked",
-          desktopDefault: "Desktop alerts not granted",
-          desktopUnsupported: "Browser unsupported",
+          streamConnected: "Syncing",
+          streamConnecting: "Connecting",
+          streamError: "Sync issue",
+          streamIdle: "Idle",
           noMailbox: "No mailbox connected",
           notLoggedIn: "Not signed in",
           menu: "Menu",
           toggleTheme: "Toggle theme",
           refresh: "Refresh",
-          agentWindow: "Agent Window",
           logout: "Log out",
         }
       : locale === "ja"
         ? {
             sourceReady: "メール準備完了",
             sourcePending: "確認待ち",
-            streamConnected: "リアルタイム同期中",
-            streamConnecting: "通知接続中",
-            streamError: "通知異常",
-            streamIdle: "通知待機中",
-            desktopGranted: "デスクトップ通知オン",
-            desktopDenied: "デスクトップ通知拒否",
-            desktopDefault: "デスクトップ通知未許可",
-            desktopUnsupported: "ブラウザ未対応",
+            streamConnected: "同期中",
+            streamConnecting: "接続中",
+            streamError: "同期異常",
+            streamIdle: "待機中",
             noMailbox: "メール未接続",
             notLoggedIn: "未ログイン",
             menu: "メニュー",
             toggleTheme: "テーマ切替",
             refresh: "更新",
-            agentWindow: "Agent Window",
             logout: "ログアウト",
           }
         : {
             sourceReady: "邮箱已就绪",
             sourcePending: "等待验证",
-            streamConnected: "实时同步中",
-            streamConnecting: "正在连接通知流",
-            streamError: "通知流异常",
-            streamIdle: "通知流待机",
-            desktopGranted: "桌面提醒已开启",
-            desktopDenied: "桌面提醒被阻止",
-            desktopDefault: "桌面提醒未授权",
-            desktopUnsupported: "浏览器不支持桌面提醒",
+            streamConnected: "同步中",
+            streamConnecting: "连接中",
+            streamError: "同步异常",
+            streamIdle: "待机",
             noMailbox: "未连接邮箱",
             notLoggedIn: "未登录",
             menu: "菜单",
             toggleTheme: "切换主题",
             refresh: "刷新",
-            agentWindow: "Agent 窗口",
             logout: "退出",
           };
   const sourceStatusLabel = activeSource?.ready ? copy.sourceReady : copy.sourcePending;
@@ -106,15 +90,6 @@ export function Header({ onMenuToggle }: HeaderProps) {
         : notificationStreamStatus === "error"
           ? copy.streamError
           : copy.streamIdle;
-  const desktopStatusLabel =
-    desktopPermission === "granted"
-      ? copy.desktopGranted
-      : desktopPermission === "denied"
-        ? copy.desktopDenied
-        : desktopPermission === "default"
-          ? copy.desktopDefault
-          : copy.desktopUnsupported;
-
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.Notification === "undefined") {
       setDesktopPermission("unsupported");
@@ -200,94 +175,49 @@ export function Header({ onMenuToggle }: HeaderProps) {
     }
   }, [logout]);
 
-  const handleThemeToggle = useCallback(() => {
-    setTheme(resolvedTheme === "dark" ? "light" : "dark");
-  }, [resolvedTheme, setTheme]);
-
   return (
-    <header className="glass-panel sticky top-3 z-30 overflow-hidden rounded-[28px] border-white/75 bg-white/78 px-4 py-3.5 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/74 sm:px-5">
-      <div className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-sky-400/55 to-transparent" />
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-600/80 dark:text-sky-300/70">
-              Mery
-            </p>
-            <span className="rounded-full bg-sky-100/80 px-2 py-0.5 text-[10px] font-medium text-sky-700 dark:bg-sky-950/40 dark:text-sky-300">
-              {sourceStatusLabel}
-            </span>
-            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-              notificationStreamStatus === "connected"
-                ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/35 dark:text-emerald-300"
-                : notificationStreamStatus === "error"
-                  ? "bg-red-50 text-red-700 dark:bg-red-950/35 dark:text-red-300"
-                  : "bg-amber-50 text-amber-700 dark:bg-amber-950/35 dark:text-amber-300"
-            }`}>
-              {streamStatusLabel}
-            </span>
-          </div>
-
-          <p className="mt-2 truncate text-base font-semibold text-zinc-900 dark:text-zinc-100">
-            {activeSource?.name || activeSource?.emailHint || copy.noMailbox}
-          </p>
-          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
-            <span className="truncate">{user?.displayName || user?.email || copy.notLoggedIn}</span>
-            <span className="hidden h-1 w-1 rounded-full bg-zinc-300 sm:inline-block dark:bg-zinc-700" />
-            <span>{desktopStatusLabel}</span>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={onMenuToggle}
-            className="rounded-xl border border-white/65 bg-white/85 p-2 text-zinc-600 transition hover:bg-zinc-100 dark:border-white/10 dark:bg-zinc-900/80 dark:text-zinc-400 dark:hover:bg-zinc-800 md:hidden"
-            aria-label={copy.menu}
-          >
+    <header className="glass-panel sticky top-2 z-30 rounded-[1.5rem] px-3 py-2.5 sm:px-4">
+      <div className="flex min-h-11 items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <CalmButton type="button" onClick={onMenuToggle} variant="ghost" className="h-10 w-10 rounded-2xl p-0 md:hidden" aria-label={copy.menu}>
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
             </svg>
-          </button>
+          </CalmButton>
 
-          <div
-            className="inline-flex rounded-xl border border-white/65 bg-white/85 p-0.5 shadow-sm dark:border-white/10 dark:bg-zinc-900/80"
-            role="tablist"
-            aria-label="选择语言"
-          >
-            {(["zh", "en", "ja"] as const).map((l) => (
-              <button
-                key={l}
-                type="button"
-                role="tab"
-                aria-selected={locale === l}
-                onClick={() => setLocale(l)}
-                className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition ${
-                  locale === l
-                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    : "text-zinc-600 dark:text-zinc-400"
-                }`}
-              >
-                {l === "zh" ? "中文" : l === "en" ? "EN" : "JA"}
-              </button>
-            ))}
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="hidden text-[11px] font-semibold uppercase tracking-[0.22em] text-[color:var(--ink-subtle)] sm:inline">
+              Mery
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-[color:var(--ink)]" title={activeSource?.name || activeSource?.emailHint || copy.noMailbox}>
+                {activeSource?.name || activeSource?.emailHint || copy.noMailbox}
+              </p>
+              <p className="truncate text-[11px] text-[color:var(--ink-subtle)]">
+                {user?.displayName || user?.email || copy.notLoggedIn}
+              </p>
+            </div>
           </div>
 
-          <button
-            type="button"
-            onClick={handleThemeToggle}
-            className="inline-flex h-9 items-center justify-center rounded-xl border border-white/65 bg-white/85 px-3 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-white/10 dark:bg-zinc-900/80 dark:text-zinc-300"
-            aria-label={copy.toggleTheme}
-          >
-            {resolvedTheme === "dark" ? (
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
-              </svg>
-            ) : (
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-              </svg>
-            )}
-          </button>
+          <div className="hidden items-center gap-1.5 lg:flex">
+            <CalmPill tone={activeSource?.ready ? "info" : "warning"}>{sourceStatusLabel}</CalmPill>
+            <CalmPill
+              tone={
+                notificationStreamStatus === "connected"
+                  ? "success"
+                  : notificationStreamStatus === "error"
+                    ? "urgent"
+                    : "warning"
+              }
+              pulse={notificationStreamStatus === "connected"}
+            >
+              {streamStatusLabel}
+            </CalmPill>
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          <AnimatedThemeToggle label={copy.toggleTheme} />
 
           <NotificationCenter
             snapshot={notificationSnapshot}
@@ -300,34 +230,30 @@ export function Header({ onMenuToggle }: HeaderProps) {
             onRefresh={() => pollNotifications(40, 7)}
           />
 
-          {/* 刷新按钮 */}
-          <button
+          <CalmButton
             type="button"
             onClick={handleRefresh}
             disabled={isLoadingMail || isPollingNotifications}
-            className="inline-flex h-9 items-center justify-center gap-1 rounded-xl border border-white/65 bg-white/85 px-3 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/10 dark:bg-zinc-900/80 dark:text-zinc-300"
+            aria-label={copy.refresh}
+            variant="secondary"
+            className="h-10 w-10 rounded-2xl p-0"
           >
             <span className={isLoadingMail || isPollingNotifications ? "animate-spin" : ""}>
               <RefreshIcon />
             </span>
-            {copy.refresh}
-          </button>
+          </CalmButton>
 
-          <button
-            type="button"
-            onClick={() => openAgentWindow(activeSourceId)}
-            className="inline-flex h-9 items-center justify-center rounded-xl border border-white/65 bg-white/85 px-3 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-white/10 dark:bg-zinc-900/80 dark:text-zinc-300"
-          >
-            {copy.agentWindow}
-          </button>
-
-          <button
+          <CalmButton
             type="button"
             onClick={handleLogout}
-            className="inline-flex h-9 items-center justify-center rounded-xl border border-white/65 bg-white/85 px-3 text-xs font-medium text-zinc-600 transition hover:text-zinc-900 dark:border-white/10 dark:bg-zinc-900/80 dark:text-zinc-400"
+            aria-label={copy.logout}
+            variant="ghost"
+            className="h-10 w-10 rounded-2xl p-0"
           >
-            {copy.logout}
-          </button>
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.75 9V5.75A1.75 1.75 0 0 0 14 4h-7A1.75 1.75 0 0 0 5.25 5.75v12.5C5.25 19.22 6.03 20 7 20h7a1.75 1.75 0 0 0 1.75-1.75V15M12 12h8m0 0-2.5-2.5M20 12l-2.5 2.5" />
+            </svg>
+          </CalmButton>
         </div>
       </div>
     </header>

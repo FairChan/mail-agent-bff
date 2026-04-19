@@ -20,6 +20,7 @@ import {
 import { getPrismaClient } from "../persistence.js";
 import type { FileMemoryStore } from "../runtime/memory-store.js";
 import { searchKnowledgeBaseMailSummaries } from "../summary.js";
+import { publicMailKbArtifactPath } from "../tenant-isolation.js";
 import type { AgentSkillMetadata, TenantContext } from "./types.js";
 
 const insightTypeSchema = z.enum(["ddl", "meeting", "exam", "event"]);
@@ -353,17 +354,16 @@ export async function createMailAssistantTools(
       inputSchema: z.object({}),
       execute: async () => {
         const store = await getMailKnowledgeBaseStore(tenant.userId, tenant.sourceId);
-        const paths = store.getPaths();
         return {
           ok: true,
           baselineStatus: store.readBaselineStatus(),
           artifacts: [
-            { key: "mailIds", label: "邮件标识码清单", path: paths.mailIdsDocPath },
-            { key: "subjects", label: "邮件题目索引", path: paths.mailSubjectDocPath, count: store.getAllSubjectIndexes().length },
-            { key: "scores", label: "邮件评分索引", path: paths.mailScoreDocPath, count: store.getAllScoreIndexes().length },
-            { key: "summaries", label: "邮件总结正文库", path: paths.mailSummaryDocPath, count: store.getAllMails().length },
-            { key: "events", label: "事件聚类索引", path: paths.eventDocPath, count: store.getAllEvents().length },
-            { key: "senders", label: "发件人画像索引", path: paths.senderDocPath, count: store.getAllPersons().length },
+            { key: "mailIds", label: "邮件标识码清单", path: publicMailKbArtifactPath("mail-ids.md") },
+            { key: "subjects", label: "邮件题目索引", path: publicMailKbArtifactPath("mail-subject-index.md"), count: store.getAllSubjectIndexes().length },
+            { key: "scores", label: "邮件评分索引", path: publicMailKbArtifactPath("mail-score-index.md"), count: store.getAllScoreIndexes().length },
+            { key: "summaries", label: "邮件总结正文库", path: publicMailKbArtifactPath("mail-summaries.md"), count: store.getAllMails().length },
+            { key: "events", label: "事件聚类索引", path: publicMailKbArtifactPath("event-clusters.md"), count: store.getAllEvents().length },
+            { key: "senders", label: "发件人画像索引", path: publicMailKbArtifactPath("sender-profiles.md"), count: store.getAllPersons().length },
           ],
         };
       },
