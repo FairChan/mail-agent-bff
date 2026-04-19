@@ -1,7 +1,63 @@
 # 邮件总结正文库
 
-生成时间：2026-04-18T15:45:58.624Z
-邮件总数：64
+生成时间：2026-04-19T06:57:44.804Z
+邮件总数：68
+
+## MSG_ftnmm6 | Your Decathlon Account Creation
+- 原始ID：AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABkz5zFwAAAA==
+- 发件人ID：PER_001012
+- 事件ID：EVT_001014
+- 分数制：0-1 比例
+- 重要性：0.3/1
+- 紧急性：0.1/1
+- 象限：not_urgent_not_important
+- 接收时间：2026-04-19T06:04:20.000Z
+- 知识卡片：未保存
+- 知识标签：无
+
+Decathlon官方发送账户创建成功欢迎邮件，确认用户已成功注册Decathlon账户，并提示可享受账户相关权益。
+
+## MSG_t8poa6 | \[FairChan/mail\-agent\-bff\] Run failed: Load Tests \- master \(779cc63\)
+- 原始ID：AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABkz5zFgAAAA==
+- 发件人ID：PER_002
+- 事件ID：EVT_001001
+- 分数制：0-1 比例
+- 重要性：0.7/1
+- 紧急性：0.6/1
+- 象限：urgent_important
+- 接收时间：2026-04-19T06:02:31.000Z
+- 知识卡片：未保存
+- 知识标签：无
+
+GitHub CI通知，mail\-agent\-bff项目的Load Tests工作流再次失败，k6负载测试任务于16秒后失败并产生2个注解。
+
+## MSG_h80mzc | \[FairChan/mail\-agent\-bff\] Run failed: Security Scan \- master \(779cc63\)
+- 原始ID：AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABkz5zFQAAAA==
+- 发件人ID：PER_002
+- 事件ID：EVT_001015
+- 分数制：0-1 比例
+- 重要性：0.8/1
+- 紧急性：0.7/1
+- 象限：urgent_important
+- 接收时间：2026-04-19T05:31:14.000Z
+- 知识卡片：未保存
+- 知识标签：无
+
+GitHub CI通知，mail\-agent\-bff项目的Security Scan工作流失败，OWASP ZAP Baseline任务于5秒后失败并产生2个注解。
+
+## MSG_1v6h9ut | Try the new Cloud Series with your RM3\.99 exchange voucher\!
+- 原始ID：AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEXAAAAuwy7MzosG06pVDL2vfy8mAABkn8UxQAAAA==
+- 发件人ID：PER_001013
+- 事件ID：EVT_001016
+- 分数制：0-1 比例
+- 重要性：0.1/1
+- 紧急性：0.2/1
+- 象限：not_urgent_not_important
+- 接收时间：2026-04-19T02:31:27.000Z
+- 知识卡片：未保存
+- 知识标签：无
+
+瑞幸咖啡推送新品Cloud Series推广邮件，并提供RM3\.99兑换券，引导用户尝试新品。
 
 ## MSG_121r6da | 40% off ends soon: Learn AI skills with Google
 - 原始ID：AQMkADAwATNiZmYAZS04MWRhLWQ0ZTgtMDACLTAwCgBGAAADOTDLWW5RRE6h9tV4OSi7UwcAuwy7MzosG06pVDL2vfy8mAAAAgEMAAAAuwy7MzosG06pVDL2vfy8mAABkn6lWgAAAA==

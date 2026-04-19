@@ -95,8 +95,8 @@
   },
   "EVT_001001": {
     "eventId": "EVT_001001",
-    "name": "[FairChan/mail-agent-bff] Run failed: Load Tests - master (4d8a543)",
-    "summary": "Load Tests工作流再次失败，k6负载测试任务于16秒后失败，CI问题持续。",
+    "name": "[FairChan/mail-agent-bff] Run failed: Load Tests - master (779cc63)",
+    "summary": "Load Tests工作流持续失败，k6任务再次于16秒后失败，CI异常问题仍未解决。",
     "keyInfo": [
       "repo: FairChan/mail-agent-bff",
       "branch: master",
@@ -106,9 +106,10 @@
       "MSG_2muhex",
       "MSG_1o8whq1",
       "MSG_1nwxgz0",
-      "MSG_noqj2c"
+      "MSG_noqj2c",
+      "MSG_t8poa6"
     ],
-    "lastUpdated": "2026-04-17T06:07:19.000Z",
+    "lastUpdated": "2026-04-19T06:02:31.000Z",
     "tags": [
       "urgent_important"
     ]
@@ -551,6 +552,55 @@
     "tags": [
       "urgent_important",
       "unprocessed"
+    ]
+  },
+  "EVT_001014": {
+    "eventId": "EVT_001014",
+    "name": "Decathlon账号注册成功通知",
+    "summary": "用户成功创建Decathlon账户，官方发送欢迎邮件及账户信息确认。",
+    "keyInfo": [
+      "platform: Decathlon",
+      "account_id: 2094600728134"
+    ],
+    "relatedMailIds": [
+      "MSG_ftnmm6"
+    ],
+    "lastUpdated": "2026-04-19T06:04:20.000Z",
+    "tags": [
+      "not_urgent_not_important"
+    ]
+  },
+  "EVT_001015": {
+    "eventId": "EVT_001015",
+    "name": "[FairChan/mail-agent-bff] Run failed: Security Scan - master",
+    "summary": "mail-agent-bff项目Security Scan工作流失败，OWASP ZAP Baseline任务5秒后失败，存在安全隐患待排查。",
+    "keyInfo": [
+      "workflow: Security Scan",
+      "job: OWASP ZAP Baseline",
+      "duration: 5 seconds"
+    ],
+    "relatedMailIds": [
+      "MSG_h80mzc"
+    ],
+    "lastUpdated": "2026-04-19T05:31:14.000Z",
+    "tags": [
+      "urgent_important"
+    ]
+  },
+  "EVT_001016": {
+    "eventId": "EVT_001016",
+    "name": "Luckin Coffee新品Cloud Series兑换促销",
+    "summary": "瑞幸咖啡推出Cloud Series新品，提供RM3.99兑换券，引导用户消费体验。",
+    "keyInfo": [
+      "product: Cloud Series",
+      "voucher: RM3.99"
+    ],
+    "relatedMailIds": [
+      "MSG_1v6h9ut"
+    ],
+    "lastUpdated": "2026-04-19T02:31:27.000Z",
+    "tags": [
+      "not_urgent_not_important"
     ]
   }
 }

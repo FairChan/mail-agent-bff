@@ -219,6 +219,15 @@
 - Produced recommended insertion points and noted the main architectural risks for later job/result resurfacing.
 - Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
 
+### 2026-04-19T00:32:37+08:00
+
+- Scope: Independent post-fix audit of `apps/webui/src/components/dashboard/CalendarView.tsx` and `apps/webui/e2e/smoke.spec.ts`.
+- Task type: `Non-code`
+- Main changes:
+- Reviewed date grouping, dedupe, spillover selection, React state/key usage, accessibility, and smoke-test coverage for the new month-view calendar.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes)
+
 ### 2026-04-17T21:05:00+08:00 - Backend knowledge-base audit
 
 - Scope: Audit backend changes for the mailbox historical knowledge-base feature in `apps/bff/src/server.ts`, `apps/bff/src/agent/mail-skills.ts`, `apps/bff/src/agent/mastra-runtime.ts`, `apps/bff/src/summary.ts`, `apps/bff/src/mail-kb-store.ts`, `apps/bff/src/knowledge-base-service.ts`, and `apps/bff/src/mail-kb-export.ts`.
@@ -4806,3 +4815,142 @@ cp .env.example .env
 - Audit:
 - Round 1 independent sub-agent audit (`spawn_agent` explorer `Locke`, model `gpt-5.4-mini`, `2026-04-18T23:03:37+08:00`) returned `No findings`.
 - Audit evidence: `.harness/audit/2026-04-18-nav-mail-kb-audit.md`
+
+## 2026-04-18T23:52:24+08:00
+
+- Scope: Independently audited the current change set limited to `apps/webui/src/components/dashboard/knowledgebase/KnowledgeBaseView.tsx`, `apps/webui/src/App.tsx`, `packages/shared-types/src/index.ts`, `apps/webui/src/components/dashboard/TutorialView.tsx`, and `apps/webui/e2e/smoke.spec.ts`.
+- Task type: `Non-code`
+- Findings: No findings.
+- Audit: `N/A (no code changes)`.
+
+## 2026-04-18T23:52:24+08:00
+
+- Scope: Split navigation so `邮件` is a standalone page, while the old `统计` slot is replaced by the knowledge-base `概览 / 事件 / 联系人 / 文档` views.
+- Task type: `Code`
+- Findings:
+- `KnowledgeBaseView` now supports constrained tab sets, so the same surface can serve a standalone mail-only page or a knowledge-base page without exposing irrelevant tabs.
+- The `allmail` route now renders only the knowledge-base mails page, and hides the `概览 / 事件 / 联系人 / 文档` tab entry bar.
+- The old `stats` navigation slot has been repurposed to the knowledge-base page and renamed to `知识库 / Knowledge Base / ナレッジベース`; the legacy `knowledgebase` route remains as an internal alias but is removed from sidebar navigation items.
+- Tutorial navigation now points to the new knowledge-base slot instead of the retired dedicated `knowledgebase` nav item.
+- Smoke coverage now verifies that the `邮件` nav entry lands on a standalone mail page with no extra KB tab buttons, while the existing KB overview/documents paths continue to work.
+- Validation passed: `npm --workspace packages/shared-types run typecheck`, `npm --workspace apps/webui run check`, `npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts` (`18 passed`), and `git diff --check`.
+- Audit:
+- Round 1 independent sub-agent audit (`spawn_agent` explorer `Gibbs`, model `gpt-5.4-mini`, `2026-04-18T23:52:24+08:00`) returned `No findings`.
+- Audit evidence: `.harness/audit/2026-04-18-nav-kb-split-audit.md`
+
+## 2026-04-18T23:57:09+08:00
+
+- Scope: Installed `magicui` and `reactbits` as global Codex MCP servers for UI component lookup.
+- Task type: `Code`
+- Findings:
+- Added `reactbits` to `~/.codex/config.toml` with `npx -y reactbits-dev-mcp-server`.
+- Added `magicui` to `~/.codex/config.toml` with `npx -y @magicuidesign/mcp@latest`.
+- Verified the final Codex registration with `codex mcp list` and `codex mcp get magicui/reactbits`; both entries are enabled as stdio MCP servers.
+- Verified package resolution from npm: `@magicuidesign/mcp` latest is `2.0.0`, `reactbits-dev-mcp-server` latest is `1.1.2`.
+- Observed a Codex CLI write quirk while adding `magicui`: `codex mcp add magicui` reported success more than once without leaving a stable single config block, so the final `magicui` section was normalized manually in `~/.codex/config.toml`.
+- Validation passed: `codex mcp list`, `codex mcp get magicui`, `codex mcp get reactbits`, `npm view @magicuidesign/mcp version dist-tags.latest`, `npm view reactbits-dev-mcp-server version dist-tags.latest`, and launch probes for both `npx -y @magicuidesign/mcp@latest` and `npx -y reactbits-dev-mcp-server`.
+- Audit:
+- Independent reviewer attempts are recorded in `.harness/audit/2026-04-18-codex-ui-mcp-install.md`.
+- No Critical/High issues were found by automated validation.
+- Independent reviewer completion is currently blocked by external Codex usage limit; retry ETA `2026-04-19T01:51:00+08:00`.
+- Exception owner: `Codex/OpenAI quota or user-approved delivery exception`.
+- Explicit user approval for audit exception: `Not yet granted`.
+
+## 2026-04-19T00:24:12+08:00
+
+- Scope: Independent audit of the current month-view calendar change, limited to `apps/webui/src/components/dashboard/CalendarView.tsx` and `apps/webui/e2e/smoke.spec.ts`.
+- Task type: `Non-code`
+- Findings: One Medium correctness regression and one Low accessibility/test-coverage gap.
+- Audit: `N/A (no code changes)`.
+
+## 2026-04-19T00:42:00+08:00
+
+- Scope: Independent audit of the sync-only reference copy in `reference/remote-webui-2026-04-19/**`.
+- Task type: `Non-code`
+- Findings: No findings.
+- Audit: `N/A (no code changes)`.
+
+## 2026-04-19T00:29:19+08:00
+
+- Scope: Independent audit of the current month-view calendar change, limited to `apps/webui/src/components/dashboard/CalendarView.tsx` and `apps/webui/e2e/smoke.spec.ts`.
+- Task type: `Non-code`
+- Findings: One Low smoke-coverage gap.
+- Audit: `N/A (no code changes)`.
+
+## 2026-04-19T00:33:07+08:00
+
+- Scope: Added a timezone-safe month-view calendar to the calendar navigation page and tightened the related smoke coverage.
+- Task type: `Code`
+- Findings:
+- Rebuilt `CalendarView` around mailbox-timezone `YYYY-MM-DD` keys instead of browser-local month math, so month-boundary items render on the correct calendar day.
+- Added a real month grid with per-day event chips, selected-day details, month navigation, and stable testing hooks such as `data-calendar-day-key`.
+- Clicking spillover days now switches into the adjacent month instead of snapping back, and the current-day highlight/auto-selection now roll over after midnight without requiring a page reload.
+- Calendar day buttons now expose unique `aria-label` and `aria-pressed` state for clearer keyboard and screen-reader navigation.
+- Smoke coverage now verifies both deduped day placement for mail events and spillover-day month switching; the WebUI smoke suite now runs `20` tests.
+- Validation passed: `npm --workspace apps/webui run check`, `npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts --workers=1` (`20 passed`), and `git diff --check`.
+- Audit:
+- Round 1 independent sub-agent audit (`send_input` -> `Rawls`, model not surfaced by tool, `2026-04-19` local thread time) found one `Low` issue: current-day state froze across midnight without a reload.
+- Fixed that issue by adding a lightweight minute ticker plus selected-day rollover handling.
+- Round 2 independent sub-agent audit (`send_input` -> `Locke`, model not surfaced by tool, `2026-04-19` local thread time) found one `Medium` issue (spillover-day selection snapped back) and one `Low` accessibility issue (ambiguous day button labels).
+- Fixed those issues by letting spillover clicks switch the visible month, adding unique day-button accessibility labels, and strengthening smoke coverage.
+- Round 3 independent sub-agent audit (`send_input` -> `Tesla`, model not surfaced by tool, `2026-04-19` local thread time) returned `No findings`.
+- Audit evidence: `.harness/audit/2026-04-19-calendar-month-view-audit.md`
+
+## 2026-04-19T00:42:51+08:00
+
+- Scope: Logged into the user-provided remote server, inspected the completed frontend there, and synchronized it into this workspace as a safe reference copy.
+- Task type: `Code`
+- Findings:
+- Connected to the remote server and verified the actual frontend shape under `apps/webui`: a lighter React/Vite UI shell centered on a large `src/App.tsx`, page components, sidebar UI, and omnisearch components.
+- Synchronized that frontend into `reference/remote-webui-2026-04-19/`, including `src/`, `public/`, `scripts/postbuild.mjs`, `index.html`, `package.json`, `tsconfig.json`, `vite.config.ts`, and the remote root workspace manifest as `workspace.package.json`.
+- Intentionally excluded `.env`, `.env.production`, `dist`, and `node_modules` so the imported reference does not capture deploy-time secrets or bulky runtime artifacts.
+- Added a reference README explaining that this is a preserved import, not a hard overwrite of the active app, because the remote UI would regress current local Outlook direct auth, notification, knowledge-base, tutorial, and agent-window flows if swapped in blindly.
+- Scrubbed environment-specific defaults from the imported snapshot and marked the preserved fallback source ID as `snapshot_default_outlook` so future migration work will not mistake it for a canonical system identifier.
+- Validation passed: `npm --workspace apps/webui run check` and `git diff --check`.
+- Audit:
+- Round 1 independent sub-agent audit (`send_input` -> `Goodall`, model not surfaced by tool, `2026-04-19` local thread time) found two `Medium` issues (environment-specific mailbox/default infrastructure disclosure) and one `Low` issue (runtime dependency note too weak).
+- Fixed those issues by sanitizing the imported snapshot and clarifying the runtime note in the reference README.
+- Round 2 independent sub-agent audit (`send_input` -> `Rawls`, model not surfaced by tool, `2026-04-19` local thread time) found three `Low` issues related to lingering snapshot-specific defaults and missing `VITE_BFF_BASE_URL` context.
+- Fixed those issues by renaming the placeholder source ID to `snapshot_default_outlook` and documenting the deployment/runtime assumptions.
+- Round 3 independent sub-agent audit (`send_input` -> `Locke`, model not surfaced by tool, `2026-04-19` local thread time) returned `No findings`.
+- Audit evidence: `.harness/audit/2026-04-19-remote-webui-sync-audit.md`
+
+## 2026-04-19T01:13:36+08:00
+
+- Scope: Migrated the user-designed remote WebUI language into the active WebUI without replacing the working product flows.
+- Task type: `Code`
+- Findings:
+- Added the remote-style visual shell to the active app: animated dot-grid background, translucent main layout, compact/collapsible sidebar, account/source panel, redesigned header, and sectioned settings page.
+- Preserved current product behavior for Outlook direct auth, mailbox source switching, notification preferences, knowledge-base mail/doc flows, tutorial onboarding, calendar, urgent toast, and agent-window entry.
+- Added persistent sidebar collapse state to `AppContext`.
+- Kept notification settings as the default settings section so existing product and smoke behavior remains stable.
+- Preserved accessible/testable form semantics for notification checkboxes and digest time/timezone fields after the redesign.
+- Validation passed: `npm --workspace apps/webui run check`, targeted settings smoke, full `npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts --workers=1` (`20 passed`), `npm --workspace apps/webui run build`, and `git diff --check`.
+- Audit:
+- Round 1 independent sub-agent audit (`send_input` -> `Goodall`, model not surfaced by tool, `2026-04-19` local thread time) found one `Medium` issue (tablet-width dead menu button) and two `Low` issues (hard-coded header locale copy and missing account-modal dialog semantics).
+- Fixed all Round 1 findings by aligning the menu breakpoint with runtime mobile detection, adding locale-aware header copy, and adding dialog semantics/Escape close/initial focus to the account modal.
+- Round 2 independent re-audit attempted after fixes but was blocked by Codex sub-agent usage quota.
+- Blocker: external Codex sub-agent usage limit.
+- Owner: Codex/OpenAI sub-agent quota.
+- ETA: `2026-04-19T05:06:00+08:00`.
+- Exception approval: none; final audit verification is not claimed complete until a sub-agent can re-run.
+- Audit evidence: `.harness/audit/2026-04-19-active-webui-design-migration-audit.md`
+
+## 2026-04-19T01:34:24+08:00
+
+- Scope: Re-reviewed the prior remote frontend migration task and completed the next safe active WebUI migration step.
+- Task type: `Code`
+- Findings:
+- Added the remote-style semantic OmniSearch experience to the active WebUI without replacing existing product flows.
+- Wired OmniSearch to the real BFF `POST /api/mail/query` route with active mailbox source context, localized status text, answer rendering, reference cards, and existing mail-detail modal integration.
+- Preserved Outlook direct auth, knowledge-base mail/document flows, tutorial onboarding, calendar month view, notification settings, urgent toast, and the agent-window navigation.
+- Added smoke coverage for the migrated semantic search path, including query submission, mocked BFF response handling, reference rendering, and opening a referenced mail.
+- Fixed audit-found accessibility issues in the sidebar account modal and OmniSearch modal by adding focus trapping, Escape handling, focus restoration, and explicit accessible labels for collapsed sidebar controls.
+- Validation passed: `npm --workspace apps/webui run check`, targeted OmniSearch smoke, full `npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts --workers=1` (`21 passed`), `npm --workspace apps/webui run build`, and `git diff --check`.
+- Audit:
+- Round 1 independent sub-agent audit (`send_input` -> `Rawls`, model not surfaced by tool, `2026-04-19T01:18:00+08:00` local thread time) found one `Medium` issue (sidebar account modal missing focus trap/restore) and one `Low` issue (collapsed controls lacked explicit accessible names).
+- Fixed all Round 1 findings in `apps/webui/src/components/layout/Sidebar.tsx`.
+- Round 2 independent sub-agent audit (`send_input` -> `Rawls`, model not surfaced by tool, `2026-04-19T01:26:00+08:00` local thread time) found one `Medium` issue (OmniSearch modal missing focus trap/restore).
+- Fixed the Round 2 finding in `apps/webui/src/components/omnisearch/OmniSearchBar.tsx`.
+- Round 3 independent sub-agent audit (`send_input` -> `Rawls`, model not surfaced by tool, `2026-04-19T01:33:00+08:00` local thread time) returned `No findings`.
+- Audit evidence: `.harness/audit/2026-04-19-active-webui-complete-migration-audit.md`

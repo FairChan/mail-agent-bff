@@ -37,6 +37,83 @@ export function Header({ onMenuToggle }: HeaderProps) {
   const seenDigestNotificationKeysRef = useRef<Set<string>>(new Set());
 
   const activeSource = sources.find((s) => s.id === activeSourceId);
+  const copy =
+    locale === "en"
+      ? {
+          sourceReady: "Mailbox ready",
+          sourcePending: "Needs verification",
+          streamConnected: "Realtime syncing",
+          streamConnecting: "Connecting stream",
+          streamError: "Stream error",
+          streamIdle: "Stream idle",
+          desktopGranted: "Desktop alerts enabled",
+          desktopDenied: "Desktop alerts blocked",
+          desktopDefault: "Desktop alerts not granted",
+          desktopUnsupported: "Browser unsupported",
+          noMailbox: "No mailbox connected",
+          notLoggedIn: "Not signed in",
+          menu: "Menu",
+          toggleTheme: "Toggle theme",
+          refresh: "Refresh",
+          agentWindow: "Agent Window",
+          logout: "Log out",
+        }
+      : locale === "ja"
+        ? {
+            sourceReady: "メール準備完了",
+            sourcePending: "確認待ち",
+            streamConnected: "リアルタイム同期中",
+            streamConnecting: "通知接続中",
+            streamError: "通知異常",
+            streamIdle: "通知待機中",
+            desktopGranted: "デスクトップ通知オン",
+            desktopDenied: "デスクトップ通知拒否",
+            desktopDefault: "デスクトップ通知未許可",
+            desktopUnsupported: "ブラウザ未対応",
+            noMailbox: "メール未接続",
+            notLoggedIn: "未ログイン",
+            menu: "メニュー",
+            toggleTheme: "テーマ切替",
+            refresh: "更新",
+            agentWindow: "Agent Window",
+            logout: "ログアウト",
+          }
+        : {
+            sourceReady: "邮箱已就绪",
+            sourcePending: "等待验证",
+            streamConnected: "实时同步中",
+            streamConnecting: "正在连接通知流",
+            streamError: "通知流异常",
+            streamIdle: "通知流待机",
+            desktopGranted: "桌面提醒已开启",
+            desktopDenied: "桌面提醒被阻止",
+            desktopDefault: "桌面提醒未授权",
+            desktopUnsupported: "浏览器不支持桌面提醒",
+            noMailbox: "未连接邮箱",
+            notLoggedIn: "未登录",
+            menu: "菜单",
+            toggleTheme: "切换主题",
+            refresh: "刷新",
+            agentWindow: "Agent 窗口",
+            logout: "退出",
+          };
+  const sourceStatusLabel = activeSource?.ready ? copy.sourceReady : copy.sourcePending;
+  const streamStatusLabel =
+    notificationStreamStatus === "connected"
+      ? copy.streamConnected
+      : notificationStreamStatus === "connecting"
+        ? copy.streamConnecting
+        : notificationStreamStatus === "error"
+          ? copy.streamError
+          : copy.streamIdle;
+  const desktopStatusLabel =
+    desktopPermission === "granted"
+      ? copy.desktopGranted
+      : desktopPermission === "denied"
+        ? copy.desktopDenied
+        : desktopPermission === "default"
+          ? copy.desktopDefault
+          : copy.desktopUnsupported;
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.Notification === "undefined") {
@@ -128,38 +205,52 @@ export function Header({ onMenuToggle }: HeaderProps) {
   }, [resolvedTheme, setTheme]);
 
   return (
-    <header className="glass-panel sticky top-3 z-30 rounded-2xl bg-white/90 px-4 py-3 backdrop-blur-md dark:bg-zinc-900/90 sm:px-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        {/* 左侧：Logo 和用户信息 */}
-        <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400">
-            Mery · Make Every Emails Really Yours
+    <header className="glass-panel sticky top-3 z-30 overflow-hidden rounded-[28px] border-white/75 bg-white/78 px-4 py-3.5 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/74 sm:px-5">
+      <div className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-sky-400/55 to-transparent" />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-600/80 dark:text-sky-300/70">
+              Mery
+            </p>
+            <span className="rounded-full bg-sky-100/80 px-2 py-0.5 text-[10px] font-medium text-sky-700 dark:bg-sky-950/40 dark:text-sky-300">
+              {sourceStatusLabel}
+            </span>
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+              notificationStreamStatus === "connected"
+                ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/35 dark:text-emerald-300"
+                : notificationStreamStatus === "error"
+                  ? "bg-red-50 text-red-700 dark:bg-red-950/35 dark:text-red-300"
+                  : "bg-amber-50 text-amber-700 dark:bg-amber-950/35 dark:text-amber-300"
+            }`}>
+              {streamStatusLabel}
+            </span>
+          </div>
+
+          <p className="mt-2 truncate text-base font-semibold text-zinc-900 dark:text-zinc-100">
+            {activeSource?.name || activeSource?.emailHint || copy.noMailbox}
           </p>
-          <p className="mt-0.5 truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
-            {activeSource?.name || activeSource?.emailHint || "未连接邮箱"}
-          </p>
-          <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">
-            {user?.displayName || user?.email || "未登录"}
-          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
+            <span className="truncate">{user?.displayName || user?.email || copy.notLoggedIn}</span>
+            <span className="hidden h-1 w-1 rounded-full bg-zinc-300 sm:inline-block dark:bg-zinc-700" />
+            <span>{desktopStatusLabel}</span>
+          </div>
         </div>
 
-        {/* 右侧：操作按钮 */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* 移动端菜单按钮 */}
           <button
             type="button"
             onClick={onMenuToggle}
-            className="rounded-lg p-2 text-zinc-600 transition hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800 lg:hidden"
-            aria-label="菜单"
+            className="rounded-xl border border-white/65 bg-white/85 p-2 text-zinc-600 transition hover:bg-zinc-100 dark:border-white/10 dark:bg-zinc-900/80 dark:text-zinc-400 dark:hover:bg-zinc-800 md:hidden"
+            aria-label={copy.menu}
           >
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </button>
 
-          {/* 语言切换 */}
           <div
-            className="inline-flex rounded-lg border border-zinc-300 bg-white p-0.5 dark:border-zinc-700 dark:bg-zinc-800"
+            className="inline-flex rounded-xl border border-white/65 bg-white/85 p-0.5 shadow-sm dark:border-white/10 dark:bg-zinc-900/80"
             role="tablist"
             aria-label="选择语言"
           >
@@ -170,7 +261,7 @@ export function Header({ onMenuToggle }: HeaderProps) {
                 role="tab"
                 aria-selected={locale === l}
                 onClick={() => setLocale(l)}
-                className={`rounded-md px-2 py-1 text-[11px] font-medium transition ${
+                className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition ${
                   locale === l
                     ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
                     : "text-zinc-600 dark:text-zinc-400"
@@ -181,12 +272,11 @@ export function Header({ onMenuToggle }: HeaderProps) {
             ))}
           </div>
 
-          {/* 主题切换 */}
           <button
             type="button"
             onClick={handleThemeToggle}
-            className="inline-flex h-9 items-center justify-center rounded-xl border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
-            aria-label="切换主题"
+            className="inline-flex h-9 items-center justify-center rounded-xl border border-white/65 bg-white/85 px-3 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-white/10 dark:bg-zinc-900/80 dark:text-zinc-300"
+            aria-label={copy.toggleTheme}
           >
             {resolvedTheme === "dark" ? (
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -215,29 +305,28 @@ export function Header({ onMenuToggle }: HeaderProps) {
             type="button"
             onClick={handleRefresh}
             disabled={isLoadingMail || isPollingNotifications}
-            className="inline-flex h-9 items-center justify-center gap-1 rounded-xl border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+            className="inline-flex h-9 items-center justify-center gap-1 rounded-xl border border-white/65 bg-white/85 px-3 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/10 dark:bg-zinc-900/80 dark:text-zinc-300"
           >
             <span className={isLoadingMail || isPollingNotifications ? "animate-spin" : ""}>
               <RefreshIcon />
             </span>
-            刷新
+            {copy.refresh}
           </button>
 
           <button
             type="button"
             onClick={() => openAgentWindow(activeSourceId)}
-            className="inline-flex h-9 items-center justify-center rounded-xl border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+            className="inline-flex h-9 items-center justify-center rounded-xl border border-white/65 bg-white/85 px-3 text-xs font-medium text-zinc-700 transition hover:border-zinc-900 hover:text-zinc-900 dark:border-white/10 dark:bg-zinc-900/80 dark:text-zinc-300"
           >
-            Agent 窗口
+            {copy.agentWindow}
           </button>
 
-          {/* 登出按钮 */}
           <button
             type="button"
             onClick={handleLogout}
-            className="inline-flex h-9 items-center justify-center rounded-xl border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-600 transition hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400"
+            className="inline-flex h-9 items-center justify-center rounded-xl border border-white/65 bg-white/85 px-3 text-xs font-medium text-zinc-600 transition hover:text-zinc-900 dark:border-white/10 dark:bg-zinc-900/80 dark:text-zinc-400"
           >
-            退出
+            {copy.logout}
           </button>
         </div>
       </div>

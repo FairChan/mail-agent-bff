@@ -13,11 +13,11 @@
     "personId": "PER_002",
     "email": "notifications@github.com",
     "name": "Ferris Chan",
-    "profile": "继续发送CI失败通知，最新提示CI工作流verify任务在46秒后失败并产生2个注解。",
+    "profile": "新增发送Security Scan工作流失败通知，OWASP ZAP Baseline任务失败。",
     "role": "未标注",
     "importance": 0.8,
-    "recentInteractions": 12,
-    "lastUpdated": "2026-04-18T13:09:39.000Z"
+    "recentInteractions": 14,
+    "lastUpdated": "2026-04-19T05:31:14.000Z"
   },
   "PER_003": {
     "personId": "PER_003",
@@ -238,5 +238,25 @@
     "importance": 0.5,
     "recentInteractions": 2,
     "lastUpdated": "2026-04-18T14:55:13.000Z"
+  },
+  "PER_001012": {
+    "personId": "PER_001012",
+    "email": "noreply@service.decathlon.com",
+    "name": "DECATHLON",
+    "profile": "Decathlon官方服务邮箱，用于发送账户注册确认及系统通知邮件。",
+    "role": "未标注",
+    "importance": 0.3,
+    "recentInteractions": 1,
+    "lastUpdated": "2026-04-19T06:04:20.000Z"
+  },
+  "PER_001013": {
+    "personId": "PER_001013",
+    "email": "noreply@news.my.luckincoffee.com",
+    "name": "Luckin Coffee",
+    "profile": "瑞幸咖啡官方营销邮箱，主要用于发送新品推广及优惠券兑换等促销信息。",
+    "role": "未标注",
+    "importance": 0.1,
+    "recentInteractions": 1,
+    "lastUpdated": "2026-04-19T02:31:27.000Z"
   }
 }

@@ -606,7 +606,65 @@ test.describe("webui smoke", () => {
 	              ],
 	            },
 	          },
-	        }),
+        }),
+      });
+    });
+
+    await page.route("**/api/mail/query", async (route) => {
+      const body = route.request().postDataJSON() as { question?: string; sourceId?: string };
+      expect(body.question).toBeTruthy();
+      expect(body.sourceId).toBe(activeSourceIdState);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          sourceId: activeSourceIdState,
+          result: {
+            answer: "明天有 1 个高优先级 DDL：Final report deadline，需要在 4 月 18 日 10:00 前提交。",
+            references: [
+              {
+                messageId: "omni-ddl-1",
+                subject: "Final report deadline",
+                fromName: "Advisor Li",
+                fromAddress: "advisor@example.com",
+                receivedDateTime: "2026-04-17T00:00:00.000Z",
+                dueAt: "2026-04-18T10:00:00.000Z",
+                dueDateLabel: "4月18日 10:00",
+                evidence: "Please submit the final report before tomorrow 10 AM.",
+                type: "ddl",
+                quadrant: "urgent_important",
+              },
+            ],
+            generatedAt: "2026-04-17T00:00:00.000Z",
+          },
+        }),
+      });
+    });
+
+    await page.route("**/api/mail/message**", async (route) => {
+      const url = new URL(route.request().url());
+      expect(url.searchParams.get("messageId")).toBeTruthy();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          sourceId: activeSourceIdState,
+          result: {
+            id: "omni-ddl-1",
+            subject: "Final report deadline",
+            fromName: "Advisor Li",
+            fromAddress: "advisor@example.com",
+            bodyPreview: "Please submit the final report before tomorrow 10 AM.",
+            bodyContent: "Please submit the final report before tomorrow 10 AM.",
+            receivedDateTime: "2026-04-17T00:00:00.000Z",
+            isRead: false,
+            importance: "high",
+            hasAttachments: false,
+            webLink: "https://outlook.example/messages/omni-ddl-1",
+          },
+        }),
       });
     });
 
@@ -943,8 +1001,152 @@ test.describe("webui smoke", () => {
     const sidebar = page.getByRole("navigation", { name: "导航菜单" });
     await sidebar.getByRole("button", { name: "邮件", exact: true }).click();
 
-    await expect(page.getByRole("heading", { name: "邮件知识库" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "邮件" })).toBeVisible();
     await expect(page.getByText("暂无邮件数据，请先执行邮件总结任务")).toBeVisible();
+    await expect(page.getByRole("button", { name: "概览" })).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "事件" })).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "联系人" })).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "文档" })).not.toBeVisible();
+  });
+
+  test("runs the migrated semantic omni-search against the real mail query API", async ({ page }) => {
+    await mockAuthenticatedApp(page);
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "打开语义邮件搜索" }).click();
+
+    await expect(page.getByRole("heading", { name: "MERY 语义检索" })).toBeVisible();
+    await page.getByLabel("询问 DDL、发件人、会议、考试或任意邮件内容...").fill("明天有哪些 DDL？");
+    await page.getByRole("dialog", { name: "MERY 语义检索" }).getByRole("button", { name: "搜索", exact: true }).click();
+
+    await expect(page.getByText("明天有 1 个高优先级 DDL")).toBeVisible();
+    const reference = page.getByRole("button", { name: /Final report deadline/ });
+    await expect(reference).toBeVisible();
+    await reference.click();
+
+    await expect(page.getByRole("heading", { name: "Final report deadline" })).toBeVisible();
+    await expect(page.getByText("Please submit the final report before tomorrow 10 AM.")).toBeVisible();
+  });
+
+  test("renders a month-view calendar with mail events", async ({ page }) => {
+    await mockAuthenticatedApp(page);
+
+    const now = new Date();
+    const timeZone = "Asia/Shanghai";
+    const formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const parts = formatter.formatToParts(now);
+    const year = Number(parts.find((part) => part.type === "year")?.value ?? "0");
+    const month = Number(parts.find((part) => part.type === "month")?.value ?? "0");
+    const day = Number(parts.find((part) => part.type === "day")?.value ?? "0");
+    const pad = (value: number) => String(value).padStart(2, "0");
+    const firstDayKey = `${year}-${pad(month)}-01`;
+    const firstDueAt = new Date(Date.UTC(year, month - 1, 0, 16, 30, 0)).toISOString();
+    const secondDay = Math.min(day + 3, 27);
+    const secondDayKey = `${year}-${pad(month)}-${pad(secondDay)}`;
+    const secondDueAt = new Date(Date.UTC(year, month - 1, secondDay, 6, 30, 0)).toISOString();
+
+    await page.route("**/api/mail/insights**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          result: {
+            generatedAt: now.toISOString(),
+            horizonDays: 30,
+            timeZone,
+            digest: {
+              total: 2,
+              unread: 2,
+              urgentImportant: 1,
+              highImportance: 2,
+              upcomingCount: 2,
+              tomorrowDdlCount: 1,
+            },
+            tomorrowDdl: [
+              {
+                messageId: "calendar-ddl-1",
+                subject: "Research proposal deadline",
+                dueAt: firstDueAt,
+                dueDateLabel: "Tomorrow 10:00",
+                type: "ddl",
+                evidence: "proposal due tomorrow",
+              },
+            ],
+            upcoming: [
+              {
+                messageId: "calendar-ddl-1",
+                subject: "Research proposal deadline",
+                dueAt: firstDueAt,
+                dueDateLabel: "Tomorrow 10:00",
+                type: "ddl",
+                evidence: "proposal due tomorrow",
+              },
+              {
+                messageId: "calendar-meeting-1",
+                subject: "Advisor sync meeting",
+                dueAt: secondDueAt,
+                dueDateLabel: "This month 14:30",
+                type: "meeting",
+                evidence: "advisor requested a sync",
+              },
+            ],
+            signalsWithoutDate: [],
+          },
+        }),
+      });
+    });
+
+    await page.goto("/");
+    const sidebar = page.getByRole("navigation", { name: "导航菜单" });
+    await sidebar.getByRole("button", { name: "日历", exact: true }).click();
+
+    await expect(page.getByText("月视图会把当前窗口内识别出的事项直接铺在日期格子中。")).toBeVisible();
+    await expect(page.locator('[data-mail-calendar-chip="true"]')).toHaveCount(2);
+    await expect(page.locator(`[data-calendar-day-key="${firstDayKey}"] [title="Research proposal deadline"]`)).toHaveCount(1);
+    await expect(page.locator(`[data-calendar-day-key="${secondDayKey}"] [title="Advisor sync meeting"]`)).toHaveCount(1);
+    await expect(page.getByText("当日事项")).toBeVisible();
+  });
+
+  test("allows selecting spillover days from the month grid", async ({ page }) => {
+    const fixedNow = new Date("2026-04-15T12:00:00.000Z").valueOf();
+    const previousMonthLabel = new Intl.DateTimeFormat("zh-CN", {
+      timeZone: "UTC",
+      year: "numeric",
+      month: "long",
+    }).format(new Date(Date.UTC(2026, 2, 1, 12, 0, 0)));
+
+    await page.addInitScript((timestamp) => {
+      const OriginalDate = Date;
+      function MockDate(this: unknown, ...args: ConstructorParameters<typeof Date>) {
+        return args.length === 0 ? new OriginalDate(timestamp) : new OriginalDate(...args);
+      }
+      MockDate.prototype = OriginalDate.prototype;
+      Object.setPrototypeOf(MockDate, OriginalDate);
+      MockDate.now = () => timestamp;
+      MockDate.parse = OriginalDate.parse;
+      MockDate.UTC = OriginalDate.UTC;
+      // @ts-expect-error browser init script Date shim
+      globalThis.Date = MockDate;
+    }, fixedNow);
+
+    await mockAuthenticatedApp(page);
+
+    await page.goto("/");
+    const sidebar = page.getByRole("navigation", { name: "导航菜单" });
+    await sidebar.getByRole("button", { name: "日历", exact: true }).click();
+
+    const spilloverDay = page.locator('[data-calendar-day-key="2026-03-31"]');
+    await spilloverDay.click();
+
+    await expect(page.getByRole("heading", { name: previousMonthLabel })).toBeVisible();
+    await expect(page.locator('[data-calendar-day-key="2026-03-31"][aria-pressed="true"]')).toBeVisible();
+    await expect(page.locator('[data-calendar-day-key="2026-03-31"]')).toHaveAttribute("aria-label", /2026/);
   });
 
   test("renders urgent notifications and daily digest in the header center", async ({ page }) => {

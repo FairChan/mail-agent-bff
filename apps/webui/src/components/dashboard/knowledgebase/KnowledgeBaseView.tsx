@@ -19,9 +19,17 @@ type TabKey = "overview" | "mails" | "events" | "persons" | "documents";
 
 interface KnowledgeBaseViewProps {
   initialTab?: TabKey;
+  visibleTabs?: readonly TabKey[];
+  titleOverride?: string;
 }
 
-export function KnowledgeBaseView({ initialTab = "overview" }: KnowledgeBaseViewProps) {
+const defaultTabs: readonly TabKey[] = ["overview", "mails", "events", "persons", "documents"];
+
+export function KnowledgeBaseView({
+  initialTab = "overview",
+  visibleTabs = defaultTabs,
+  titleOverride,
+}: KnowledgeBaseViewProps) {
   const {
     kbStats,
     kbMails,
@@ -36,7 +44,11 @@ export function KnowledgeBaseView({ initialTab = "overview" }: KnowledgeBaseView
   } = useMail();
   const { locale } = useApp();
 
-  const [activeTab, setActiveTab] = useState<TabKey>(initialTab);
+  const resolveTab = useCallback(
+    (candidate: TabKey) => (visibleTabs.includes(candidate) ? candidate : visibleTabs[0] ?? "overview"),
+    [visibleTabs]
+  );
+  const [activeTab, setActiveTab] = useState<TabKey>(() => resolveTab(initialTab));
   const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
@@ -57,8 +69,8 @@ export function KnowledgeBaseView({ initialTab = "overview" }: KnowledgeBaseView
   }, [loadAll]);
 
   useEffect(() => {
-    setActiveTab(initialTab);
-  }, [initialTab]);
+    setActiveTab(resolveTab(initialTab));
+  }, [initialTab, resolveTab]);
 
   const handleSummarize = async () => {
     setIsSummarizing(true);
@@ -83,7 +95,13 @@ export function KnowledgeBaseView({ initialTab = "overview" }: KnowledgeBaseView
   };
 
   const labels = {
-    title: locale === "zh" ? "邮件知识库" : locale === "ja" ? "メール知識庫" : "Mail Knowledge Base",
+    title:
+      titleOverride ??
+      (locale === "zh"
+        ? "邮件知识库"
+        : locale === "ja"
+          ? "メール知識庫"
+          : "Mail Knowledge Base"),
     overview: locale === "zh" ? "概览" : locale === "ja" ? "概要" : "Overview",
     mails: locale === "zh" ? "邮件" : locale === "ja" ? "メール" : "Mails",
     events: locale === "zh" ? "事件" : locale === "ja" ? "イベント" : "Events",
@@ -94,13 +112,14 @@ export function KnowledgeBaseView({ initialTab = "overview" }: KnowledgeBaseView
     triggerSummarize: locale === "zh" ? "归纳旧邮件" : locale === "ja" ? "過去メールを要約" : "Summarize Historical Mail",
   };
 
-  const tabs: { key: TabKey; label: string; count?: number }[] = [
+  const allTabs: Array<{ key: TabKey; label: string; count?: number }> = [
     { key: "overview", label: labels.overview },
     { key: "mails", label: labels.mails, count: kbStats?.totalMails },
     { key: "events", label: labels.events, count: kbStats?.totalEvents },
     { key: "persons", label: labels.persons, count: kbStats?.totalPersons },
     { key: "documents", label: labels.documents },
   ];
+  const tabs = allTabs.filter((tab) => visibleTabs.includes(tab.key));
 
   return (
     <div className="flex h-full flex-col">
@@ -142,26 +161,28 @@ export function KnowledgeBaseView({ initialTab = "overview" }: KnowledgeBaseView
         </div>
 
         {/* Tab Bar */}
-        <div className="mt-4 flex gap-1">
-          {tabs.map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-                activeTab === tab.key
-                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                  : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-600"
-              }`}
-            >
-              {tab.label}
-              {tab.count !== undefined && (
-                <span className={`rounded-full px-2 py-0.5 text-xs ${activeTab === tab.key ? "bg-white/20" : "bg-zinc-200 dark:bg-zinc-600"}`}>
-                  {tab.count}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
+        {tabs.length > 1 && (
+          <div className="mt-4 flex gap-1">
+            {tabs.map((tab) => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+                  activeTab === tab.key
+                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-600"
+                }`}
+              >
+                {tab.label}
+                {tab.count !== undefined && (
+                  <span className={`rounded-full px-2 py-0.5 text-xs ${activeTab === tab.key ? "bg-white/20" : "bg-zinc-200 dark:bg-zinc-600"}`}>
+                    {tab.count}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Content */}

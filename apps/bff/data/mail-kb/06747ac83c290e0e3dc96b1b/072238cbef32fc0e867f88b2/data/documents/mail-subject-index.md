@@ -1,9 +1,13 @@
 # 邮件题目索引（题目 + 标识码）
 
-生成时间：2026-04-18T15:45:58.624Z
+生成时间：2026-04-19T06:57:44.804Z
 
 | 标识码 | 题目 | 接收时间 | 知识卡片 |
 | --- | --- | --- | --- |
+| MSG_ftnmm6 | Your Decathlon Account Creation | 2026-04-19T06:04:20.000Z | 否 |
+| MSG_t8poa6 | \[FairChan/mail\-agent\-bff\] Run failed: Load Tests \- master \(779cc63\) | 2026-04-19T06:02:31.000Z | 否 |
+| MSG_h80mzc | \[FairChan/mail\-agent\-bff\] Run failed: Security Scan \- master \(779cc63\) | 2026-04-19T05:31:14.000Z | 否 |
+| MSG_1v6h9ut | Try the new Cloud Series with your RM3\.99 exchange voucher\! | 2026-04-19T02:31:27.000Z | 否 |
 | MSG_121r6da | 40% off ends soon: Learn AI skills with Google | 2026-04-18T15:44:55.000Z | 否 |
 | MSG_o7skco | 紧急邮件 | 2026-04-18T14:55:17.000Z | 否 |
 | MSG_1fq54wz | 紧急邮件 | 2026-04-18T14:55:13.000Z | 否 |
