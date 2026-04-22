@@ -1,6 +1,7 @@
 import type { FastifyBaseLogger } from "fastify";
 import { LlmGatewayService } from "./agent/llm-gateway.js";
 import type { TenantContext } from "./agent/types.js";
+import { createPrivacyScope, isMailPrivacyError } from "./mail-privacy.js";
 import { personalTenantIdForUser } from "./tenant-isolation.js";
 import {
   getMailMessageById,
@@ -387,12 +388,21 @@ async function analyzeMailsWithAgent(
   llmGateway: LlmGatewayService,
   tenant: TenantContext
 ): Promise<MailAnalysis[]> {
+  const privacyScope = createPrivacyScope({
+    kind: "kb_job",
+    scopeId: `kb_job:${tenant.sourceId}:${mails[0]?.mailId ?? "batch"}`,
+    userId: tenant.userId,
+    sourceId: tenant.sourceId,
+  });
+  const maskedMails = privacyScope.maskStructuredPayload(mails) as OutlookMailItem[];
+  const maskedExistingEvents = privacyScope.maskStructuredPayload(existingEvents) as typeof existingEvents;
+  const maskedExistingSenders = privacyScope.maskStructuredPayload(existingSenders) as typeof existingSenders;
   const content = await llmGateway.generateText({
     tenant,
     messages: [
       {
         role: "user",
-        content: ANALYSIS_PROMPT_TEMPLATE(mails, existingEvents, existingSenders),
+        content: ANALYSIS_PROMPT_TEMPLATE(maskedMails, maskedExistingEvents, maskedExistingSenders),
       },
     ],
     timeoutMs: 30000,
@@ -401,16 +411,17 @@ async function analyzeMailsWithAgent(
     enableThinking: false,
   });
   try {
-    return parseAnalysisResponse(content);
+    return parseAnalysisResponse(privacyScope.restoreText(content));
   } catch (error) {
     logger.error(
       {
+        code: isMailPrivacyError(error) ? error.code : undefined,
         message: error instanceof Error ? error.message : String(error),
-        preview: content.slice(0, 2000),
+        responseLength: content.length,
       },
       "Mail analysis response parsing failed"
     );
-    throw new Error("邮件分析结果解析失败");
+    throw new Error("Mail analysis response parsing failed");
   }
 }
 
@@ -479,7 +490,11 @@ async function persistAnalyses(
       eventId,
       importanceScore: normalizedImportance,
       urgencyScore: normalizedUrgency,
-      quadrant: normalizeQuadrant(analysis.quadrant, normalizedImportance, normalizedUrgency),
+      quadrant: normalizeQuadrant(
+        analysis.quadrant,
+        normalizedImportance,
+        normalizedUrgency
+      ) as any,
       summary: analysis.summaryText,
       receivedAt: mail.receivedDateTime,
       processedAt: new Date().toISOString(),

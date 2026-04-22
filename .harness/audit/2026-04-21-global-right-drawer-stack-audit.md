@@ -1,0 +1,8 @@
+No Critical or High findings remain.
+
+**Medium**
+- None. The prior focus-trap / inert concern in `GlobalDrawerHost.tsx` is addressed: focus is saved and restored when the drawer stack empties, the top drawer gets initial focus on open, and `Tab`/`Shift+Tab` are trapped within the active panel. See [`GlobalDrawerHost.tsx`](file:///private/tmp/right-drawer-audit-20260421/apps/webui/src/components/drawer/GlobalDrawerHost.tsx#L54-L150).
+- The prior pagination clamp issue also appears fixed. `KnowledgeBaseView` now clamps `mailPage` back into range when `kbMailsPage.total` shrinks, and that page state feeds the fetch offset. See [`KnowledgeBaseView.tsx`](file:///private/tmp/right-drawer-audit-20260421/apps/webui/src/components/dashboard/knowledgebase/KnowledgeBaseView.tsx#L85-L99) and [`MailsListPanel.tsx`](file:///private/tmp/right-drawer-audit-20260421/apps/webui/src/components/dashboard/knowledgebase/MailsListPanel.tsx#L53-L87).
+
+**Low**
+- None found in the copied files. I re-checked drawer stack state, keyboard behavior, z-index/backdrop layering, scroll lock, pagination UI, Sidebar header behavior, type-safety, and obvious security edges. The drawer CSS matches the host logic, including top-only backdrop interactivity and non-top pointer suppression. See [`styles.css`](file:///private/tmp/right-drawer-audit-20260421/apps/webui/src/styles.css#L230-L302) and [`drawerStore.ts`](file:///private/tmp/right-drawer-audit-20260421/apps/webui/src/components/drawer/drawerStore.ts#L75-L140).

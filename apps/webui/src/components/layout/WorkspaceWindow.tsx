@@ -12,7 +12,7 @@ export function WorkspaceWindow({ title, eyebrow, children, fullBleed = false }:
   return (
     <section
       className={cn(
-        "workspace-window rise-in mx-auto flex min-h-full w-full flex-col overflow-hidden rounded-[1.9rem] border border-[color:var(--border-strong)] bg-[color:var(--surface-base)] shadow-[var(--shadow-card)] backdrop-blur-2xl",
+        "workspace-window mx-auto flex min-h-full w-full flex-col overflow-hidden rounded-[1.9rem] border border-[color:var(--border-strong)] bg-[color:var(--surface-base)] shadow-[var(--shadow-card)] backdrop-blur-sm",
         fullBleed ? "max-w-none" : "max-w-7xl"
       )}
       aria-labelledby="workspace-window-title"

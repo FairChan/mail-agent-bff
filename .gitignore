@@ -5,10 +5,21 @@ node_modules/
 !apps/*/.env.example
 !deploy/docker/.env.example
 *.log
+.DS_Store
+**/.DS_Store
+*.tsbuildinfo
+coverage/
 
 apps/*/node_modules/
 apps/*/dist/
 apps/*/.vite/
 apps/*/playwright-report/
 apps/*/test-results/
+apps/*/coverage/
+apps/bff/data/
 .harness/tmp/
+
+# Runtime or imported workspaces that must not be committed as product code.
+mail-kb/
+reference/remote-webui-*/
+website-login-main/

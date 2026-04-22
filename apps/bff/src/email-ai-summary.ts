@@ -12,8 +12,11 @@
 
 import { z } from "zod";
 import { createHash } from "crypto";
-import { queryAgent } from "./gateway.js";
 import { env } from "./config.js";
+import { LlmGatewayService } from "./agent/llm-gateway.js";
+import type { TenantContext } from "./agent/types.js";
+import { createPrivacyScope, isMailPrivacyError } from "./mail-privacy.js";
+import { personalTenantIdForUser } from "./tenant-isolation.js";
 import type { StoredEmailRecord } from "./email-persistence.js";
 
 // ---------------------------------------------------------------------------
@@ -323,12 +326,30 @@ export async function generateAiSummariesForStoredEmails(
 ): Promise<Map<string, string>> {
   if (emails.length === 0) return new Map<string, string>();
 
+  const effectiveLogger =
+    logger ??
+    ({
+      warn() {},
+      info() {},
+      error() {},
+    } as const);
+
   const now = Date.now();
   purgeExpiredCache(now);
 
   const summaries = new Map<string, string>();
   const records: AiSummaryRecord[] = [];
   const cacheKeys: string[] = [];
+  const userId = emails[0]?.userId;
+  const tenant: TenantContext | null = userId
+    ? {
+        tenantId: personalTenantIdForUser(userId),
+        userId,
+        sessionToken,
+        sourceId,
+      }
+    : null;
+  const llmGateway = new LlmGatewayService(effectiveLogger as unknown as any);
 
   for (const email of emails) {
     const key = cacheKey(sessionToken, sourceId, email.id, locale);
@@ -369,21 +390,44 @@ export async function generateAiSummariesForStoredEmails(
       evidence: rec.evidence ?? "",
     }));
 
-    const prompt = buildAiSummaryPrompt(promptRecords, locale);
-    const aiSessionKey = `${sessionToken}${sourceScopeSeparator}${sourceId}${sourceScopeSeparator}ai_summary${sourceScopeSeparator}${locale}`;
-
     try {
-      const raw = await queryAgent({
-        message: prompt,
-        sessionKey: aiSessionKey,
-        timeoutMs: Math.min(env.GATEWAY_TIMEOUT_MS, Math.max(1, remainingBudgetMs)),
-      });
+      if (!tenant || !llmGateway) {
+        throw new Error("LLM gateway is unavailable for stored email summaries");
+      }
 
-      const outputText = extractAgentOutput(raw);
-      const parsed = outputText ? parseAiSummaries(outputText) : new Map<string, string>();
+      const privacyScope = createPrivacyScope({
+        kind: "ai_summary",
+        scopeId: `stored_email_ai_summary:${sourceId}:${chunk[0]?.id ?? "chunk"}`,
+        userId: tenant.userId,
+        sourceId,
+      });
+      const maskedPromptRecords = privacyScope.maskStructuredPayload(promptRecords) as typeof promptRecords;
+      const prompt = buildAiSummaryPrompt(maskedPromptRecords, locale);
+
+      const outputText = await llmGateway.generateText({
+        tenant,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You summarize email records for a private mail assistant. Return terse JSON only. No reasoning, no prose outside the schema.",
+          },
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+        timeoutMs: Math.min(env.GATEWAY_TIMEOUT_MS, Math.max(1, remainingBudgetMs)),
+        maxTokens: Math.max(160, chunk.length * aiSummaryMaxLength),
+        temperature: 0,
+        enableThinking: false,
+        responseFormat: { type: "json_object" },
+      });
+      const restoredOutputText = outputText ? privacyScope.restoreText(outputText) : null;
+      const parsed = restoredOutputText ? parseAiSummaries(restoredOutputText) : new Map<string, string>();
 
       if (parsed.size === 0) {
-        logger?.warn(
+        effectiveLogger.warn(
           { sourceId, locale, chunkSize: chunk.length },
           "AI summary parse produced no valid items; using fallback"
         );
@@ -402,8 +446,12 @@ export async function generateAiSummariesForStoredEmails(
         await persistFn(sourceId, rec.id, normalized, locale);
       }
     } catch (error) {
-      logger?.warn(
-        { sourceId, error: error instanceof Error ? error.message : String(error) },
+      effectiveLogger.warn(
+        {
+          sourceId,
+          code: isMailPrivacyError(error) ? error.code : undefined,
+          error: error instanceof Error ? error.message : String(error),
+        },
         "AI summary generation failed for chunk; using fallback"
       );
       for (const rec of chunk) {

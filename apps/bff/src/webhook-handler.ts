@@ -68,6 +68,7 @@
 import { randomUUID, timingSafeEqual, createHmac } from "node:crypto";
 import { z } from "zod";
 import { queryAgent as gatewayQueryAgent } from "./gateway.js";
+import { createPrivacyScope } from "./mail-privacy.js";
 import {
   composioMultiExecuteArgs,
   normalizeSourceContext,
@@ -350,6 +351,13 @@ export async function processNewMailEvent(
       };
     }
 
+    const privacyScope = createPrivacyScope({
+      kind: "webhook",
+      scopeId: `webhook:${sourceContext.sourceId}:${messageId}`,
+      userId: userId ?? sourceContext.userId ?? sourceContext.mailboxUserId ?? "webhook-user",
+      sourceId: sourceContext.sourceId,
+    });
+
     // 2. Run Zod-constrained structured analysis (up to 3 retries)
     const sessionKey = gatewaySessionKeyForSource(
       sourceContext.mailboxUserId ?? "unknown",
@@ -371,6 +379,7 @@ export async function processNewMailEvent(
         locale,
         sessionKey,
         userId: userId ?? sourceContext.mailboxUserId ?? "unknown",
+        privacyScope,
       },
       gatewayQueryAgent
     );

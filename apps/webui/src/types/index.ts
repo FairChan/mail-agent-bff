@@ -40,6 +40,22 @@ export type {
 
   // Priority rules
   MailPriorityRule,
+  MailPersonalizationRejectMode,
+  MailPersonalizationArtifact,
+  MailPersonalizationAnswers,
+  MailPersonalizationStructuredProfile,
+  MailPersonalizationProfile,
+  MailPersonalizationTargetType,
+  MailPersonalizationFeedbackEventType,
+  MailPersonalizationEffectiveSource,
+  MailPersonalizationEntityState,
+  MailPersonalizationFeedbackContext,
+  MailPersonalizationFeedbackInput,
+  MailPersonalizationFeedbackEvent,
+  MailPersonalizationOverride,
+  MailPersonalizationLearnedSignalKind,
+  MailPersonalizationLearnedSignal,
+  MailPersonalizationLearningResult,
 
   // Calendar
   MailCalendarSyncInput,
@@ -76,6 +92,8 @@ export type {
   MailSourcesEnvelope,
   MailTriageEnvelope,
   MailInsightsEnvelope,
+  MailPersonalizationEnvelope,
+  MailPersonalizationLearningEnvelope,
   MailQueryEnvelope,
   CalendarSyncEnvelope,
   CalendarBatchSyncEnvelope,
@@ -439,8 +457,8 @@ const mailSourceRoutingStatusSchema = z.object({
 const mailSourceProfileSchema = z.object({
   id: z.string(),
   name: z.string(),
-  provider: z.literal("outlook"),
-  connectionType: z.enum(["composio", "microsoft"]).optional(),
+  provider: z.enum(["outlook", "gmail", "icloud", "netease163", "qq", "aliyun", "custom_imap"]),
+  connectionType: z.enum(["composio", "microsoft", "gmail_oauth", "imap_password", "imap_oauth2"]).optional(),
   microsoftAccountId: z.string().optional(),
   emailHint: z.string(),
   mailboxUserId: z.string().optional(),
@@ -634,6 +652,15 @@ export const mailKnowledgeRecordSchema = z.object({
       tags: z.array(z.string()),
     })
     .optional(),
+  personalization: z
+    .object({
+      effectiveQuadrant: mailQuadrantSchema,
+      source: z.enum(["auto", "manual_mail", "manual_event", "manual_person", "learned"]),
+      manualQuadrant: mailQuadrantSchema.nullable().optional(),
+      lastFeedbackAt: z.string().nullable().optional(),
+      explanation: z.string().nullable().optional(),
+    })
+    .optional(),
 });
 
 export const eventClusterSchema = z.object({
@@ -644,6 +671,15 @@ export const eventClusterSchema = z.object({
   relatedMailIds: z.array(z.string()),
   lastUpdated: z.string(),
   tags: z.array(z.string()),
+  personalization: z
+    .object({
+      effectiveQuadrant: mailQuadrantSchema,
+      source: z.enum(["auto", "manual_mail", "manual_event", "manual_person", "learned"]),
+      manualQuadrant: mailQuadrantSchema.nullable().optional(),
+      lastFeedbackAt: z.string().nullable().optional(),
+      explanation: z.string().nullable().optional(),
+    })
+    .optional(),
 });
 
 export const personProfileSchema = z.object({
@@ -656,6 +692,15 @@ export const personProfileSchema = z.object({
   recentInteractions: z.number(),
   lastUpdated: z.string(),
   avatarUrl: z.string().optional(),
+  personalization: z
+    .object({
+      effectiveQuadrant: mailQuadrantSchema,
+      source: z.enum(["auto", "manual_mail", "manual_event", "manual_person", "learned"]),
+      manualQuadrant: mailQuadrantSchema.nullable().optional(),
+      lastFeedbackAt: z.string().nullable().optional(),
+      explanation: z.string().nullable().optional(),
+    })
+    .optional(),
 });
 
 export type KnowledgeBaseStatsEnvelope = z.infer<typeof knowledgeBaseStatsSchema>;

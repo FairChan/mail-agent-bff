@@ -1,7 +1,7 @@
 /**
  * @fileoverview Notification Service — Multi-Channel Push for Urgent Mail
  *
- * Phase 3: Routes urgent mail notifications to DingTalk and WeCom channels.
+ * Phase 3: Routes urgent mail notifications to local/browser-safe channels.
  *
  * Architecture:
  * =============
@@ -14,23 +14,13 @@
  *     └─ YES → notificationService.push(analysisResult)
  *              ├─ formatDingTalkMarkdown()
  *              ├─ formatWecomMarkdown()
- *              └─ queryAgent(notificationPrompt) → OpenClaw dispatches to channels
+ *              └─ local delivery gate (no LLM hop)
  *
- * OpenClaw Plugin Integration:
- * ===========================
- * Both DingTalk and WeCom plugins are registered as OpenClaw channels.
- * The notification sub-agent generates Markdown text, which the plugins
- * detect and route to the appropriate channel (via sessionWebhook for
- * DingTalk, via response_url for WeCom).
- *
- * Notification Prompt Strategy:
- * =============================
- * Instead of directly calling plugin APIs (which would require embedding
- * plugin internals in BFF), we use the OpenClaw Agent as the unified
- * notification router:
- * 1. Build a rich Markdown notification text
- * 2. Invoke OpenClaw sub-agent with the notification text
- * 3. OpenClaw dispatches to all active user channels
+ * Delivery Strategy:
+ * ==================
+ * The BFF builds notification text locally and never sends mail content to
+ * an LLM for notification fan-out. Browser delivery remains supported. Other
+ * channels require a future direct local sender implementation.
  *
  * Security Notes:
  * ===============
@@ -40,7 +30,6 @@
  * - User must opt-in to notification channels
  */
 
-import { queryAgent as gatewayQueryAgent } from "./gateway.js";
 import type { MailAnalysisResult } from "./mail-analysis.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -472,41 +461,23 @@ export async function pushUrgentNotification(
     ? formatBrowserNotification(payload)
     : null;
 
-  // Build notification agent prompt
-  const prompt = buildNotificationPrompt(payload, target);
-
-  // Invoke OpenClaw notification sub-agent
-  let agentTriggered = false;
   const results: NotificationResult[] = [];
-
-  try {
-    const response = await gatewayQueryAgent({
-      message: prompt,
-      user: target.userId,
-      sessionKey: target.sessionKey,
-      timeoutMs: 20_000,
-    });
-
-    agentTriggered = true;
-
-    // All channels delivered via the agent response
+  if (dingtalkText || wecomText || browserNotif) {
     for (const channel of target.channels) {
-      results.push({
-        ok: true,
-        channel,
-        delivered: true,
-      });
-    }
-  } catch (err) {
-    // Agent failed — log but don't fail the whole notification
-    const errMsg = err instanceof Error ? err.message : "Unknown error";
+      if (channel === "browser") {
+        results.push({
+          ok: true,
+          channel,
+          delivered: true,
+        });
+        continue;
+      }
 
-    for (const channel of target.channels) {
       results.push({
         ok: false,
         channel,
         delivered: false,
-        error: `Agent trigger failed: ${errMsg}`,
+        error: "Direct local delivery is not configured for this channel",
       });
     }
   }
@@ -514,7 +485,7 @@ export async function pushUrgentNotification(
   const channelsDelivered = results.filter((r) => r.delivered).length;
 
   return {
-    ok: agentTriggered && channelsDelivered > 0,
+    ok: channelsDelivered > 0,
     channelsAttempted: target.channels.length,
     channelsDelivered,
     results,

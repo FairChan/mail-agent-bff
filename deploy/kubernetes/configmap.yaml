@@ -5,7 +5,20 @@ metadata:
   namespace: mery
 data:
   NODE_ENV: "production"
+  HOST: "0.0.0.0"
+  PORT: "8787"
+  TRUST_PROXY: "1"
   LOG_LEVEL: "info"
+  AGENT_RUNTIME: "mastra"
+  PUBLIC_BASE_URL: "https://true-sight.asia"
+  LLM_PROVIDER_BASE_URL: "https://api.siliconflow.cn/v1"
+  LLM_PROVIDER_MODEL: "Pro/zai-org/GLM-5.1"
+  MICROSOFT_TENANT_ID: "common"
+  MICROSOFT_SCOPES: "openid profile email offline_access User.Read Mail.Read Calendars.ReadWrite"
+  REDIS_AUTH_SESSIONS_ENABLED: "true"
+  PRISMA_AUTH_ENABLED: "true"
+  ENABLE_EMAIL_PERSISTENCE: "true"
+  MAIL_SOURCE_MEMORY_FALLBACK_ENABLED: "false"
 ---
 apiVersion: v1
 kind: Secret
@@ -14,8 +27,10 @@ metadata:
   namespace: mery
 type: Opaque
 stringData:
-  DATABASE_URL: "postgresql://mery@postgres-svc:5432/mery?sslmode=require"
-  REDIS_HOST: "redis-svc"
-  REDIS_PORT: "6379"
-  SESSION_SECRET: "${SESSION_SECRET}"
-  OPENCLAW_GATEWAY_BASE_URL: "http://gateway-svc:18789"
+  DATABASE_URL: "${DATABASE_URL}"
+  REDIS_URL: "${REDIS_URL}"
+  BFF_API_KEY: "${BFF_API_KEY}"
+  APP_ENCRYPTION_KEY: "${APP_ENCRYPTION_KEY}"
+  LLM_PROVIDER_API_KEY: "${LLM_PROVIDER_API_KEY}"
+  MICROSOFT_CLIENT_ID: "${MICROSOFT_CLIENT_ID}"
+  MICROSOFT_CLIENT_SECRET: "${MICROSOFT_CLIENT_SECRET}"

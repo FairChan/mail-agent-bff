@@ -56,6 +56,16 @@ apps/bff/
 
 ## 更新日志
 
+### 2026-04-21T09:46:18+08:00 - 独立代码复审
+
+- 范围：仅复审 `apps/bff/src/server.ts` 中本轮 auth session persistence / restart recovery 处理。
+- 结论：Audit: N/A (no code changes)
+
+### 2026-04-21T09:35:37+08:00 - 独立代码审计
+
+- 范围：仅审计 `apps/bff/src/server.ts` 中本轮 auth session 持久化 / 重启后会话恢复改动。
+- 结论：Audit: N/A (no code changes)
+
 ### v1.3 — 域名部署与子代理安全审计
 
 **日期**: 2026-04-06
@@ -296,4 +306,22 @@ Google 自 2024 年起逐步淘汰 App Passwords，Gmail SMTP 发送需要使用
 
 - Task: re-audited `apps/bff/src/server.ts` after the latest fixes, focusing on durable Outlook sync state, stale-state writeback, Microsoft-account rebinding, and webhook `clientState` validation.
 - Deliverable: concrete findings only; no code changes requested beyond this log entry.
+- Audit: N/A (no code changes)
+
+### 2026-04-20T23:43:24+08:00 — Non-code
+
+- Task: independently audited the Gmail direct-connection delta only in `apps/bff/src/server.ts`, `apps/bff/src/mail.ts`, `apps/bff/src/google-gmail.ts`, `apps/bff/src/mail-source-service.ts`, `apps/bff/src/config.ts`, `apps/bff/prisma/schema.prisma`, `apps/bff/prisma/migrations/202604201930_google_accounts/migration.sql`, `apps/webui/src/contexts/MailContext.tsx`, `apps/webui/src/components/dashboard/SettingsView.tsx`, `apps/webui/src/components/layout/Sidebar.tsx`, and `apps/bff/src/mail-provider-registry.ts`.
+- Deliverable: concise review findings only, using the provided validation evidence (`bff/webui` typecheck, builds, Prisma validate, migrate deploy, `/health`, and the `GOOGLE_OAUTH_NOT_CONFIGURED` popup behavior).
+- Audit: N/A (no code changes)
+
+### 2026-04-20T23:52:28+08:00 — Non-code
+
+- Task: second-round read-only re-audit of the Gmail direct-connection fixes, focusing on the previous two Medium and two Low findings in `apps/bff/src/server.ts`, `apps/bff/src/google-gmail.ts`, `apps/bff/src/mail-provider-registry.ts`, and `apps/webui/src/contexts/MailContext.tsx`.
+- Deliverable: concise status on which prior findings are resolved versus still present; no code changes requested beyond this log entry.
+- Audit: N/A (no code changes)
+
+### 2026-04-20T23:55:45+08:00 — Non-code
+
+- Task: final read-only re-audit of the Gmail popup fix, focused only on the callback failure-path `attemptId` propagation and the WebUI popup message-match logic, plus a narrow pass for any remaining Critical/High/Medium in the same scope.
+- Deliverable: final status only; no code changes requested beyond this log entry.
 - Audit: N/A (no code changes)

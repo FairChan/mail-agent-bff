@@ -1,42 +1,93 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { MailKnowledgeRecord, EventCluster, PersonProfile } from "@mail-agent/shared-types";
+import { cn } from "../../../lib/utils";
+import { useDrawerStore } from "../../drawer";
+import { CalmButton, CalmPill } from "../../ui/Calm";
 import { formatMailScore, getQuadrantMeta, resolveMailScoreScale } from "./quadrants";
 
 interface MailsListPanelProps {
   mails: MailKnowledgeRecord[];
   persons: PersonProfile[];
   events: EventCluster[];
+  pagination?: {
+    total: number;
+    limit: number;
+    offset: number;
+  };
+  loading?: boolean;
+  onPageChange?: (page: number) => void;
 }
 
-export function MailsListPanel({ mails, persons, events }: MailsListPanelProps) {
-  const [selectedMail, setSelectedMail] = useState<MailKnowledgeRecord | null>(null);
+function formatDate(dateStr: string) {
+  return new Date(dateStr).toLocaleDateString("zh-CN", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function getVisiblePages(currentPage: number, totalPages: number) {
+  const pages = new Set<number>([1, totalPages, currentPage]);
+  if (currentPage > 1) {
+    pages.add(currentPage - 1);
+  }
+  if (currentPage < totalPages) {
+    pages.add(currentPage + 1);
+  }
+  return [...pages].filter((page) => page >= 1 && page <= totalPages).sort((a, b) => a - b);
+}
+
+export function MailsListPanel({
+  mails,
+  persons,
+  events,
+  pagination,
+  loading = false,
+  onPageChange,
+}: MailsListPanelProps) {
   const [searchQuery, setSearchQuery] = useState("");
+  const openDrawer = useDrawerStore((state) => state.openDrawer);
 
-  const filteredMails = mails.filter((mail) =>
-    mail.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    mail.summary.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const personById = useMemo(() => new Map(persons.map((person) => [person.personId, person])), [persons]);
+  const eventById = useMemo(() => new Map(events.map((event) => [event.eventId, event])), [events]);
+  const total = pagination?.total ?? mails.length;
+  const pageSize = Math.max(1, pagination?.limit ?? Math.max(mails.length, 1));
+  const offset = pagination?.offset ?? 0;
+  const totalPages = Math.max(1, Math.ceil(Math.max(total, mails.length) / pageSize));
+  const currentPage = Math.min(Math.max(1, Math.floor(offset / pageSize) + 1), totalPages);
+  const displayedStart = total > 0 ? Math.min((currentPage - 1) * pageSize + 1, total) : 0;
+  const displayedEnd = total > 0 ? Math.min((currentPage - 1) * pageSize + mails.length, total) : 0;
 
-  const getPersonName = (personId: string) => {
-    const person = persons.find((p) => p.personId === personId);
-    return person?.name || personId;
-  };
+  const filteredMails = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) {
+      return mails;
+    }
+    return mails.filter((mail) =>
+      mail.subject.toLowerCase().includes(query) ||
+      mail.summary.toLowerCase().includes(query) ||
+      mail.mailId.toLowerCase().includes(query) ||
+      (personById.get(mail.personId)?.name ?? mail.personId).toLowerCase().includes(query)
+    );
+  }, [mails, personById, searchQuery]);
 
-  const getEventName = (eventId: string | null) => {
-    if (!eventId) return null;
-    const event = events.find((e) => e.eventId === eventId);
-    return event?.name;
-  };
-
-  const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleDateString("zh-CN", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
+  const openMailDrawer = (mail: MailKnowledgeRecord) => {
+    openDrawer("mailKnowledgeDetail", {
+      mail,
+      personName: personById.get(mail.personId)?.name ?? mail.personId,
+      personEmail: personById.get(mail.personId)?.email ?? null,
+      eventName: mail.eventId ? eventById.get(mail.eventId)?.name ?? mail.eventId : null,
     });
   };
 
-  if (mails.length === 0) {
+  const jumpToPage = (page: number) => {
+    if (!onPageChange || page === currentPage || page < 1 || page > totalPages) {
+      return;
+    }
+    onPageChange(page);
+  };
+
+  if (total === 0 && mails.length === 0) {
     return (
       <div className="flex h-64 items-center justify-center rounded-[1.4rem] border border-dashed border-[color:var(--border-soft)] bg-[color:var(--surface-soft)]">
         <p className="text-[color:var(--ink-subtle)]">暂无邮件数据，请先执行邮件总结任务</p>
@@ -45,131 +96,159 @@ export function MailsListPanel({ mails, persons, events }: MailsListPanelProps) 
   }
 
   return (
-    <div className="flex h-full gap-6">
-      {/* Mail List */}
-      <div className="flex w-1/2 flex-col">
-        {/* Search */}
-        <div className="mb-4">
+    <div className="flex min-h-full flex-col gap-5">
+      <header className="rounded-[1.65rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] p-5 shadow-[var(--shadow-soft)]">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--ink-subtle)]">
+              Mail Stack
+            </p>
+            <h2 className="mt-2 text-xl font-semibold tracking-[-0.02em] text-[color:var(--ink)]">
+              分页邮件堆叠
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-[color:var(--ink-muted)]">
+              每一页展示一组邮件，点击后会作为右侧页面叠在当前工作台之上；后续联系人、事件、设置页也可以复用同一个抽屉栈。
+            </p>
+          </div>
+          <div className="rounded-[1.2rem] border border-[color:var(--border-info)] bg-[color:var(--surface-info)] px-4 py-3 text-right">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[color:var(--pill-info-ink)]">
+              Page
+            </p>
+            <p className="mt-1 text-lg font-semibold text-[color:var(--ink)]">
+              {currentPage} / {totalPages}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-5 flex flex-wrap items-center gap-3">
           <input
             type="text"
-            placeholder="搜索邮件..."
+            placeholder="搜索当前页邮件、摘要、联系人..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="calm-input w-full px-4 py-2 text-sm"
+            onChange={(event) => setSearchQuery(event.target.value)}
+            className="calm-input min-w-[16rem] flex-1 px-4 py-2.5 text-sm"
           />
+          <CalmPill tone="muted">{displayedStart}-{displayedEnd} / {total} 封</CalmPill>
+          {loading ? <CalmPill tone="info">加载中</CalmPill> : null}
         </div>
+      </header>
 
-        {/* List */}
-        <div className="calm-scrollbar flex-1 space-y-2 overflow-auto pr-1">
-          {filteredMails.map((mail) => {
-            const meta = getQuadrantMeta(mail.quadrant);
-            const isSelected = selectedMail?.mailId === mail.mailId;
-            return (
-              <button
-                key={mail.mailId}
-                type="button"
-                onClick={() => setSelectedMail(mail)}
-                className={`w-full cursor-pointer rounded-xl border p-4 text-left transition-colors ${
-                  isSelected
-                    ? "border-[color:var(--border-info)] bg-[color:var(--surface-info)] shadow-[var(--shadow-soft)]"
-                    : "border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] hover:bg-[color:var(--surface-soft)]"
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${meta.badgeClass}`}>
-                        {meta.label}
-                      </span>
-                      <span className="text-xs text-[color:var(--ink-subtle)]">{mail.mailId}</span>
-                    </div>
-                    <h4 className="mt-1 truncate font-medium text-[color:var(--ink)]">{mail.subject}</h4>
-                    <p className="mt-1 text-sm text-[color:var(--ink-muted)]">{getPersonName(mail.personId)}</p>
-                    <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">{formatDate(mail.receivedAt)}</p>
-                  </div>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      <div className="grid gap-3">
+        {filteredMails.map((mail, index) => {
+          const meta = getQuadrantMeta(mail.quadrant);
+          const personName = personById.get(mail.personId)?.name ?? mail.personId;
+          const eventName = mail.eventId ? eventById.get(mail.eventId)?.name ?? mail.eventId : null;
 
-      {/* Mail Detail */}
-      <div className="w-1/2 rounded-[1.4rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] p-6 shadow-[var(--shadow-soft)]">
-        {selectedMail ? (
-          <div className="space-y-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className={`rounded px-2 py-1 text-xs font-medium ${getQuadrantMeta(selectedMail.quadrant).badgeClass}`}>
-                  {getQuadrantMeta(selectedMail.quadrant).label}
-                </span>
-                <span className="text-sm text-[color:var(--ink-subtle)]">{selectedMail.mailId}</span>
-              </div>
-              <h3 className="mt-2 text-lg font-semibold text-[color:var(--ink)]">{selectedMail.subject}</h3>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <p className="text-[color:var(--ink-subtle)]">发件人</p>
-                <p className="font-medium text-[color:var(--ink)]">{getPersonName(selectedMail.personId)}</p>
-              </div>
-              <div>
-                <p className="text-[color:var(--ink-subtle)]">接收时间</p>
-                <p className="font-medium text-[color:var(--ink)]">{formatDate(selectedMail.receivedAt)}</p>
-              </div>
-              <div>
-                <p className="text-[color:var(--ink-subtle)]">重要性</p>
-                <p className="font-medium text-[color:var(--ink)]">
-                  {formatMailScore(
-                    selectedMail.importanceScore,
-                    resolveMailScoreScale(selectedMail)
-                  )}
-                </p>
-              </div>
-              <div>
-                <p className="text-[color:var(--ink-subtle)]">紧急性</p>
-                <p className="font-medium text-[color:var(--ink)]">
-                  {formatMailScore(
-                    selectedMail.urgencyScore,
-                    resolveMailScoreScale(selectedMail)
-                  )}
-                </p>
-              </div>
-              {selectedMail.eventId && (
-                <div className="col-span-2">
-                  <p className="text-[color:var(--ink-subtle)]">关联事件</p>
-                  <p className="font-medium text-[color:var(--ink)]">{getEventName(selectedMail.eventId) || selectedMail.eventId}</p>
-                </div>
+          return (
+            <button
+              key={mail.mailId}
+              type="button"
+              onClick={() => openMailDrawer(mail)}
+              className={cn(
+                "mail-stack-card group w-full rounded-[1.35rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] p-4 text-left transition duration-150 hover:-translate-y-0.5 hover:border-[color:var(--border-info)] hover:bg-[color:var(--surface-soft)]",
+                index === 0 && "border-[color:var(--border-info)]"
               )}
-            </div>
+              aria-label={`打开邮件详情：${mail.subject || mail.mailId}`}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${meta.badgeClass}`}>
+                      {meta.label}
+                    </span>
+                    <span className="text-xs font-medium text-[color:var(--ink-subtle)]">{mail.mailId}</span>
+                    {eventName ? <CalmPill tone="info">{eventName}</CalmPill> : null}
+                  </div>
+                  <h3 className="mt-2 truncate text-base font-semibold text-[color:var(--ink)]">
+                    {mail.subject || "无主题邮件"}
+                  </h3>
+                  <p className="mt-1 text-sm text-[color:var(--ink-muted)]">
+                    {personName} · {formatDate(mail.receivedAt)}
+                  </p>
+                  <p className="mt-2 line-clamp-2 text-sm leading-6 text-[color:var(--ink-muted)]">
+                    {mail.summary}
+                  </p>
+                </div>
 
-            <div>
-              <p className="mb-2 text-sm font-medium text-[color:var(--ink)]">摘要</p>
-              <div className="rounded-[1rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] p-4 text-sm text-[color:var(--ink-muted)]">
-                {selectedMail.summary}
+                <div className="grid min-w-[9rem] gap-2 text-right text-xs text-[color:var(--ink-subtle)]">
+                  <span>
+                    重要性{" "}
+                    <strong className="text-[color:var(--ink)]">
+                      {formatMailScore(mail.importanceScore, resolveMailScoreScale(mail))}
+                    </strong>
+                  </span>
+                  <span>
+                    紧急性{" "}
+                    <strong className="text-[color:var(--ink)]">
+                      {formatMailScore(mail.urgencyScore, resolveMailScoreScale(mail))}
+                    </strong>
+                  </span>
+                  <span className="text-[color:var(--pill-info-ink)] transition group-hover:translate-x-0.5">
+                    打开叠页 →
+                  </span>
+                </div>
               </div>
-            </div>
+            </button>
+          );
+        })}
 
-            {selectedMail.webLink && (
-              <a
-                href={selectedMail.webLink}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 rounded-full bg-[color:var(--button-primary)] px-4 py-2 text-sm font-medium text-[color:var(--button-primary-ink)] hover:bg-[color:var(--button-primary-hover)]"
-              >
-                在Outlook中查看
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                </svg>
-              </a>
-            )}
+        {filteredMails.length === 0 ? (
+          <div className="rounded-[1.25rem] border border-dashed border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-4 py-8 text-center text-sm text-[color:var(--ink-subtle)]">
+            当前页没有匹配的邮件。清空搜索或切换页面继续查看。
           </div>
-        ) : (
-          <div className="flex h-full items-center justify-center text-[color:var(--ink-subtle)]">
-            选择一封邮件查看详情
-          </div>
-        )}
+        ) : null}
       </div>
+
+      {totalPages > 1 ? (
+        <nav
+          className="flex flex-wrap items-center justify-between gap-3 rounded-[1.35rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-4 py-3"
+          aria-label="邮件分页"
+        >
+          <div className="text-xs text-[color:var(--ink-subtle)]">
+            第 {currentPage} / {totalPages} 页，每页 {pageSize} 封
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <CalmButton
+              type="button"
+              variant="secondary"
+              className="px-3 py-1.5 text-xs"
+              disabled={currentPage === 1}
+              onClick={() => jumpToPage(currentPage - 1)}
+            >
+              上一页
+            </CalmButton>
+            {getVisiblePages(currentPage, totalPages).map((page, index, pages) => (
+              <span key={page} className="inline-flex items-center gap-1.5">
+                {index > 0 && page - pages[index - 1] > 1 ? (
+                  <span className="px-1 text-xs text-[color:var(--ink-subtle)]">...</span>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => jumpToPage(page)}
+                  className={cn(
+                    "h-8 min-w-8 rounded-full px-2 text-xs font-semibold transition",
+                    page === currentPage
+                      ? "bg-[color:var(--button-primary)] text-[color:var(--button-primary-ink)]"
+                      : "text-[color:var(--ink-muted)] hover:bg-[color:var(--surface-elevated)] hover:text-[color:var(--ink)]"
+                  )}
+                  aria-current={page === currentPage ? "page" : undefined}
+                >
+                  {page}
+                </button>
+              </span>
+            ))}
+            <CalmButton
+              type="button"
+              variant="secondary"
+              className="px-3 py-1.5 text-xs"
+              disabled={currentPage === totalPages}
+              onClick={() => jumpToPage(currentPage + 1)}
+            >
+              下一页
+            </CalmButton>
+          </div>
+        </nav>
+      ) : null}
     </div>
   );
 }

@@ -213,20 +213,56 @@ export function NotificationCenter({
               <div className="p-3">
                 <p className="text-[11px] font-semibold text-[color:var(--pill-success-ink)]">每日摘要</p>
                 <p className="mt-1 text-sm font-semibold text-[color:var(--ink)]">
-                  今天 {digest.digest.total} 封邮件，{digest.digest.urgentImportant} 封紧急重要
+                  {digest.summaryTitle || `今天 ${digest.digest.total} 封邮件，${digest.digest.urgentImportant} 封紧急重要`}
                 </p>
                 <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">
                   未读 {digest.digest.unread} · 高优先级 {digest.digest.highImportance} · 近期事项 {digest.digest.upcomingCount}
                 </p>
-                {(digest.tomorrowDdl.length > 0 || digest.upcoming.length > 0) && (
+                {digest.summaryLines?.length ? (
+                  <ul className="mt-2 space-y-1.5">
+                    {digest.summaryLines.slice(0, 4).map((line) => (
+                      <li key={line} className="break-words text-xs leading-5 text-[color:var(--ink-muted)]">
+                        {line}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {digest.urgentHighlights?.length ? (
+                  <div className="mt-3 rounded-[1rem] border border-[color:var(--border-urgent)] bg-[color:var(--surface-urgent)] px-3 py-2">
+                    <p className="text-[11px] font-semibold text-[color:var(--pill-urgent-ink)]">优先处理</p>
+                    <ul className="mt-1 space-y-1">
+                      {digest.urgentHighlights.slice(0, 3).map((item) => (
+                        <li key={item.messageId} className="break-words text-xs leading-5 text-[color:var(--pill-urgent-ink)]">
+                          {item.subject} · {item.fromName} · {item.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {(digest.scheduleHighlights?.length || digest.tomorrowDdl.length > 0 || digest.upcoming.length > 0) && (
                   <ul className="mt-2 space-y-1">
-                    {[...digest.tomorrowDdl, ...digest.upcoming].slice(0, 4).map((item) => (
+                    {(digest.scheduleHighlights?.length
+                      ? digest.scheduleHighlights
+                      : [...digest.tomorrowDdl, ...digest.upcoming]
+                    ).slice(0, 4).map((item) => (
                       <li key={`${item.messageId}-${item.dueDateLabel}`} className="break-words text-xs text-[color:var(--ink-muted)]">
                         {item.subject} · {item.dueDateLabel}
                       </li>
                     ))}
                   </ul>
                 )}
+                {digest.recommendedActions?.length ? (
+                  <div className="mt-3 rounded-[1rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-3 py-2">
+                    <p className="text-[11px] font-semibold text-[color:var(--ink-muted)]">建议动作</p>
+                    <ul className="mt-1 space-y-1">
+                      {digest.recommendedActions.slice(0, 3).map((item) => (
+                        <li key={item} className="break-words text-xs leading-5 text-[color:var(--ink-muted)]">
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
               </div>
             )}
           </div>

@@ -1,0 +1,6 @@
+No Critical or High issues.
+
+- Medium: `[AppDock.tsx](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/components/layout/AppDock.tsx#L203)` `[AppDock.tsx](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/components/layout/AppDock.tsx#L241)` `[AppDock.tsx](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/components/layout/AppDock.tsx#L267)` The new tooltip path is inside the dock’s horizontal scroller, and the dock only grows on mouse movement. With `overflow-x-auto`, the floating label and focus ring can be clipped, especially when tabbing through the dock. MDN notes that `visible` on one overflow axis computes to `auto` when the other axis scrolls: [overflow docs](https://developer.mozilla.org/docs/Web/CSS/overflow).
+
+- Low: `[AgentWorkspaceWindow.tsx](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/components/agent/AgentWorkspaceWindow.tsx#L154)` `[smoke.spec.ts](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/e2e/smoke.spec.ts#L956)` The agent window no longer consumes `/api/agent/skills`, so the capability inventory and its error surface are gone. The smoke spec still stubs that endpoint, which means this path is now dead coverage; if the skills panel was meant to stay user-facing, this is a silent behavior change.
+

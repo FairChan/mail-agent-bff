@@ -43,6 +43,9 @@ function referenceToMailItem(reference: MailQaReference): TriageMailItem {
     fromAddress: reference.fromAddress || "",
     bodyPreview: reference.evidence || reference.dueDateLabel || "",
     webLink: "",
+    isRead: true,
+    importance: "normal",
+    hasAttachments: false,
     receivedDateTime: reference.receivedDateTime,
     quadrant: reference.quadrant,
   };

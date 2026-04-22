@@ -3,6 +3,7 @@
 import { hasNodeModules, runCommand } from "./harness-lib.mjs";
 
 const steps = [
+  ["node", ["scripts/check-repo-boundary.mjs"]],
   ["node", ["scripts/harness-validate-mcp.mjs"]],
   ["npm", ["run", "check:tenant"]],
   ["npm", ["run", "check:audit"]],

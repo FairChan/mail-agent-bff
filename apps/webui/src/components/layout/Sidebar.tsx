@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import type { ViewKey } from "@mail-agent/shared-types";
+import type { MailProviderDescriptor, MailSourceProvider, ViewKey } from "@mail-agent/shared-types";
 import { useApp } from "../../contexts/AppContext";
 import { useAuth } from "../../contexts/AuthContext";
 import { useMail } from "../../contexts/MailContext";
 import { cn } from "../../lib/utils";
 import { CalmButton, CalmPill, CalmSurface } from "../ui/Calm";
+import { formatImapConnectionError, formatOauthConnectionError } from "../../utils/mailConnectionFeedback";
 
 interface SidebarProps {
   onClose?: () => void;
@@ -12,23 +13,118 @@ interface SidebarProps {
 
 const EXPANDED_WIDTH = 224;
 const COLLAPSED_WIDTH = 64;
+type SidebarImapProvider = Extract<
+  MailSourceProvider,
+  "gmail" | "icloud" | "netease163" | "qq" | "aliyun" | "custom_imap"
+>;
+
+const FALLBACK_IMAP_PROVIDERS: Array<{
+  id: SidebarImapProvider;
+  label: string;
+  imap?: MailProviderDescriptor["imap"];
+  notes: string[];
+}> = [
+  {
+    id: "gmail",
+    label: "Gmail / Google Workspace",
+    imap: { host: "imap.gmail.com", port: 993, secure: true, usernameHint: "email" },
+    notes: ["Gmail 推荐优先走上面的 Google 直连；这里保留应用专用密码 IMAP 兜底路径。"],
+  },
+  {
+    id: "icloud",
+    label: "Apple iCloud Mail",
+    imap: { host: "imap.mail.me.com", port: 993, secure: true, usernameHint: "email" },
+    notes: ["需要 Apple 应用专用密码。"],
+  },
+  {
+    id: "netease163",
+    label: "网易 163 邮箱",
+    imap: { host: "imap.163.com", port: 993, secure: true, usernameHint: "email" },
+    notes: ["请先在 163 邮箱中开启 IMAP，并生成客户端授权码。"],
+  },
+  {
+    id: "qq",
+    label: "QQ 邮箱",
+    imap: { host: "imap.qq.com", port: 993, secure: true, usernameHint: "email" },
+    notes: ["请先在 QQ 邮箱中开启 IMAP，并生成授权码。"],
+  },
+  {
+    id: "aliyun",
+    label: "阿里邮箱",
+    imap: { host: "imap.aliyun.com", port: 993, secure: true, usernameHint: "email" },
+    notes: ["个人版一般使用 imap.aliyun.com；企业版可根据实际域名覆盖 Host。"],
+  },
+  {
+    id: "custom_imap",
+    label: "Custom IMAP",
+    notes: ["适合学校邮箱和企业邮箱，请填写实际的 IMAP Host 与端口。"],
+  },
+];
 
 function AccountActionModal({
   open,
   busy,
+  gmailBusy,
+  imapBusy,
   error,
   info,
+  imapProviders,
+  selectedImapProvider,
+  imapProvider,
+  imapLabel,
+  imapEmail,
+  imapUsername,
+  imapPassword,
+  imapHost,
+  imapPort,
   onClose,
   onOutlookLogin,
-  onOpenSettings,
+  onGmailLogin,
+  onImapProviderChange,
+  onImapLabelChange,
+  onImapEmailChange,
+  onImapUsernameChange,
+  onImapPasswordChange,
+  onImapHostChange,
+  onImapPortChange,
+  onImapConnect,
 }: {
   open: boolean;
   busy: boolean;
+  gmailBusy: boolean;
+  imapBusy: boolean;
   error: string | null;
   info: string | null;
+  imapProviders: Array<{
+    id: SidebarImapProvider;
+    label: string;
+    imap?: MailProviderDescriptor["imap"];
+    notes: string[];
+  }>;
+  selectedImapProvider: {
+    id: SidebarImapProvider;
+    label: string;
+    imap?: MailProviderDescriptor["imap"];
+    notes: string[];
+  } | null;
+  imapProvider: SidebarImapProvider;
+  imapLabel: string;
+  imapEmail: string;
+  imapUsername: string;
+  imapPassword: string;
+  imapHost: string;
+  imapPort: string;
   onClose: () => void;
   onOutlookLogin: () => void;
-  onOpenSettings: () => void;
+  onGmailLogin: () => void;
+  onImapProviderChange: (provider: SidebarImapProvider) => void;
+  onImapLabelChange: (value: string) => void;
+  onImapEmailChange: (value: string) => void;
+  onImapUsernameChange: (value: string) => void;
+  onImapPasswordChange: (value: string) => void;
+  onImapHostChange: (value: string) => void;
+  onImapPortChange: (value: string) => void;
+  onImapConnect: () => void;
 }) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
@@ -98,14 +194,14 @@ function AccountActionModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="connect-mail-dialog-title"
-        className="relative z-10 w-full max-w-md p-6"
+        className="relative z-10 mx-4 max-h-[88vh] w-full max-w-2xl overflow-y-auto p-6 sm:p-7"
         beam
       >
         <div className="flex items-start justify-between gap-4">
           <div>
             <p id="connect-mail-dialog-title" className="text-lg font-semibold text-[color:var(--ink)]">连接邮箱</p>
             <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">
-              优先使用 Microsoft 直连，底层会继续走当前已验证的邮箱链路。
+              把 Outlook、Gmail 和 IMAP 邮箱都放进一个入口里。连接成功后，侧边栏会立即刷新；如果失败，会把原因直接返回给你。
             </p>
           </div>
           <CalmButton type="button" onClick={onClose} variant="ghost" className="h-10 w-10 rounded-2xl p-0" aria-label="关闭连接邮箱弹窗">
@@ -113,40 +209,176 @@ function AccountActionModal({
           </CalmButton>
         </div>
 
-        <div className="mt-5 space-y-3">
-          <button
-            type="button"
-            onClick={onOutlookLogin}
-            disabled={busy}
-            className="flex w-full items-center gap-3 rounded-[1.2rem] border border-[color:var(--border-info)] bg-[color:var(--surface-info)] p-4 text-left transition hover:translate-y-[-1px] hover:shadow-[var(--shadow-soft)] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-white">
-              <MailIcon active />
+        <div className="mt-5 space-y-6">
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--ink-subtle)]">OAuth 直连</p>
+              <p className="text-[11px] text-[color:var(--ink-subtle)]">授权完成后自动刷新邮箱源</p>
             </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-[color:var(--ink)]">Microsoft Outlook</p>
-              <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">
-                跳转微软官方登录页，授权后自动回到当前产品。
-              </p>
-            </div>
-            <CalmPill tone="info">{busy ? "连接中" : "直连"}</CalmPill>
-          </button>
 
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            className="flex w-full items-center gap-3 rounded-[1.2rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-muted)] p-4 text-left transition hover:translate-y-[-1px] hover:shadow-[var(--shadow-soft)]"
-          >
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[color:var(--button-primary)] text-[color:var(--button-primary-ink)]">
-              <SettingsIcon active />
+            <div className="grid gap-3 md:grid-cols-2">
+              <button
+                type="button"
+                onClick={onOutlookLogin}
+                disabled={busy}
+                className="flex w-full items-center gap-3 rounded-[1.2rem] border border-[color:var(--border-info)] bg-[color:var(--surface-info)] p-4 text-left transition hover:translate-y-[-1px] hover:shadow-[var(--shadow-soft)] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-600 text-white">
+                  <MailIcon active />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-[color:var(--ink)]">Microsoft Outlook</p>
+                  <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">
+                    跳转微软官方登录页，授权回调会自动写回当前会话。
+                  </p>
+                </div>
+                <CalmPill tone="info">{busy ? "连接中" : "直连"}</CalmPill>
+              </button>
+
+              <button
+                type="button"
+                onClick={onGmailLogin}
+                disabled={gmailBusy}
+                className="flex w-full items-center gap-3 rounded-[1.2rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-muted)] p-4 text-left transition hover:translate-y-[-1px] hover:shadow-[var(--shadow-soft)] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-rose-500 text-white">
+                  <MailIcon active />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-[color:var(--ink)]">Google Gmail</p>
+                  <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">
+                    跳转 Google 官方登录页，授权完成后直接返回当前工作台。
+                  </p>
+                </div>
+                <CalmPill tone="muted">{gmailBusy ? "连接中" : "直连"}</CalmPill>
+              </button>
             </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-[color:var(--ink)]">高级设置</p>
-              <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">
-                进入设置页管理数据源、通知、语言和主题。
+          </section>
+
+          <section className="space-y-4">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--ink-subtle)]">IMAP 授权码接入</p>
+              <p className="text-[11px] text-[color:var(--ink-subtle)]">适合 iCloud、163、QQ、阿里邮箱和学校邮箱</p>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="grid gap-1 text-sm text-[color:var(--ink-muted)]">
+                <span>邮箱类型</span>
+                <select
+                  value={imapProvider}
+                  onChange={(event) => onImapProviderChange(event.target.value as SidebarImapProvider)}
+                  className="calm-input h-11"
+                >
+                  {imapProviders.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="grid gap-1 text-sm text-[color:var(--ink-muted)]">
+                <span>显示名称</span>
+                <input
+                  type="text"
+                  value={imapLabel}
+                  onChange={(event) => onImapLabelChange(event.target.value)}
+                  placeholder={selectedImapProvider ? `${selectedImapProvider.label} name@example.com` : "Mail source label"}
+                  className="calm-input h-11"
+                />
+              </label>
+
+              <label className="grid gap-1 text-sm text-[color:var(--ink-muted)]">
+                <span>邮箱地址</span>
+                <input
+                  type="email"
+                  value={imapEmail}
+                  onChange={(event) => onImapEmailChange(event.target.value)}
+                  placeholder="name@example.com"
+                  className="calm-input h-11"
+                />
+              </label>
+
+              <label className="grid gap-1 text-sm text-[color:var(--ink-muted)]">
+                <span>用户名</span>
+                <input
+                  type="text"
+                  value={imapUsername}
+                  onChange={(event) => onImapUsernameChange(event.target.value)}
+                  placeholder="默认使用邮箱地址"
+                  className="calm-input h-11"
+                />
+              </label>
+
+              <label className="grid gap-1 text-sm text-[color:var(--ink-muted)]">
+                <span>授权码 / 应用专用密码</span>
+                <input
+                  type="password"
+                  value={imapPassword}
+                  onChange={(event) => onImapPasswordChange(event.target.value)}
+                  placeholder="仅本地加密保存，不会发送给大模型"
+                  className="calm-input h-11"
+                />
+              </label>
+
+              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_7rem]">
+                <label className="grid gap-1 text-sm text-[color:var(--ink-muted)]">
+                  <span>IMAP Host</span>
+                  <input
+                    type="text"
+                    value={imapHost}
+                    onChange={(event) => onImapHostChange(event.target.value)}
+                    placeholder="imap.example.com"
+                    className="calm-input h-11"
+                  />
+                </label>
+                <label className="grid gap-1 text-sm text-[color:var(--ink-muted)]">
+                  <span>Port</span>
+                  <input
+                    type="number"
+                    value={imapPort}
+                    onChange={(event) => onImapPortChange(event.target.value)}
+                    placeholder="993"
+                    className="calm-input h-11"
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-3 rounded-[1.15rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-4 py-3 text-sm text-[color:var(--ink-muted)] shadow-[var(--shadow-inset)]">
+              <div className="grid gap-1">
+                <span>当前版本强制使用 TLS/SSL 加密连接</span>
+                <span className="text-xs text-[color:var(--ink-subtle)]">
+                  为了避免授权码经由明文 IMAP 传输，这里固定走加密链路。
+                </span>
+              </div>
+              <span className="rounded-full border border-emerald-400/35 bg-emerald-500/12 px-3 py-1 text-xs font-medium text-emerald-200">
+                TLS
+              </span>
+            </div>
+
+            {selectedImapProvider?.notes.length ? (
+              <div className="rounded-[1.15rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-4 py-3 text-xs text-[color:var(--ink-subtle)] shadow-[var(--shadow-inset)]">
+                {selectedImapProvider.notes[0]}
+              </div>
+            ) : null}
+
+            <div className="flex flex-wrap items-center gap-3">
+              <CalmButton
+                type="button"
+                onClick={onImapConnect}
+                disabled={imapBusy || !imapEmail.trim() || !imapPassword.trim()}
+                variant="primary"
+                className="h-11"
+              >
+                <MailIcon active />
+                {imapBusy ? "连接中" : "连接 IMAP 邮箱"}
+              </CalmButton>
+              <p className="text-xs text-[color:var(--ink-subtle)]">
+                连接成功后，这个邮箱会立刻出现在侧边栏里。
               </p>
             </div>
-          </button>
+          </section>
         </div>
 
         {info ? (
@@ -172,21 +404,81 @@ export function Sidebar({ onClose }: SidebarProps) {
     isMobile,
   } = useApp();
   const { user, logout } = useAuth();
-  const { activeSourceId, sources, selectSource, fetchSources, launchOutlookAuth } = useMail();
+  const {
+    activeSourceId,
+    sources,
+    providers,
+    selectSource,
+    fetchSources,
+    connectImapSource,
+    launchOutlookAuth,
+    launchGmailAuth,
+  } = useMail();
 
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [connectBusy, setConnectBusy] = useState(false);
+  const [connectGmailBusy, setConnectGmailBusy] = useState(false);
+  const [connectImapBusy, setConnectImapBusy] = useState(false);
   const [connectInfo, setConnectInfo] = useState<string | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
+  const [imapProvider, setImapProvider] = useState<SidebarImapProvider>("gmail");
+  const [imapLabel, setImapLabel] = useState("");
+  const [imapEmail, setImapEmail] = useState("");
+  const [imapUsername, setImapUsername] = useState("");
+  const [imapPassword, setImapPassword] = useState("");
+  const [imapHost, setImapHost] = useState("");
+  const [imapPort, setImapPort] = useState("");
 
   const activeSource = useMemo(
     () => sources.find((source) => source.id === activeSourceId) ?? null,
     [activeSourceId, sources]
   );
+  const imapProviders = useMemo(() => {
+    const available = providers.filter(
+      (provider) => provider.connectionTypes.includes("imap_password") && provider.id !== "outlook"
+    ) as Array<MailProviderDescriptor & { id: SidebarImapProvider }>;
+
+    if (available.length > 0) {
+      return available.map((provider) => ({
+        id: provider.id,
+        label: provider.label,
+        imap: provider.imap,
+        notes: provider.notes,
+      }));
+    }
+
+    return FALLBACK_IMAP_PROVIDERS;
+  }, [providers]);
+  const selectedImapProvider = useMemo(
+    () => imapProviders.find((provider) => provider.id === imapProvider) ?? imapProviders[0] ?? null,
+    [imapProvider, imapProviders]
+  );
 
   const collapsed = !isMobile && sidebarCollapsed;
   const sidebarWidth = collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH;
   const currentSourceLabel = activeSource?.name || activeSource?.emailHint || "未连接邮箱";
+
+  useEffect(() => {
+    if (!selectedImapProvider) {
+      return;
+    }
+
+    if (!imapProviders.some((provider) => provider.id === imapProvider)) {
+      setImapProvider(selectedImapProvider.id);
+    }
+
+    if (!imapHost.trim()) {
+      setImapHost(selectedImapProvider.imap?.host ?? "");
+      setImapPort(selectedImapProvider.imap?.port ? String(selectedImapProvider.imap.port) : "");
+    }
+  }, [imapHost, imapProvider, imapProviders, selectedImapProvider]);
+
+  const applyImapProviderDefaults = (providerId: SidebarImapProvider) => {
+    const descriptor = imapProviders.find((provider) => provider.id === providerId);
+    setImapProvider(providerId);
+    setImapHost(descriptor?.imap?.host ?? "");
+    setImapPort(descriptor?.imap?.port ? String(descriptor.imap.port) : "");
+  };
 
   const handleViewChange = (view: ViewKey) => {
     setCurrentView(view);
@@ -216,9 +508,66 @@ export function Sidebar({ onClose }: SidebarProps) {
       await fetchSources();
       setConnectInfo(result.message || "Outlook 已连接，新的邮箱源已经同步回侧边栏。");
     } catch (error) {
-      setConnectError(error instanceof Error ? error.message : "连接 Outlook 失败");
+      setConnectError(formatOauthConnectionError("outlook", error));
     } finally {
       setConnectBusy(false);
+    }
+  };
+
+  const handleGmailLogin = async () => {
+    setConnectGmailBusy(true);
+    setConnectError(null);
+    setConnectInfo(null);
+    try {
+      const result = await launchGmailAuth();
+      await fetchSources();
+      setConnectInfo(result.message || "Gmail 已连接，新的邮箱源已经同步回侧边栏。");
+    } catch (error) {
+      setConnectError(formatOauthConnectionError("gmail", error));
+    } finally {
+      setConnectGmailBusy(false);
+    }
+  };
+
+  const handleImapConnect = async () => {
+    if (!imapEmail.trim()) {
+      setConnectError("请输入邮箱地址。");
+      return;
+    }
+    if (!imapPassword.trim()) {
+      setConnectError("请输入授权码或应用专用密码。");
+      return;
+    }
+
+    setConnectImapBusy(true);
+    setConnectError(null);
+    setConnectInfo(null);
+    try {
+      const connected = await connectImapSource({
+        provider: imapProvider,
+        label: imapLabel.trim() || undefined,
+        email: imapEmail.trim(),
+        username: imapUsername.trim() || imapEmail.trim(),
+        appPassword: imapPassword.trim(),
+        imapHost: imapHost.trim() || undefined,
+        imapPort: imapPort.trim() ? Number(imapPort) : undefined,
+        imapSecure: true,
+      });
+      await fetchSources();
+      setConnectInfo(
+        connected?.ready === false
+          ? `${connected?.name ?? selectedImapProvider?.label ?? "邮箱"} 已创建，但仍需进一步验证。`
+          : `${connected?.name ?? selectedImapProvider?.label ?? "邮箱"} 已连接，侧边栏已经同步刷新。`
+      );
+      setImapLabel("");
+      setImapEmail("");
+      setImapUsername("");
+      setImapPassword("");
+      applyImapProviderDefaults(imapProvider);
+    } catch (error) {
+      setConnectError(formatImapConnectionError(error));
+    } finally {
+      setConnectImapBusy(false);
     }
   };
 
@@ -226,38 +575,36 @@ export function Sidebar({ onClose }: SidebarProps) {
     <>
       <aside
         className={cn(
-          "relative z-20 flex h-full flex-col overflow-hidden border-r border-[color:var(--border-soft)] backdrop-blur-2xl transition-all duration-300",
+          "relative z-20 flex h-full flex-col overflow-hidden border-r border-[color:var(--border-soft)] backdrop-blur-sm transition-[width,background-color] duration-150",
           collapsed
-            ? "bg-[linear-gradient(180deg,rgba(255,255,255,0.34),rgba(255,255,255,0.12))] dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))]"
-            : "bg-[linear-gradient(180deg,rgba(255,255,255,0.42),rgba(245,248,252,0.18))] dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02))]"
+            ? "bg-[linear-gradient(180deg,rgba(255,255,255,0.6),rgba(255,255,255,0.36))] dark:bg-[linear-gradient(180deg,rgba(22,28,38,0.9),rgba(18,24,34,0.82))]"
+            : "bg-[linear-gradient(180deg,rgba(255,255,255,0.76),rgba(246,248,251,0.62))] dark:bg-[linear-gradient(180deg,rgba(22,28,38,0.94),rgba(18,24,34,0.88))]"
         )}
         style={{ width: sidebarWidth, minWidth: sidebarWidth, maxWidth: sidebarWidth }}
         role="navigation"
         aria-label="导航菜单"
       >
-        <div className={cn("flex h-16 items-center border-b border-[color:var(--border-soft)]", collapsed ? "justify-center px-0" : "px-3")}>
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[color:var(--surface-elevated)] shadow-[var(--shadow-soft)]">
-            <BrandIcon />
-          </div>
-          {!collapsed ? (
-            <div className="ml-2.5 min-w-0 flex-1">
-              <p className="truncate text-sm font-bold text-[color:var(--ink)]">Mery</p>
-              <p className="truncate text-[10px] uppercase tracking-[0.18em] text-[color:var(--ink-subtle)]">
-                Mail Intelligence
-              </p>
-            </div>
-          ) : null}
+        <div className={cn("flex h-16 items-center border-b border-[color:var(--border-soft)]", collapsed ? "justify-center px-0" : "justify-end px-3")}>
           {!isMobile ? (
             <button
               type="button"
               onClick={toggleSidebarCollapsed}
               className={cn(
                 "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-[color:var(--ink-subtle)] transition hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--ink)]",
-                collapsed ? "ml-0 mt-1" : "ml-1"
+                collapsed ? "ml-0 mt-1" : ""
               )}
               aria-label={collapsed ? "展开侧边栏" : "收起侧边栏"}
             >
               {collapsed ? <ChevronRightIcon /> : <ChevronLeftIcon />}
+            </button>
+          ) : onClose ? (
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-[color:var(--ink-subtle)] transition hover:bg-[color:var(--surface-soft)] hover:text-[color:var(--ink)]"
+              aria-label="关闭侧边栏"
+            >
+              <ChevronLeftIcon />
             </button>
           ) : null}
         </div>
@@ -398,14 +745,30 @@ export function Sidebar({ onClose }: SidebarProps) {
       <AccountActionModal
         open={showAccountModal}
         busy={connectBusy}
+        gmailBusy={connectGmailBusy}
+        imapBusy={connectImapBusy}
         error={connectError}
         info={connectInfo}
+        imapProviders={imapProviders}
+        selectedImapProvider={selectedImapProvider}
+        imapProvider={imapProvider}
+        imapLabel={imapLabel}
+        imapEmail={imapEmail}
+        imapUsername={imapUsername}
+        imapPassword={imapPassword}
+        imapHost={imapHost}
+        imapPort={imapPort}
         onClose={() => setShowAccountModal(false)}
         onOutlookLogin={() => void handleOutlookLogin()}
-        onOpenSettings={() => {
-          setShowAccountModal(false);
-          handleViewChange("settings");
-        }}
+        onGmailLogin={() => void handleGmailLogin()}
+        onImapProviderChange={applyImapProviderDefaults}
+        onImapLabelChange={setImapLabel}
+        onImapEmailChange={setImapEmail}
+        onImapUsernameChange={setImapUsername}
+        onImapPasswordChange={setImapPassword}
+        onImapHostChange={setImapHost}
+        onImapPortChange={setImapPort}
+        onImapConnect={() => void handleImapConnect()}
       />
     </>
   );
@@ -421,15 +784,6 @@ function getInitials(value: string) {
     return `${parts[0][0] ?? ""}${parts[parts.length - 1][0] ?? ""}`.toUpperCase();
   }
   return cleaned.slice(0, 2).toUpperCase();
-}
-
-function BrandIcon() {
-  return (
-    <svg className="h-5 w-5 text-blue-700 dark:text-blue-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="5" width="18" height="14" rx="3" />
-      <path d="m4 7 7 5a2 2 0 0 0 2 0l7-5" />
-    </svg>
-  );
 }
 
 function CloseIcon() {

@@ -15,6 +15,7 @@ import {
 } from "./quadrants";
 import { CalmSectionLabel, CalmSurface } from "../../ui/Calm";
 import { useApp } from "../../../contexts/AppContext";
+import { useDrawerStore } from "../../drawer";
 
 interface EisenhowerMatrixPanelProps {
   mails: MailKnowledgeRecord[];
@@ -55,6 +56,7 @@ export function EisenhowerMatrixPanel({
 }: EisenhowerMatrixPanelProps) {
   const { locale } = useApp();
   const [selectedMailId, setSelectedMailId] = useState<string | null>(null);
+  const openDrawer = useDrawerStore((state) => state.openDrawer);
 
   const personById = useMemo(
     () => new Map(persons.map((person) => [person.personId, person])),
@@ -91,6 +93,16 @@ export function EisenhowerMatrixPanel({
     gridLabel: locale === "zh" ? "知识矩阵" : locale === "ja" ? "ナレッジグリッド" : "Knowledge Grid",
     matrixLabel: locale === "zh" ? "艾森豪威尔矩阵" : locale === "ja" ? "アイゼンハワー行列" : "Eisenhower Matrix",
     selectedMailLabel: locale === "zh" ? "当前邮件" : locale === "ja" ? "選択中のメール" : "Selected Mail",
+  };
+
+  const openMailDrawer = (mail: MailKnowledgeRecord) => {
+    setSelectedMailId(mail.mailId);
+    openDrawer("mailKnowledgeDetail", {
+      mail,
+      personName: personById.get(mail.personId)?.name ?? mail.personId,
+      personEmail: personById.get(mail.personId)?.email ?? null,
+      eventName: mail.eventId ? eventById.get(mail.eventId)?.name ?? mail.eventId : null,
+    });
   };
 
   if (mails.length === 0) {
@@ -169,7 +181,7 @@ export function EisenhowerMatrixPanel({
                       <button
                         key={mail.mailId}
                         type="button"
-                        onClick={() => setSelectedMailId(mail.mailId)}
+                        onClick={() => openMailDrawer(mail)}
                         className={`w-full rounded-lg border px-4 py-3 text-left transition ${
                           isSelected
                             ? "border-[color:var(--border-strong)] bg-[color:var(--surface-elevated)] shadow-[var(--shadow-soft)]"

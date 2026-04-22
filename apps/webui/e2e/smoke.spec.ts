@@ -953,28 +953,61 @@ test.describe("webui smoke", () => {
   test("renders the standalone agent workspace chrome in agent window mode", async ({ page }) => {
     await mockAuthenticatedApp(page);
 
-    await page.route("**/api/agent/skills?*", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          ok: true,
-          skills: [
-            {
-              id: "searchMail",
-              name: "Search mail",
-              description: "Search messages from the connected mailbox.",
-              enabled: true,
-            },
-          ],
-        }),
-      });
-    });
-
     await page.goto("/?window=agent");
     await expect(page.getByText("Mail Copilot")).toBeVisible({ timeout: 15000 });
     await expect(page.locator("#agent-window-message")).toBeVisible({ timeout: 15000 });
     await expect(page.getByRole("combobox").first()).toHaveValue("smoke-source");
+  });
+
+  test("sanitizes markdown links rendered in the standalone agent transcript", async ({ page }) => {
+    await mockAuthenticatedApp(page);
+
+    await page.route("**/api/agent/chat", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: `data: ${JSON.stringify({
+          type: "final",
+          result: {
+            answer: 'Open [this link](https://example.com/%22 onmouseover=%22alert1) for the docs.',
+            threadId: "smoke-thread",
+          },
+        })}\n\n`,
+      });
+    });
+
+    await page.goto("/?window=agent");
+    const composer = page.locator("#agent-window-message");
+
+    await composer.fill("Show me the docs link.");
+    await page.getByRole("button", { name: "Send" }).click();
+
+    const link = page.getByRole("link", { name: "this link" });
+    await expect(link).toBeVisible({ timeout: 15000 });
+    await expect(link).toHaveAttribute("href", "https://example.com/%22%20onmouseover=%22alert1");
+    await expect(link).not.toHaveAttribute("onmouseover", /alert/);
+  });
+
+  test("keeps the embedded agent composer within the workspace on first load", async ({ page }) => {
+    await mockAuthenticatedApp(page);
+
+    await page.goto("/");
+    const dock = page.getByRole("navigation", { name: "应用 Dock" });
+    await expect(dock).toBeVisible({ timeout: 15000 });
+    await dock.getByRole("button", { name: "Dock Agent" }).click();
+
+    const workspace = page.locator(".workspace-window");
+    const composer = page.locator("#agent-window-message");
+
+    await expect(composer).toBeVisible({ timeout: 15000 });
+
+    const workspaceBox = await workspace.boundingBox();
+    const composerBox = await composer.boundingBox();
+
+    expect(workspaceBox).not.toBeNull();
+    expect(composerBox).not.toBeNull();
+    expect(composerBox!.y).toBeGreaterThanOrEqual(workspaceBox!.y);
+    expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(workspaceBox!.y + workspaceBox!.height);
   });
 
   test("runs the new-mail processing workbench from the inbox", async ({ page }) => {
@@ -1306,6 +1339,238 @@ test.describe("webui smoke", () => {
     await expect(page.getByRole("button", { name: "文档" })).not.toBeVisible();
   });
 
+  test("paginates knowledge-base mails and opens detail in the stacked right drawer", async ({ page }) => {
+    await mockAuthenticatedApp(page);
+
+    await page.route("**/api/mail-kb/mails**", async (route) => {
+      const url = new URL(route.request().url());
+      const limit = Number(url.searchParams.get("pageSize") ?? "20");
+      const offset = Number(url.searchParams.get("offset") ?? "0");
+      const total = 25;
+      const mails = Array.from({ length: Math.max(0, Math.min(limit, total - offset)) }, (_, index) => {
+        const ordinal = offset + index + 1;
+        return {
+          mailId: `MSG_PAGE_${ordinal}`,
+          rawId: `raw-page-${ordinal}`,
+          subject: `Drawer mail ${ordinal}`,
+          personId: "PER_PAGE",
+          eventId: null,
+          importanceScore: ordinal === 21 ? 0.96 : 0.42,
+          urgencyScore: ordinal === 21 ? 0.91 : 0.33,
+          scoreScale: "ratio",
+          quadrant: ordinal === 21 ? "urgent_important" : "not_urgent_not_important",
+          summary: `Drawer pagination summary ${ordinal}`,
+          receivedAt: "2026-04-17T00:00:00.000Z",
+          processedAt: "2026-04-17T01:00:00.000Z",
+          webLink: `https://outlook.example/messages/${ordinal}`,
+        };
+      });
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          result: {
+            mails,
+            total,
+            limit,
+            offset,
+          },
+        }),
+      });
+    });
+
+    await page.goto("/");
+    await page.getByRole("navigation", { name: "应用 Dock" }).getByRole("button", { name: "Dock Mails" }).click();
+
+    await expect(page.getByRole("heading", { name: "分页邮件堆叠" })).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText("1 / 2").first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "打开邮件详情：Drawer mail 1", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "打开邮件详情：Drawer mail 21", exact: true })).toHaveCount(0);
+
+    await page.getByRole("button", { name: "下一页" }).click();
+    await expect(page.getByText("第 2 / 2 页，每页 20 封")).toBeVisible();
+    const pageTwoMail = page.getByRole("button", { name: "打开邮件详情：Drawer mail 21", exact: true });
+    await expect(pageTwoMail).toBeVisible();
+
+    await pageTwoMail.click();
+    const drawer = page.getByRole("dialog", { name: /邮件知识详情：Drawer mail 21/ });
+    await expect(drawer).toBeVisible();
+    await expect(drawer.getByText("MSG_PAGE_21")).toBeVisible();
+    await expect(drawer.getByText("Drawer pagination summary 21")).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(drawer).toBeHidden();
+
+    await pageTwoMail.click();
+    await expect(drawer).toBeVisible();
+    await page.mouse.click(24, 24);
+    await expect(page.locator(".global-drawer-layer.is-closing")).toHaveCount(1);
+    await expect(drawer).toBeHidden();
+  });
+
+  test("closes stacked knowledge drawers when the mailbox source changes", async ({ page }) => {
+    await mockAuthenticatedApp(page);
+
+    await page.route("**/api/mail-kb/mails**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          result: {
+            mails: [
+              {
+                mailId: "MSG_SOURCE_CLEANUP",
+                rawId: "raw-source-cleanup",
+                subject: "Drawer source cleanup marker",
+                personId: "PER_SOURCE",
+                eventId: null,
+                importanceScore: 0.82,
+                urgencyScore: 0.7,
+                scoreScale: "ratio",
+                quadrant: "urgent_important",
+                summary: "This drawer should disappear as soon as the active mailbox source changes.",
+                receivedAt: "2026-04-17T00:00:00.000Z",
+                processedAt: "2026-04-17T01:00:00.000Z",
+              },
+            ],
+            total: 1,
+            limit: 20,
+            offset: 0,
+          },
+        }),
+      });
+    });
+
+    await page.goto("/");
+    await page.getByRole("navigation", { name: "应用 Dock" }).getByRole("button", { name: "Dock Mails" }).click();
+    await page.getByRole("button", { name: "打开邮件详情：Drawer source cleanup marker" }).click();
+    const drawer = page.getByRole("dialog", { name: /邮件知识详情：Drawer source cleanup marker/ });
+    await expect(drawer).toBeVisible();
+
+    await page.evaluate(() => {
+      const settingsButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.getAttribute("aria-label") === "Dock Settings"
+      );
+      if (!settingsButton) {
+        throw new Error("Dock Settings button not found");
+      }
+      settingsButton.click();
+    });
+
+    await expect(page.getByRole("heading", { name: "通知设置" })).toBeVisible();
+    await page.evaluate(() => {
+      const setDefaultButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((button) =>
+        button.textContent?.includes("设为默认")
+      );
+      if (!setDefaultButton) {
+        throw new Error("Set default source button not found");
+      }
+      setDefaultButton.click();
+    });
+
+    await expect(drawer).toBeHidden();
+  });
+
+  test("uses the knowledge context mail pool for event related-mail drawers", async ({ page }) => {
+    await mockAuthenticatedApp(page);
+
+    await page.route("**/api/mail-kb/mails**", async (route) => {
+      const url = new URL(route.request().url());
+      const limit = Number(url.searchParams.get("pageSize") ?? "20");
+      const offset = Number(url.searchParams.get("offset") ?? "0");
+      const total = 25;
+      const mails = Array.from({ length: Math.max(0, Math.min(limit, total - offset)) }, (_, index) => {
+        const ordinal = offset + index + 1;
+        return {
+          mailId: `MSG_PAGE_${ordinal}`,
+          rawId: `raw-context-${ordinal}`,
+          subject: `Context mail ${ordinal}`,
+          personId: "PER_CONTEXT",
+          eventId: ordinal === 21 ? "EVT_CONTEXT" : null,
+          importanceScore: 0.7,
+          urgencyScore: 0.4,
+          scoreScale: "ratio",
+          quadrant: "not_urgent_important",
+          summary: `Context mail summary ${ordinal}`,
+          receivedAt: "2026-04-17T00:00:00.000Z",
+          processedAt: "2026-04-17T01:00:00.000Z",
+        };
+      });
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          result: { mails, total, limit, offset },
+        }),
+      });
+    });
+
+    await page.route("**/api/mail-kb/events**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          result: {
+            events: [
+              {
+                eventId: "EVT_CONTEXT",
+                name: "Context Pool Event",
+                summary: "An event whose only related mail lives beyond the first paginated page.",
+                keyInfo: ["Needs context pool"],
+                relatedMailIds: ["MSG_PAGE_21"],
+                lastUpdated: "2026-04-17T00:00:00.000Z",
+                tags: ["context"],
+              },
+            ],
+          },
+        }),
+      });
+    });
+
+    await page.route("**/api/mail-kb/persons**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          result: {
+            persons: [
+              {
+                personId: "PER_CONTEXT",
+                email: "context@example.com",
+                name: "Context Person",
+                profile: "Context owner",
+                role: "Reviewer",
+                importance: 0.7,
+                recentInteractions: 1,
+                lastUpdated: "2026-04-17T00:00:00.000Z",
+              },
+            ],
+          },
+        }),
+      });
+    });
+
+    await page.goto("/");
+    await page.getByRole("navigation", { name: "应用 Dock" }).getByRole("button", { name: "Dock Knowledge" }).click();
+    await page.getByRole("button", { name: "事件" }).click();
+
+    const eventCard = page.getByRole("button", { name: "打开事件详情：Context Pool Event" });
+    await expect(eventCard).toBeVisible({ timeout: 15000 });
+    await expect(eventCard.getByText("已载入 1")).toBeVisible();
+    await eventCard.click();
+
+    const eventDrawer = page.getByRole("dialog", { name: "事件详情：Context Pool Event" });
+    await expect(eventDrawer).toBeVisible();
+    await expect(eventDrawer.getByRole("button", { name: "打开关联邮件：Context mail 21" })).toBeVisible();
+  });
+
   test("switches primary workspace views from the migrated dock", async ({ page }) => {
     await mockAuthenticatedApp(page);
 
@@ -1591,7 +1856,8 @@ test.describe("webui smoke", () => {
     await page.goto("/");
 
     await expect(page.getByRole("heading", { name: "第一次使用，先把邮箱助理点亮" })).toBeVisible({ timeout: 15000 });
-    await expect(page.getByText("先绑定邮箱，再选择要归纳的时间范围。")).toBeVisible();
+    await expect(page.getByText("2. 设定每天的邮件摘要时间")).toBeVisible();
+    await expect(page.getByText("到这个时间后，Mery 会把当天邮箱状态")).toBeVisible();
     await page.getByRole("button", { name: "暂时跳过教程" }).click();
 
     await expect
@@ -1602,6 +1868,23 @@ test.describe("webui smoke", () => {
         return inboxVisible || settingsVisible || connectGuideVisible;
       }, { timeout: 15000 })
       .toBe(true);
+  });
+
+  test("saves the daily digest schedule from the tutorial flow", async ({ page }) => {
+    await mockAuthenticatedApp(page, { tutorialCompleted: false });
+
+    await page.goto("/");
+
+    await expect(page.getByRole("heading", { name: "第一次使用，先把邮箱助理点亮" })).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText("2. 设定每天的邮件摘要时间")).toBeVisible();
+
+    await page.getByLabel("推送时间").fill("19:15");
+    await page.getByLabel("时区").fill("Europe/Paris");
+    await page.getByRole("button", { name: "保存每日摘要设置" }).click();
+
+    await expect(page.getByText("每日摘要时间已保存，后续通知会按这个时间触发。")).toBeVisible();
+    await expect(page.getByLabel("推送时间")).toHaveValue("19:15");
+    await expect(page.getByLabel("时区")).toHaveValue("Europe/Paris");
   });
 
   test("switches document previews and surfaces artifact read errors", async ({ page }) => {
@@ -2029,14 +2312,45 @@ test.describe("webui smoke", () => {
     await expect(page.getByRole("button", { name: /Newsletter roundup/ })).toBeVisible();
 
     await page.getByRole("button", { name: /Tomorrow final report deadline/ }).click();
-    await expect(page.getByRole("heading", { name: "Tomorrow final report deadline" })).toBeVisible();
+    const firstMatrixDrawer = page.getByRole("dialog", { name: /邮件知识详情：Tomorrow final report deadline/ });
+    await expect(firstMatrixDrawer).toBeVisible();
+    await expect(firstMatrixDrawer.getByRole("heading", { name: "Tomorrow final report deadline" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(firstMatrixDrawer).toBeHidden();
     await page.getByRole("button", { name: /Legacy scoring import/ }).click();
-    await expect(page.getByText("8/10")).toBeVisible();
-    await expect(page.getByText("1/10")).toBeVisible();
+    const legacyMatrixDrawer = page.getByRole("dialog", { name: /邮件知识详情：Legacy scoring import/ });
+    await expect(legacyMatrixDrawer.getByText("8/10")).toBeVisible();
+    await expect(legacyMatrixDrawer.getByText("1/10")).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    await page.getByRole("button", { name: "事件" }).click();
+    const eventCard = page.getByRole("button", { name: "打开事件详情：Final Report" });
+    await expect(eventCard).toBeVisible();
+    await eventCard.click();
+    const eventDrawer = page.getByRole("dialog", { name: "事件详情：Final Report" });
+    await expect(eventDrawer).toBeVisible();
+    await expect(eventDrawer.getByText("Due tomorrow")).toBeVisible();
+    await eventDrawer.getByRole("button", { name: "打开关联邮件：Tomorrow final report deadline" }).click();
+    await expect(page.getByRole("dialog", { name: "邮件知识详情：Tomorrow final report deadline" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+
+    await page.getByRole("button", { name: "联系人" }).click();
+    const personCard = page.getByRole("button", { name: "打开人物详情：PM Zhang" });
+    await expect(personCard).toBeVisible();
+    await personCard.click();
+    const personDrawer = page.getByRole("dialog", { name: "人物详情：PM Zhang" });
+    await expect(personDrawer).toBeVisible();
+    await expect(personDrawer.getByText("Project manager")).toBeVisible();
+    await page.keyboard.press("Escape");
 
     await page.getByRole("button", { name: "文档" }).click();
     await expect(page.getByRole("heading", { name: "本地总结文档" })).toBeVisible();
     await expect(page.getByRole("button", { name: /邮件标识码清单/ })).toBeVisible();
     await expect(page.getByText("MSG_1")).toBeVisible();
+    await page.getByRole("button", { name: "打开文档叠页" }).click();
+    const artifactDrawer = page.getByRole("dialog", { name: "知识库文档：邮件标识码清单" });
+    await expect(artifactDrawer).toBeVisible();
+    await expect(artifactDrawer.getByText("MSG_1")).toBeVisible();
   });
 });

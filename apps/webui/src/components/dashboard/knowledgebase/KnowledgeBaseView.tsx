@@ -3,7 +3,8 @@
  * 使用 MailContext 和 AppContext
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import type { MailKnowledgeRecord } from "@mail-agent/shared-types";
 import { useMail } from "../../../contexts/MailContext";
 import { useApp } from "../../../contexts/AppContext";
 import { EisenhowerMatrixPanel } from "./EisenhowerMatrixPanel";
@@ -17,6 +18,9 @@ import MailKBSummaryModal from "../MailKBSummaryModal";
 import { CalmButton, CalmPill } from "../../ui/Calm";
 
 type TabKey = "overview" | "mails" | "events" | "persons" | "documents";
+const KB_MAIL_PAGE_SIZE = 20;
+const KB_CONTEXT_MAIL_LIMIT = 200;
+const API_BASE = (import.meta.env.VITE_BFF_BASE_URL ?? "/api").trim().replace(/\/+$/, "");
 
 interface KnowledgeBaseViewProps {
   initialTab?: TabKey;
@@ -34,6 +38,7 @@ export function KnowledgeBaseView({
   const {
     kbStats,
     kbMails,
+    kbMailsPage,
     kbEvents,
     kbPersons,
     activeSourceId,
@@ -55,15 +60,65 @@ export function KnowledgeBaseView({
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [artifactsRefreshToken, setArtifactsRefreshToken] = useState(0);
+  const [mailPage, setMailPage] = useState(1);
+  const [kbContextMails, setKbContextMails] = useState<MailKnowledgeRecord[]>([]);
+  const activeSourceIdRef = useRef(activeSourceId);
+  const mailOffset = (mailPage - 1) * KB_MAIL_PAGE_SIZE;
+
+  useEffect(() => {
+    activeSourceIdRef.current = activeSourceId;
+    setKbContextMails([]);
+  }, [activeSourceId]);
+
+  const fetchKbContextMails = useCallback(async () => {
+    const requestedSourceId = activeSourceId;
+    if (!requestedSourceId) {
+      setKbContextMails([]);
+      return;
+    }
+
+    try {
+      const params = new URLSearchParams({
+        pageSize: String(KB_CONTEXT_MAIL_LIMIT),
+        offset: "0",
+        sourceId: requestedSourceId,
+      });
+      const response = await fetch(`${API_BASE}/mail-kb/mails?${params.toString()}`, {
+        credentials: "include",
+      });
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        mails?: MailKnowledgeRecord[];
+        result?: { mails?: MailKnowledgeRecord[] };
+      };
+      if (!response.ok || payload.ok === false) {
+        throw new Error("Failed to fetch knowledge-base context mails");
+      }
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        return;
+      }
+      setKbContextMails(payload.mails ?? payload.result?.mails ?? []);
+    } catch {
+      if (activeSourceIdRef.current === requestedSourceId) {
+        setKbContextMails([]);
+      }
+    }
+  }, [activeSourceId]);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      await Promise.all([fetchKbStats(), fetchKbMails(), fetchKbEvents(), fetchKbPersons()]);
+      await Promise.all([
+        fetchKbStats(),
+        fetchKbMails({ limit: KB_MAIL_PAGE_SIZE, offset: mailOffset }),
+        fetchKbContextMails(),
+        fetchKbEvents(),
+        fetchKbPersons(),
+      ]);
     } finally {
       setLoading(false);
     }
-  }, [fetchKbStats, fetchKbMails, fetchKbEvents, fetchKbPersons]);
+  }, [fetchKbStats, fetchKbMails, fetchKbContextMails, fetchKbEvents, fetchKbPersons, mailOffset]);
 
   useEffect(() => {
     void loadAll();
@@ -72,6 +127,23 @@ export function KnowledgeBaseView({
   useEffect(() => {
     setActiveTab(resolveTab(initialTab));
   }, [initialTab, resolveTab]);
+
+  useEffect(() => {
+    setMailPage(1);
+  }, [activeSourceId]);
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(kbMailsPage.total / KB_MAIL_PAGE_SIZE));
+    if (mailPage > totalPages) {
+      setMailPage(totalPages);
+    }
+  }, [kbMailsPage.total, mailPage]);
+
+  const handleMailPageChange = useCallback((nextPage: number) => {
+    const safePage = Math.max(1, nextPage);
+    setMailPage(safePage);
+  }, []);
+  const contextMails = kbContextMails.length > 0 ? kbContextMails : kbMails;
 
   const handleSummarize = async () => {
     setIsSummarizing(true);
@@ -187,20 +259,27 @@ export function KnowledgeBaseView({
               <div className="space-y-6">
                 <KnowledgeBaseStatsCard stats={kbStats} />
                 <EisenhowerMatrixPanel
-                  mails={kbMails}
+                  mails={contextMails}
                   persons={kbPersons}
                   events={kbEvents}
                 />
               </div>
             )}
             {activeTab === "mails" && (
-              <MailsListPanel mails={kbMails} persons={kbPersons} events={kbEvents} />
+              <MailsListPanel
+                mails={kbMails}
+                persons={kbPersons}
+                events={kbEvents}
+                pagination={kbMailsPage}
+                loading={loading}
+                onPageChange={handleMailPageChange}
+              />
             )}
             {activeTab === "events" && (
-              <EventsClusterPanel events={kbEvents} mails={kbMails} />
+              <EventsClusterPanel events={kbEvents} mails={contextMails} persons={kbPersons} />
             )}
             {activeTab === "persons" && (
-              <PersonsProfilePanel persons={kbPersons} mails={kbMails} />
+              <PersonsProfilePanel persons={kbPersons} mails={contextMails} events={kbEvents} />
             )}
             {activeTab === "documents" && (
               <ArtifactsLibraryPanel

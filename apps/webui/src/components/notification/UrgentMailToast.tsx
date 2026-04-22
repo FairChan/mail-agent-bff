@@ -111,59 +111,56 @@ export function UrgentMailToast() {
         const isSaving = savingKeys.has(item.key);
         const isSaved = savedKeys.has(item.key);
         return (
-          <CalmSurface
-            key={item.key}
-            className="rise-in pointer-events-none p-3"
-            tone="urgent"
-            beam
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-[color:var(--pill-urgent-ink)]">
-                  紧急重要邮件
-                </p>
-                {item.webLink ? (
-                  <a
-                    href={item.webLink}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="pointer-events-auto mt-1 block break-words text-sm font-semibold text-[color:var(--ink)] hover:underline"
-                  >
-                    {item.subject || "无主题邮件"}
-                  </a>
-                ) : (
-                  <p className="mt-1 break-words text-sm font-semibold text-[color:var(--ink)]">
-                    {item.subject || "无主题邮件"}
+          <section key={item.key} className="rise-in pointer-events-none" aria-label={item.subject || "紧急重要邮件"}>
+            <CalmSurface className="pointer-events-none p-3" tone="urgent" beam>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-[color:var(--pill-urgent-ink)]">
+                    紧急重要邮件
                   </p>
-                )}
+                  {item.webLink ? (
+                    <a
+                      href={item.webLink}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="pointer-events-auto mt-1 block break-words text-sm font-semibold text-[color:var(--ink)] hover:underline"
+                    >
+                      {item.subject || "无主题邮件"}
+                    </a>
+                  ) : (
+                    <p className="mt-1 break-words text-sm font-semibold text-[color:var(--ink)]">
+                      {item.subject || "无主题邮件"}
+                    </p>
+                  )}
+                </div>
+                <CalmButton type="button" onClick={() => dismiss(item.key)} variant="ghost" className="pointer-events-auto px-2 py-1 text-xs">
+                  关闭
+                </CalmButton>
               </div>
-              <CalmButton type="button" onClick={() => dismiss(item.key)} variant="ghost" className="pointer-events-auto px-2 py-1 text-xs">
-                关闭
-              </CalmButton>
-            </div>
-            <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">
-              {item.fromName || item.fromAddress || "未知发件人"} · {formatReceivedAt(item.receivedAt)}
-            </p>
-            {item.reasons.length > 0 && (
-              <p className="mt-2 break-words text-xs text-[color:var(--ink-muted)]">
-                {item.reasons.slice(0, 3).join(" · ")}
+              <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">
+                {item.fromName || item.fromAddress || "未知发件人"} · {formatReceivedAt(item.receivedAt)}
               </p>
-            )}
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <CalmButton
-                type="button"
-                onClick={() => void handleSaveCard(item)}
-                disabled={isSaving || isSaved}
-                variant="secondary"
-                className="pointer-events-auto px-2.5 py-1.5 text-xs"
-              >
-                {isSaved ? "已存为知识卡片" : isSaving ? "保存中" : "存为知识卡片"}
-              </CalmButton>
-              <CalmPill tone={item.origin === "processing" ? "success" : "info"}>
-                {item.origin === "processing" ? "自动预处理已完成" : "实时提醒"}
-              </CalmPill>
-            </div>
-          </CalmSurface>
+              {item.reasons.length > 0 && (
+                <p className="mt-2 break-words text-xs text-[color:var(--ink-muted)]">
+                  {item.reasons.slice(0, 3).join(" · ")}
+                </p>
+              )}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <CalmButton
+                  type="button"
+                  onClick={() => void handleSaveCard(item)}
+                  disabled={isSaving || isSaved}
+                  variant="secondary"
+                  className="pointer-events-auto px-2.5 py-1.5 text-xs"
+                >
+                  {isSaved ? "已存为知识卡片" : isSaving ? "保存中" : "存为知识卡片"}
+                </CalmButton>
+                <CalmPill tone={item.origin === "processing" ? "success" : "info"}>
+                  {item.origin === "processing" ? "自动预处理已完成" : "实时提醒"}
+                </CalmPill>
+              </div>
+            </CalmSurface>
+          </section>
         );
       })}
     </div>

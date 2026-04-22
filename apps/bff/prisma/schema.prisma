@@ -19,17 +19,24 @@ model User {
   updatedAt    DateTime     @updatedAt
   sessions     AppSession[]
   mailSources  MailSource[]
+  mailSourceCredentials MailSourceCredential[]
   microsoftAccounts MicrosoftAccount[]
+  googleAccounts GoogleAccount[]
   priorityRules PriorityRule[]
   agentThreads AgentThread[]
   agentMessages AgentMessage[]
   agentMemories AgentMemory[]
+  agentPrivacyStates AgentPrivacyState[]
+  directAuthAttempts DirectAuthAttempt[]
   llmRoutes LlmRoute[]
   llmUsages LlmUsage[]
   mailSummaries MailSummary[]
   mailEvents MailEvent[]
   senderProfiles SenderProfile[]
   mailKbJobs MailKbJob[]
+  personalizationFeedbackEvents PersonalizationFeedbackEvent[]
+  personalizationOverrides PersonalizationOverride[]
+  personalizationLearnedSignals PersonalizationLearnedSignal[]
   auditLogs AuditLog[]
 
   @@index([createdAt])
@@ -71,6 +78,7 @@ model MailSource {
   mailEvents         MailEvent[]
   senderProfiles     SenderProfile[]
   mailKbJobs         MailKbJob[]
+  credential          MailSourceCredential?
 
   @@unique([userId, externalId])
   @@unique([id, userId])
@@ -78,6 +86,26 @@ model MailSource {
   @@index([userId, enabled])
   @@index([userId, microsoftAccountId])
   @@index([userId, connectionType, connectionTrustedAt])
+}
+
+model MailSourceCredential {
+  id               String     @id @default(cuid())
+  userId           String
+  user             User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId         String     @unique
+  source           MailSource @relation(fields: [sourceId, userId], references: [id, userId], onDelete: Cascade)
+  kind             String
+  username         String
+  host             String
+  port             Int
+  secure           Boolean    @default(true)
+  secretCiphertext String     @db.Text
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  @@index([userId])
+  @@index([userId, sourceId])
+  @@unique([sourceId, userId])
 }
 
 model MicrosoftAccount {
@@ -97,6 +125,23 @@ model MicrosoftAccount {
   updatedAt              DateTime @updatedAt
 
   @@unique([userId, accountId])
+  @@index([userId, email])
+}
+
+model GoogleAccount {
+  id                     String   @id @default(cuid())
+  userId                 String
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email                  String
+  mailboxUserIdHint      String?
+  scope                  String[] @default([])
+  accessTokenCiphertext  String   @db.Text
+  refreshTokenCiphertext String?  @db.Text
+  expiresAt              DateTime
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@unique([userId, email])
   @@index([userId, email])
 }
 
@@ -160,6 +205,43 @@ model AgentMemory {
 
   @@unique([userId, sourceId, key])
   @@index([userId, sourceId, updatedAt])
+}
+
+model AgentPrivacyState {
+  id         String   @id @default(cuid())
+  threadId   String   @unique
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId   String
+  keyVersion String
+  ciphertext String   @db.Text
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId, sourceId, expiresAt])
+  @@index([expiresAt])
+}
+
+model DirectAuthAttempt {
+  id          String   @id @default(cuid())
+  sessionHash String
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  provider    String
+  attemptId   String
+  state       String
+  message     String?  @db.Text
+  detail      String?  @db.Text
+  payloadJson String?  @db.Text
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([sessionHash, provider, attemptId])
+  @@index([sessionHash, expiresAt])
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
 }
 
 model LlmRoute {
@@ -319,6 +401,58 @@ model SubjectIndex {
   updatedAt DateTime    @updatedAt
 
   @@index([subject])
+}
+
+model PersonalizationFeedbackEvent {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId    String
+  targetType  String
+  targetId    String
+  eventType   String
+  quadrant    String?
+  dwellMs     Int?
+  contextJson String?  @db.Text
+  createdAt   DateTime @default(now())
+
+  @@index([userId, sourceId, createdAt])
+  @@index([userId, sourceId, targetType, targetId, createdAt])
+  @@index([userId, sourceId, eventType, createdAt])
+}
+
+model PersonalizationOverride {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId    String
+  targetType  String
+  targetId    String
+  quadrant    String
+  contextJson String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, sourceId, targetType, targetId])
+  @@index([userId, sourceId, updatedAt])
+}
+
+model PersonalizationLearnedSignal {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId     String
+  kind         String
+  value        String
+  label        String
+  weight       Float
+  sampleCount  Int      @default(0)
+  evidenceJson String?  @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([userId, sourceId, kind, value])
+  @@index([userId, sourceId, kind, updatedAt])
 }
 
 model AuditLog {

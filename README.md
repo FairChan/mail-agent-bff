@@ -13,6 +13,7 @@ OpenClaw is retained only as a legacy fallback. The default production runtime i
 - `packages/shared-types`: shared TypeScript schemas and types.
 - `deploy/host`: host-based deployment assets for the established `Nginx + static WebUI + systemd BFF` stack.
 - `deploy/docker`: single-node Docker Compose deployment for WebUI, BFF, Postgres, and Redis.
+- `deploy/kubernetes`: Kubernetes examples aligned to the same BFF port and readiness contract.
 - `deploy/docs/DEPLOYMENT.md`: production runbook.
 - `deploy/CHECKLIST.md`: operator checklist.
 
@@ -62,10 +63,13 @@ npm run dev:web
 Useful checks:
 
 ```bash
+npm run check:repo-boundary
 npm --workspace apps/bff run check
 npm --workspace apps/webui run check
 DATABASE_URL=postgresql://user:pass@localhost:5432/mail_agent_validate npx prisma validate --schema apps/bff/prisma/schema.prisma
 ```
+
+Runtime data, imported reference snapshots, generated build output, Playwright reports, and local cache files are intentionally ignored. Keep real mailbox-derived data under `apps/bff/data/` or another runtime data directory, but do not commit it.
 
 On Windows PowerShell, use `npm.cmd`/`npx.cmd` if script execution policy blocks `.ps1` shims.
 

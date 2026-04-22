@@ -21,6 +21,7 @@ import { TutorialView } from "./components/dashboard/TutorialView";
 import { KnowledgeBaseView } from "./components/dashboard/knowledgebase/KnowledgeBaseView";
 import { SettingsView } from "./components/dashboard/SettingsView";
 import { MailDetailModal } from "./components/dashboard/MailDetailModal";
+import { GlobalDrawerHost, drawerActions } from "./components/drawer";
 import { AppDock } from "./components/layout/AppDock";
 import { Sidebar } from "./components/layout/Sidebar";
 import { Header } from "./components/layout/Header";
@@ -31,6 +32,7 @@ import { LoadingSpinner } from "./components/shared/LoadingSpinner";
 import { CalmBackground, CalmButton, CalmPill, CalmSurface } from "./components/ui/Calm";
 import type { TriageMailItem } from "@mail-agent/shared-types";
 import { isAgentWindowLocation } from "./utils/agentWindow";
+import { getApiErrorMessage, readApiPayload } from "./utils/http";
 import { authMessages, type AuthLocale, type AuthMode } from "./types";
 
 // ========== API 客户端 ==========
@@ -49,10 +51,10 @@ async function apiFetch<T>(endpoint: string, options?: RequestInit): Promise<T> 
     credentials: "include",
   });
 
-  const data = await response.json();
+  const data = await readApiPayload(response);
 
   if (!response.ok) {
-    throw new Error(data.error || data.message || "Request failed");
+    throw new Error(getApiErrorMessage(data, response));
   }
 
   return data as T;
@@ -454,6 +456,7 @@ function AppContent() {
   const [tutorialCompleted, setTutorialCompleted] = useState(false);
   const [tutorialHydrated, setTutorialHydrated] = useState(false);
   const tutorialAutoOpenedRef = useRef(false);
+  const drawerScopeRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -487,6 +490,24 @@ function AppContent() {
     tutorialAutoOpenedRef.current = true;
     setCurrentView("tutorial");
   }, [agentWindowMode, currentView, isAuthenticated, setCurrentView, tutorialCompleted, tutorialHydrated]);
+
+  useEffect(() => {
+    const nextDrawerScope = [
+      isAuthenticated ? user?.id ?? "authenticated" : "anonymous",
+      activeSourceId ?? "no-source",
+      agentWindowMode ? "agent-window" : "main-window",
+    ].join(":");
+
+    if (drawerScopeRef.current === null) {
+      drawerScopeRef.current = nextDrawerScope;
+      return;
+    }
+
+    if (drawerScopeRef.current !== nextDrawerScope) {
+      drawerActions.closeAllDrawers();
+      drawerScopeRef.current = nextDrawerScope;
+    }
+  }, [activeSourceId, agentWindowMode, isAuthenticated, user?.id]);
 
   // 检测移动端
   useEffect(() => {
@@ -534,7 +555,8 @@ export function App() {
         <AppProvider>
           <AuthProvider apiBase={API_BASE}>
             <MailProvider apiBase={API_BASE}>
-                <AppContent />
+              <AppContent />
+              <GlobalDrawerHost />
             </MailProvider>
           </AuthProvider>
         </AppProvider>

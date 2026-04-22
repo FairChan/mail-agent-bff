@@ -4,6 +4,31 @@ import tailwindcss from "@tailwindcss/vite";
 import compression from "vite-plugin-compression";
 import path from "path";
 
+const proxy = {
+  "/api": {
+    target: "http://127.0.0.1:8787",
+    changeOrigin: true,
+  },
+  "/live": {
+    target: "http://127.0.0.1:8787",
+    changeOrigin: true,
+  },
+  "/ready": {
+    target: "http://127.0.0.1:8787",
+    changeOrigin: true,
+  },
+  "/health": {
+    target: "http://127.0.0.1:8787",
+    changeOrigin: true,
+  },
+} satisfies NonNullable<import("vite").UserConfig["server"]>["proxy"];
+
+const securityHeaders = {
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+};
+
 export default defineConfig({
   plugins: [
     react(),
@@ -19,29 +44,12 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     port: 5173,
-    headers: {
-      "X-Frame-Options": "SAMEORIGIN",
-      "X-Content-Type-Options": "nosniff",
-      "Referrer-Policy": "strict-origin-when-cross-origin",
-    },
-    proxy: {
-      "/api": {
-        target: "http://127.0.0.1:8787",
-        changeOrigin: true,
-      },
-      "/live": {
-        target: "http://127.0.0.1:8787",
-        changeOrigin: true,
-      },
-      "/ready": {
-        target: "http://127.0.0.1:8787",
-        changeOrigin: true,
-      },
-      "/health": {
-        target: "http://127.0.0.1:8787",
-        changeOrigin: true,
-      },
-    },
+    headers: securityHeaders,
+    proxy,
+  },
+  preview: {
+    headers: securityHeaders,
+    proxy,
   },
   build: {
     rollupOptions: {

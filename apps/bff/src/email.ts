@@ -67,13 +67,19 @@ function getOAuth2Transporter(): nodemailer.Transporter {
 // ---------------------------------------------------------------------------
 // Legacy SMTP Transport (for backward compatibility)
 // ---------------------------------------------------------------------------
-let _smtpTransporter: nodemailer.Transporter | null = null;
+const smtpTransporters = new Map<string, nodemailer.Transporter>();
 
-function getSMTPTransporter(): nodemailer.Transporter {
-  if (_smtpTransporter) return _smtpTransporter;
+function smtpTransporterCacheKey(host: string): string {
+  return `${host}:${env.SMTP_PORT}:${env.smtpSecure}`;
+}
 
-  _smtpTransporter = nodemailer.createTransport({
-    host: env.SMTP_HOST,
+function getSMTPTransporter(host = env.SMTP_HOST): nodemailer.Transporter {
+  const cacheKey = smtpTransporterCacheKey(host);
+  const cached = smtpTransporters.get(cacheKey);
+  if (cached) return cached;
+
+  const transporter = nodemailer.createTransport({
+    host,
     port: env.SMTP_PORT,
     secure: env.smtpSecure,
     auth:
@@ -92,17 +98,19 @@ function getSMTPTransporter(): nodemailer.Transporter {
     socketTimeout: 15_000,
   });
 
-  return _smtpTransporter;
+  smtpTransporters.set(cacheKey, transporter);
+  return transporter;
 }
 
-// ---------------------------------------------------------------------------
-// Transport selection
-// ---------------------------------------------------------------------------
-function getTransporter(): nodemailer.Transporter {
-  if (env.oauthEnabled) {
-    return getOAuth2Transporter();
+function getSmtpCandidateHosts(): string[] {
+  const primaryHost = env.SMTP_HOST.trim();
+  const candidates = [primaryHost];
+
+  if (primaryHost.toLowerCase() === "smtp.gmail.com") {
+    candidates.push("gmail-smtp-msa.l.google.com");
   }
-  return getSMTPTransporter();
+
+  return Array.from(new Set(candidates.filter((host) => host.length > 0)));
 }
 
 // ---------------------------------------------------------------------------
@@ -331,6 +339,31 @@ async function sendWithRetry(
   }
 }
 
+async function sendViaSmtp(
+  mailOptions: nodemailer.SendMailOptions
+): Promise<nodemailer.SentMessageInfo> {
+  const smtpHosts = getSmtpCandidateHosts();
+  let lastError: unknown = null;
+
+  for (const [index, host] of smtpHosts.entries()) {
+    try {
+      return await sendWithRetry(getSMTPTransporter(host), mailOptions);
+    } catch (error) {
+      lastError = error;
+      const msg = error instanceof Error ? error.message : String(error);
+      if (index < smtpHosts.length - 1) {
+        console.warn(
+          `[email] SMTP host ${host} failed after retries (msg="${msg}"). ` +
+            `Trying fallback host ${smtpHosts[index + 1]}...`
+        );
+        continue;
+      }
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 /**
  * Send a 6-digit verification code to the user's email address.
  *
@@ -367,7 +400,6 @@ export async function sendVerificationEmail(
     return { ok: true, skipped: true, reason: "disabled" };
   }
 
-  const transporter = getTransporter();
   const { subject, html } = renderEmail(opts);
   const authMethod = hasOAuth2 ? "OAuth2" : "SMTP";
 
@@ -385,7 +417,7 @@ export async function sendVerificationEmail(
   }
 
   try {
-    const info = await sendWithRetry(transporter, {
+    const mailOptions: nodemailer.SendMailOptions = {
       from: fromAddress,
       to: opts.to,
       subject,
@@ -394,7 +426,10 @@ export async function sendVerificationEmail(
         "X-Priority": "1",
         "X-Mailer": "Sec-Mery-BFF",
       },
-    });
+    };
+    const info = hasOAuth2
+      ? await sendWithRetry(getOAuth2Transporter(), mailOptions)
+      : await sendViaSmtp(mailOptions);
 
     console.info(
       `[email] [${authMethod}] Verification email sent to ${opts.to}, messageId=${info.messageId}`

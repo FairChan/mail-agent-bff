@@ -575,7 +575,7 @@ export function CalendarView() {
           {tomorrowDdl.length > 0 ? (
             <section className="rounded-[1.4rem] border border-[color:var(--border-urgent)] bg-[color:var(--surface-urgent)] p-4 shadow-[var(--shadow-soft)]">
               <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-[color:var(--ink)]">
-                <span className="flex h-2 w-2 animate-pulse rounded-full bg-red-500" />
+                <span className="flex h-2 w-2 rounded-full bg-red-500" />
                 {locale === "zh" ? "明天的截止日期" : locale === "ja" ? "明日の締切" : "Tomorrow's Deadlines"}
               </h3>
               <div className="space-y-2">

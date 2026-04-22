@@ -1,6 +1,14 @@
-import React, { useCallback, useRef, useState } from "react";
+import {
+  AnimatePresence,
+  motion,
+  type MotionValue,
+  type SpringOptions,
+  useMotionValue,
+  useSpring,
+  useTransform,
+} from "motion/react";
+import React, { Children, cloneElement, useMemo, useRef, useState } from "react";
 import { viewItems, viewLabelsByLocale, type AuthLocale, type ViewKey } from "@mail-agent/shared-types";
-import { motion } from "motion/react";
 import { cn } from "../../lib/utils";
 
 type AppDockProps = {
@@ -8,6 +16,8 @@ type AppDockProps = {
   locale: AuthLocale;
   onViewChange: (view: ViewKey) => void;
 };
+
+const REACTBITS_DOCK_SPRING: SpringOptions = { mass: 0.1, stiffness: 150, damping: 12 };
 
 const DOCK_ICON_BY_VIEW: Record<ViewKey, React.ReactNode> = {
   tutorial: <GuideIcon />,
@@ -31,129 +41,280 @@ const DOCK_ACCESSIBLE_LABEL_BY_VIEW: Record<ViewKey, string> = {
   settings: "Dock Settings",
 };
 
-const DOCK_BASE_SIZE = 42;
-const DOCK_MAGNIFIED_SIZE = 62;
-const DOCK_DISTANCE = 128;
-
 export function AppDock({ currentView, locale, onViewChange }: AppDockProps) {
   const labels = viewLabelsByLocale[locale];
-  const [mouseX, setMouseX] = useState<number | null>(null);
-  const handleMouseMove = useCallback((event: React.MouseEvent<HTMLElement>) => {
-    setMouseX(event.clientX);
-  }, []);
-  const handleMouseLeave = useCallback(() => {
-    setMouseX(null);
-  }, []);
+  const ariaLabel = locale === "en" ? "Application dock" : locale === "ja" ? "アプリドック" : "应用 Dock";
+  const toolbarLabel = locale === "en" ? "Main views" : locale === "ja" ? "メイン画面" : "主要窗口";
+  const items = viewItems.map((item) => ({
+    key: item.key,
+    icon: DOCK_ICON_BY_VIEW[item.key],
+    label: labels[item.key].label,
+    accessibleLabel: DOCK_ACCESSIBLE_LABEL_BY_VIEW[item.key],
+    tooltipTestId: `dock-tooltip-${item.key}`,
+    active: currentView === item.key || (currentView === "knowledgebase" && item.key === "stats"),
+    onClick: () => onViewChange(item.key),
+  }));
 
   return (
     <div
       className="pointer-events-none fixed inset-x-0 bottom-2 z-30 flex justify-center px-3 sm:bottom-3 lg:bottom-4"
       data-testid="app-dock-layer"
     >
-      <nav
-        className="pointer-events-auto flex max-w-[calc(100vw-1.5rem)] items-end gap-1.5 overflow-x-auto rounded-[1.6rem] border border-[color:var(--border-strong)] bg-[color:var(--surface-base)] px-2 py-2 shadow-[var(--shadow-card)] backdrop-blur-2xl"
-        onMouseMove={handleMouseMove}
-        onMouseLeave={handleMouseLeave}
-        aria-label={locale === "en" ? "Application dock" : locale === "ja" ? "アプリドック" : "应用 Dock"}
-      >
-        <div className="flex items-end gap-1.5" aria-label={locale === "en" ? "Main views" : locale === "ja" ? "メイン画面" : "主要窗口"}>
-          {viewItems.map((item) => {
-            const label = labels[item.key].label;
-            const isActive = currentView === item.key;
-            return (
-              <DockButton
-                key={item.key}
-                label={label}
-                accessibleLabel={DOCK_ACCESSIBLE_LABEL_BY_VIEW[item.key]}
-                tooltipTestId={`dock-tooltip-${item.key}`}
-                active={isActive}
-                mouseX={mouseX}
-                onClick={() => onViewChange(item.key)}
-              >
-                {DOCK_ICON_BY_VIEW[item.key]}
-              </DockButton>
-            );
-          })}
-        </div>
-      </nav>
+      <Dock items={items} ariaLabel={ariaLabel} toolbarLabel={toolbarLabel} />
     </div>
   );
 }
 
-type DockButtonProps = {
+type DockItemData = {
+  key: ViewKey;
+  icon: React.ReactNode;
   label: string;
   accessibleLabel: string;
   tooltipTestId: string;
   active: boolean;
-  mouseX: number | null;
   onClick: () => void;
-  children: React.ReactNode;
+  className?: string;
 };
 
-function DockButton({ label, accessibleLabel, tooltipTestId, active, mouseX, onClick, children }: DockButtonProps) {
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const distance = getDistanceFromPointer(buttonRef.current, mouseX);
-  const influence = Math.max(0, 1 - Math.abs(distance) / DOCK_DISTANCE);
-  const easedInfluence = influence * influence * (3 - 2 * influence);
-  const size = Math.round(DOCK_BASE_SIZE + (DOCK_MAGNIFIED_SIZE - DOCK_BASE_SIZE) * easedInfluence);
-  const lift = Math.round(10 * easedInfluence) + (active ? 4 : 0);
+type DockProps = {
+  items: DockItemData[];
+  ariaLabel: string;
+  toolbarLabel: string;
+  className?: string;
+  distance?: number;
+  panelHeight?: number;
+  baseItemSize?: number;
+  dockHeight?: number;
+  magnification?: number;
+  spring?: SpringOptions;
+};
+
+type DockItemProps = {
+  className?: string;
+  label: string;
+  accessibleLabel: string;
+  tooltipTestId: string;
+  active: boolean;
+  children: React.ReactNode;
+  onClick?: () => void;
+  mouseX: MotionValue<number>;
+  spring: SpringOptions;
+  distance: number;
+  baseItemSize: number;
+  magnification: number;
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  onTooltipChange: (tooltip: DockTooltipData | null) => void;
+};
+
+type DockTooltipData = {
+  id: string;
+  testId: string;
+  label: string;
+  left: number;
+};
+
+function DockItem({
+  children,
+  className = "",
+  label,
+  accessibleLabel,
+  tooltipTestId,
+  active,
+  onClick,
+  mouseX,
+  spring,
+  distance,
+  magnification,
+  baseItemSize,
+  containerRef,
+  onTooltipChange,
+}: DockItemProps) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const isHovered = useMotionValue(0);
+  const tooltipId = `${tooltipTestId}-label`;
+
+  const showTooltip = () => {
+    const buttonRect = ref.current?.getBoundingClientRect();
+    const containerRect = containerRef.current?.getBoundingClientRect();
+    if (!buttonRect || !containerRect) {
+      return;
+    }
+
+    onTooltipChange({
+      id: tooltipId,
+      testId: tooltipTestId,
+      label,
+      left: buttonRect.left - containerRect.left + buttonRect.width / 2,
+    });
+  };
+
+  const mouseDistance = useTransform(mouseX, (value) => {
+    const rect = ref.current?.getBoundingClientRect() ?? {
+      x: 0,
+      width: baseItemSize,
+    };
+    return value - rect.x - baseItemSize / 2;
+  });
+
+  const targetSize = useTransform(mouseDistance, [-distance, 0, distance], [baseItemSize, magnification, baseItemSize]);
+  const size = useSpring(targetSize, spring);
 
   return (
-    <div className="group relative flex h-[82px] flex-col items-center justify-end pt-7" style={{ width: DOCK_MAGNIFIED_SIZE + 4 }}>
-      <motion.button
-        ref={buttonRef}
-        type="button"
-        aria-current={active ? "page" : undefined}
-        aria-label={accessibleLabel}
-        title={label}
-        onClick={onClick}
+    <motion.button
+      ref={ref}
+      type="button"
+      style={{ width: size, height: size }}
+      onHoverStart={() => {
+        isHovered.set(1);
+        showTooltip();
+      }}
+      onHoverEnd={() => {
+        isHovered.set(0);
+        onTooltipChange(null);
+      }}
+      onFocus={() => {
+        isHovered.set(1);
+        showTooltip();
+      }}
+      onBlur={() => {
+        isHovered.set(0);
+        onTooltipChange(null);
+      }}
+      onClick={onClick}
+      aria-current={active ? "page" : undefined}
+      aria-describedby={tooltipId}
+      aria-label={accessibleLabel}
+      title={label}
+      className={cn(
+        "relative z-0 inline-flex shrink-0 items-center justify-center rounded-full border-2 shadow-md outline-none transition-[background-color,border-color,color,box-shadow] duration-150 hover:z-10 focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-[color:var(--accent-ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--surface-base)]",
+        active
+          ? "border-[color:var(--border-info)] bg-[color:var(--surface-info)] text-[color:var(--pill-info-ink)] shadow-[0_14px_28px_rgba(36,51,82,0.16)]"
+          : "border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] text-[color:var(--ink-muted)] hover:border-[color:var(--border-strong)] hover:bg-[color:var(--surface-elevated)] hover:text-[color:var(--ink)]",
+        className
+      )}
+    >
+      {Children.map(children, (child) =>
+        React.isValidElement<{ isHovered?: MotionValue<number> }>(child) ? cloneElement(child, { isHovered }) : child
+      )}
+      <span
         className={cn(
-          "relative flex items-center justify-center rounded-[1.15rem] text-[color:var(--ink-muted)] transition-[background-color,color,box-shadow] duration-150 ease-out",
-          "focus:outline-none",
-          active
-            ? "border border-[color:var(--border-info)] bg-[color:var(--surface-info)] text-[color:var(--pill-info-ink)] shadow-[0_16px_36px_rgba(36,51,82,0.14)]"
-            : "border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] hover:bg-[color:var(--surface-elevated)] hover:text-[color:var(--ink)]"
+          "absolute -bottom-2 h-1 rounded-full bg-current transition-[opacity,width] duration-150",
+          active ? "w-5 opacity-90" : "w-1 opacity-0"
         )}
-        animate={{
-          width: size,
-          height: size,
-          y: -lift,
-        }}
-        transition={{
-          type: "spring",
-          stiffness: 340,
-          damping: 26,
-          mass: 0.28,
-        }}
-      >
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center">{children}</span>
-        <span
-          className={cn(
-            "absolute -bottom-1.5 h-1 rounded-full transition-all",
-            active ? "w-5 bg-current opacity-90" : "w-1 bg-current opacity-0 group-hover:opacity-45"
-          )}
-          aria-hidden="true"
-        />
-      </motion.button>
-      <motion.span
-        data-testid={tooltipTestId}
-        initial={false}
-        animate={{ opacity: influence > 0.14 || active ? 1 : 0, y: influence > 0.14 || active ? 0 : 4 }}
-        transition={{ duration: 0.18, ease: "easeOut" }}
-        className="pointer-events-none absolute left-1/2 top-0 z-10 -translate-x-1/2 whitespace-nowrap rounded-full border border-black/10 bg-[rgba(20,28,44,0.92)] px-2.5 py-1 text-[11px] font-medium text-white shadow-lg dark:border-white/10 dark:bg-[rgba(242,246,252,0.94)] dark:text-[#142033]"
-      >
-        {label}
-      </motion.span>
-    </div>
+        aria-hidden="true"
+      />
+    </motion.button>
   );
 }
 
-function getDistanceFromPointer(element: HTMLButtonElement | null, mouseX: number | null) {
-  if (!element || mouseX === null) {
-    return Number.POSITIVE_INFINITY;
-  }
-  const bounds = element.getBoundingClientRect();
-  return mouseX - bounds.left - bounds.width / 2;
+type DockLabelProps = {
+  tooltip: DockTooltipData | null;
+};
+
+function DockLabel({ tooltip }: DockLabelProps) {
+  return (
+    <AnimatePresence>
+      {tooltip && (
+        <motion.span
+          id={tooltip.id}
+          role="tooltip"
+          initial={{ opacity: 0, y: 0 }}
+          animate={{ opacity: 1, y: -10 }}
+          exit={{ opacity: 0, y: 0 }}
+          transition={{ duration: 0.2 }}
+          data-testid={tooltip.testId}
+          className="pointer-events-none absolute top-2 z-30 w-fit whitespace-nowrap rounded-md border border-black/10 bg-[rgba(20,28,44,0.92)] px-2 py-0.5 text-xs font-medium text-white shadow-lg dark:border-white/10 dark:bg-[rgba(242,246,252,0.94)] dark:text-[#142033]"
+          style={{ left: tooltip.left, x: "-50%" }}
+        >
+          {tooltip.label}
+        </motion.span>
+      )}
+    </AnimatePresence>
+  );
+}
+
+type DockIconProps = {
+  className?: string;
+  children: React.ReactNode;
+  isHovered?: MotionValue<number>;
+};
+
+function DockIcon({ children, className = "" }: DockIconProps) {
+  return <span className={cn("flex h-5 w-5 items-center justify-center", className)}>{children}</span>;
+}
+
+function Dock({
+  items,
+  ariaLabel,
+  toolbarLabel,
+  className = "",
+  spring = REACTBITS_DOCK_SPRING,
+  magnification = 64,
+  distance = 180,
+  panelHeight = 68,
+  dockHeight = 118,
+  baseItemSize = 46,
+}: DockProps) {
+  const mouseX = useMotionValue(Infinity);
+  const isHovered = useMotionValue(0);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [activeTooltip, setActiveTooltip] = useState<DockTooltipData | null>(null);
+
+  const maxHeight = useMemo(() => Math.max(dockHeight, magnification + magnification / 2 + 4), [dockHeight, magnification]);
+  const heightRow = useTransform(isHovered, [0, 1], [panelHeight, maxHeight]);
+  const height = useSpring(heightRow, spring);
+
+  return (
+    <motion.nav
+      style={{ height, minHeight: maxHeight, scrollbarWidth: "none" }}
+      className="pointer-events-none relative w-full max-w-[calc(100vw-1.5rem)] overflow-visible"
+      aria-label={ariaLabel}
+    >
+      <motion.div
+        onMouseMove={({ pageX }) => {
+          isHovered.set(1);
+          mouseX.set(pageX);
+        }}
+        onMouseLeave={() => {
+          isHovered.set(0);
+          mouseX.set(Infinity);
+          setActiveTooltip(null);
+        }}
+        className={cn(
+          "pointer-events-auto absolute bottom-0 left-1/2 w-fit max-w-full -translate-x-1/2 transform overflow-visible rounded-[1.55rem] border border-[color:var(--border-strong)] bg-[color:var(--surface-base)] shadow-[var(--shadow-card)] backdrop-blur-sm",
+          className
+        )}
+        style={{ height: panelHeight }}
+        role="toolbar"
+        aria-label={toolbarLabel}
+        ref={panelRef}
+      >
+        <DockLabel tooltip={activeTooltip} />
+        <div className="flex h-full max-w-full items-end gap-3 px-3 pb-2">
+          {items.map((item) => (
+            <DockItem
+              key={item.key}
+              onClick={item.onClick}
+              className={item.className}
+              label={item.label}
+              accessibleLabel={item.accessibleLabel}
+              tooltipTestId={item.tooltipTestId}
+              active={item.active}
+              mouseX={mouseX}
+              spring={spring}
+              distance={distance}
+              magnification={magnification}
+              baseItemSize={baseItemSize}
+              containerRef={panelRef}
+              onTooltipChange={setActiveTooltip}
+            >
+              <DockIcon>{item.icon}</DockIcon>
+            </DockItem>
+          ))}
+        </div>
+      </motion.div>
+    </motion.nav>
+  );
 }
 
 function InboxIcon() {

@@ -2,42 +2,13 @@
  * 邮件详情页（独立页面模式）
  */
 
-import React, { useState, useEffect, useCallback } from "react";
-import DOMPurify from "dompurify";
-import { sanitizeExternalLink } from "../../utils/sanitize";
-import type { TriageMailItem } from "@mail-agent/shared-types";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { sanitizeExternalLink, sanitizeMailBodyHtml } from "../../utils/sanitize";
+import type { MailQuadrant, TriageMailItem } from "@mail-agent/shared-types";
 import { useMail } from "../../contexts/MailContext";
 import { CalmButton, CalmPill, CalmSectionLabel, CalmSurface } from "../ui/Calm";
-
-function escapeHtml(content: string): string {
-  return content
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function formatBodyContent(content: string): string {
-  if (!content) return "";
-
-  const decoded = content
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
-
-  if (/<[a-z!/][^>]*>/i.test(decoded)) {
-    return DOMPurify.sanitize(decoded, {
-      USE_PROFILES: { html: true },
-      FORBID_TAGS: ["style", "script"],
-    });
-  }
-
-  return escapeHtml(decoded).replace(/\n/g, "<br />");
-}
+import { QuadrantOverrideControl } from "../personalization/QuadrantOverrideControl";
+import { useDetailFeedbackSession } from "../../hooks/useDetailFeedbackSession";
 
 interface MailDetailPageProps {
   item: TriageMailItem;
@@ -53,18 +24,43 @@ interface MailDetailPageProps {
   };
 }
 
-export function MailDetailPage({ item, authLocale, onBack, uiCopy }: MailDetailPageProps) {
-  const { fetchMailDetail, mailBodyCache } = useMail();
+export function MailDetailPage({ item, activeSourceId, authLocale, onBack, uiCopy }: MailDetailPageProps) {
+  const { fetchMailDetail, mailBodyCache, savePersonalizationOverride } = useMail();
   const locale = authLocale === "ja" ? "ja" : authLocale === "en" ? "en" : "zh";
 
   const [bodyContent, setBodyContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [effectiveQuadrant, setEffectiveQuadrant] = useState<MailQuadrant>(
+    item.personalization?.effectiveQuadrant ?? item.quadrant
+  );
+  const [manualQuadrant, setManualQuadrant] = useState<MailQuadrant | null>(
+    item.personalization?.manualQuadrant ?? null
+  );
+  const [isSavingOverride, setIsSavingOverride] = useState(false);
+  const personalizationContext = useMemo(
+    () => ({
+      rawMessageId: item.id,
+      mailId: item.id,
+      fromAddress: item.fromAddress,
+      fromName: item.fromName,
+      subject: item.subject,
+      currentQuadrant: effectiveQuadrant,
+    }),
+    [effectiveQuadrant, item.fromAddress, item.fromName, item.id, item.subject]
+  );
+  const { recordAction } = useDetailFeedbackSession({
+    enabled: true,
+    targetType: "mail",
+    targetId: item.id,
+    quadrant: effectiveQuadrant,
+    context: personalizationContext,
+  });
 
   useEffect(() => {
     if (item) {
       // 优先使用缓存
-      const cached = mailBodyCache.get(item.id);
+      const cached = mailBodyCache.get(`${activeSourceId}::${item.id}`);
       if (cached) {
         setBodyContent(cached);
         setLoading(false);
@@ -86,14 +82,38 @@ export function MailDetailPage({ item, authLocale, onBack, uiCopy }: MailDetailP
         })
         .finally(() => setLoading(false));
     }
-  }, [fetchMailDetail, item, mailBodyCache]);
+  }, [activeSourceId, fetchMailDetail, item, mailBodyCache]);
 
-  const handleOpenInOutlook = useCallback(() => {
+  useEffect(() => {
+    setEffectiveQuadrant(item.personalization?.effectiveQuadrant ?? item.quadrant);
+    setManualQuadrant(item.personalization?.manualQuadrant ?? null);
+  }, [item.id, item.personalization?.effectiveQuadrant, item.personalization?.manualQuadrant, item.quadrant]);
+
+  const handleOpenInOutlook = useCallback(async () => {
     if (item?.webLink) {
       const safeLink = sanitizeExternalLink(item.webLink);
-      if (safeLink) window.open(safeLink, "_blank", "noopener,noreferrer");
+      if (safeLink) {
+        await recordAction("external_mail_open");
+        window.open(safeLink, "_blank", "noopener,noreferrer");
+      }
     }
-  }, [item?.webLink]);
+  }, [item?.webLink, recordAction]);
+
+  const handleOverrideChange = useCallback(async (quadrant: MailQuadrant | null) => {
+    setIsSavingOverride(true);
+    try {
+      await savePersonalizationOverride({
+        targetType: "mail",
+        targetId: item.id,
+        quadrant,
+        context: personalizationContext,
+      });
+      setManualQuadrant(quadrant);
+      setEffectiveQuadrant(quadrant ?? item.quadrant);
+    } finally {
+      setIsSavingOverride(false);
+    }
+  }, [item.id, item.quadrant, personalizationContext, savePersonalizationOverride]);
 
   const formatDate = (dateStr: string | undefined) => {
     if (!dateStr) return "";
@@ -139,7 +159,7 @@ export function MailDetailPage({ item, authLocale, onBack, uiCopy }: MailDetailP
   return (
     <div className="min-h-full bg-transparent">
       {/* Header */}
-      <div className="sticky top-0 z-10 border-b border-[color:var(--border-soft)] bg-[rgba(250,248,244,0.82)] px-4 py-3 backdrop-blur-xl dark:bg-[rgba(11,15,21,0.82)]">
+      <div className="sticky top-0 z-10 border-b border-[color:var(--border-soft)] bg-[rgba(250,248,244,0.92)] px-4 py-3 backdrop-blur-sm dark:bg-[rgba(11,15,21,0.92)]">
         <div className="mx-auto flex max-w-4xl items-center gap-4">
           <CalmButton
             type="button"
@@ -160,18 +180,29 @@ export function MailDetailPage({ item, authLocale, onBack, uiCopy }: MailDetailP
             </h1>
           </div>
 
-          {item.webLink && (
-            <CalmButton
-              type="button"
-              onClick={handleOpenInOutlook}
-              variant="primary"
-            >
-              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-              </svg>
-              {uiCopy.openInOutlook}
-            </CalmButton>
-          )}
+          <div className="flex items-center gap-2">
+            <QuadrantOverrideControl
+              locale={locale}
+              value={effectiveQuadrant}
+              manualValue={manualQuadrant}
+              saving={isSavingOverride}
+              onChange={handleOverrideChange}
+            />
+            {item.webLink && (
+              <CalmButton
+                type="button"
+                onClick={() => {
+                  void handleOpenInOutlook();
+                }}
+                variant="primary"
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+                {uiCopy.openInOutlook}
+              </CalmButton>
+            )}
+          </div>
         </div>
       </div>
 
@@ -201,6 +232,11 @@ export function MailDetailPage({ item, authLocale, onBack, uiCopy }: MailDetailP
               {importanceLabel(item.importance)}
             </CalmPill>
           </div>
+          {item.personalization?.explanation ? (
+            <p className="mt-3 text-sm leading-6 text-[color:var(--ink-subtle)]">
+              {item.personalization.explanation}
+            </p>
+          ) : null}
         </CalmSurface>
 
         {/* AI Summary */}
@@ -231,7 +267,7 @@ export function MailDetailPage({ item, authLocale, onBack, uiCopy }: MailDetailP
           {loading ? (
             <div className="space-y-3">
               {[1, 2, 3, 4, 5].map((i) => (
-                <div key={i} className="h-4 w-full animate-pulse rounded-full bg-[color:var(--surface-muted)]" />
+                <div key={i} className="h-4 w-full rounded-full bg-[color:var(--surface-muted)]" />
               ))}
             </div>
           ) : error ? (
@@ -239,7 +275,7 @@ export function MailDetailPage({ item, authLocale, onBack, uiCopy }: MailDetailP
           ) : (
             <div
               className="prose prose-sm max-w-none whitespace-pre-wrap text-sm leading-relaxed text-[color:var(--ink-muted)] prose-a:text-[color:var(--button-primary)]"
-              dangerouslySetInnerHTML={{ __html: formatBodyContent(bodyContent || "") }}
+              dangerouslySetInnerHTML={{ __html: sanitizeMailBodyHtml(bodyContent) }}
             />
           )}
         </CalmSurface>

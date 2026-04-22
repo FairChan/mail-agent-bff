@@ -20,6 +20,7 @@ import type {
   EventCluster,
   PersonProfile,
 } from "@mail-agent/shared-types";
+import { getApiErrorCode, getApiErrorMessage, readApiPayload } from "./http";
 
 // ========== 类型定义 ==========
 
@@ -47,17 +48,18 @@ function extractNotificationPreferences(
 
 class ApiClient {
   private baseUrl: string;
-  private defaultHeaders: Record<string, string>;
 
   constructor(baseUrl = "/api") {
     this.baseUrl = baseUrl;
-    this.defaultHeaders = {
-      "Content-Type": "application/json",
-    };
   }
 
-  private getAuthHeaders(): Record<string, string> {
-    return this.defaultHeaders;
+  private getAuthHeaders(options: RequestInit = {}): Headers {
+    const headers = new Headers(options.headers ?? undefined);
+    const hasBody = options.body !== undefined && options.body !== null;
+    if (hasBody && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
+    return headers;
   }
 
   async request<T>(
@@ -70,20 +72,17 @@ class ApiClient {
 
     const response = await fetch(url, {
       ...options,
-      headers: {
-        ...this.getAuthHeaders(),
-        ...options.headers,
-      },
+      headers: this.getAuthHeaders(options),
       credentials: "include",
     });
 
-    const data = await response.json();
+    const data = await readApiPayload(response);
 
     if (!response.ok) {
       const error = new ApiError(
-        data.error || data.message || "Request failed",
+        getApiErrorMessage(data, response),
         response.status,
-        data.errorCode
+        getApiErrorCode(data)
       );
       throw error;
     }

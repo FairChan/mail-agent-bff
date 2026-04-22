@@ -1,0 +1,5 @@
+No Critical/High issues.
+
+- Low: [BrandLogo.tsx](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/components/shared/BrandLogo.tsx#L21-L30) always sets a non-empty `alt`, so when the brand text is also visible in [AuthScreen.tsx](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/components/auth/AuthScreen.tsx#L89-L128), [Header.tsx](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/components/layout/Header.tsx#L189-L194), and [Sidebar.tsx](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/components/layout/Sidebar.tsx#L588-L595), screen readers can announce the brand twice.
+
+- I did not find broken asset paths or missed visible logo swaps: [index.html](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/index.html#L7-L8) points to `/brand-logo.png`, the asset exists at [brand-logo.png](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/public/brand-logo.png), and the visible brand/logo graphics in the reviewed screens now use the new asset.

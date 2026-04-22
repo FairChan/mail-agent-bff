@@ -1,5 +1,8 @@
+import { createHash, randomUUID } from "node:crypto";
+import type { FastifyBaseLogger } from "fastify";
 import { queryAgent } from "../gateway.js";
 import { MAIL_ASSISTANT_SKILLS } from "./mail-skills.js";
+import { loadAgentPrivacyScope, saveAgentPrivacyScope } from "./privacy-state-store.js";
 import type {
   AgentChatEvent,
   AgentQueryResult,
@@ -27,19 +30,41 @@ function extractAnswer(raw: unknown): string {
   return JSON.stringify(raw);
 }
 
+function scopedThreadId(tenant: TenantContext, threadId?: string): string {
+  const prefix = `mail:${tenant.tenantId}:${tenant.sourceId}:`;
+  const normalized = threadId?.trim();
+  if (!normalized) {
+    return `${prefix}${randomUUID()}`;
+  }
+  if (normalized.startsWith(prefix)) {
+    return normalized;
+  }
+  const digest = createHash("sha256").update(normalized).digest("hex").slice(0, 32);
+  return `${prefix}${digest}`;
+}
+
 const OPENCLAW_SCOPE_SEPARATOR = "|";
 
 export class OpenClawRuntime implements AgentRuntime {
+  constructor(private readonly logger: FastifyBaseLogger) {}
+
   async query(input: AgentRuntimeInput): Promise<AgentQueryResult> {
+    const threadId = scopedThreadId(input.tenant, input.threadId);
+    const privacyScope = await loadAgentPrivacyScope(this.logger, input.tenant, threadId);
+    const maskedMessage = privacyScope ? privacyScope.pseudonymizeText(input.message) : input.message;
+
     const raw = await queryAgent({
-      message: input.message,
+      message: maskedMessage,
       user: `${input.tenant.tenantId}:${input.tenant.sourceId}`,
       sessionKey: `${input.tenant.sessionToken}${OPENCLAW_SCOPE_SEPARATOR}${input.tenant.sourceId}`,
     });
 
+    const restoredAnswer = privacyScope ? privacyScope.restoreText(extractAnswer(raw)) : extractAnswer(raw);
+    await saveAgentPrivacyScope(this.logger, privacyScope);
+
     return {
-      answer: extractAnswer(raw),
-      threadId: input.threadId,
+      answer: restoredAnswer,
+      threadId,
     };
   }
 

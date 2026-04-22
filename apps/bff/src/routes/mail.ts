@@ -140,6 +140,8 @@ export function registerMailRoutes(server: FastifyInstance, deps: MailDeps) {
   function buildSourceContext(profile: MailSourceProfile): MailSourceContext {
     return {
       sourceId: profile.id,
+      provider: profile.provider,
+      connectionType: profile.connectionType,
       mailboxUserId: profile.mailboxUserId,
       connectedAccountId: profile.connectedAccountId,
     };

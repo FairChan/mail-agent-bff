@@ -17,6 +17,7 @@ import {
   type MailInsightType,
   type MailPriorityRule,
 } from "../mail.js";
+import type { MailPrivacyScope } from "../mail-privacy.js";
 import { getPrismaClient } from "../persistence.js";
 import type { FileMemoryStore } from "../runtime/memory-store.js";
 import { searchKnowledgeBaseMailSummaries } from "../summary.js";
@@ -92,7 +93,10 @@ export type MailToolOptions = {
   timeZone?: string;
   logger: FastifyBaseLogger;
   memoryStore?: FileMemoryStore;
+  privacyScope?: MailPrivacyScope | null;
 };
+
+type ToolInput = Record<string, unknown>;
 
 function defineMailTool(config: any) {
   return createTool(config) as any;
@@ -102,7 +106,6 @@ function truncateText(value: string, maxChars: number): string {
   if (value.length <= maxChars) {
     return value;
   }
-
   return `${value.slice(0, maxChars)}\n[truncated ${value.length - maxChars} chars]`;
 }
 
@@ -114,7 +117,6 @@ function serializeKnowledgeBaseJob(job: KnowledgeBaseJob | undefined) {
   if (!job) {
     return null;
   }
-
   return {
     jobId: job.jobId,
     sourceId: job.sourceId,
@@ -125,6 +127,31 @@ function serializeKnowledgeBaseJob(job: KnowledgeBaseJob | undefined) {
     error: job.error,
     progress: job.progress,
   };
+}
+
+function restoreToolInput<TArgs extends ToolInput>(options: MailToolOptions, rawArgs: unknown): TArgs {
+  if (!options.privacyScope) {
+    return rawArgs as TArgs;
+  }
+  return options.privacyScope.restoreStructuredPayload(rawArgs, {
+    allowUnknownTokens: true,
+  }) as TArgs;
+}
+
+function maskToolResult(
+  options: MailToolOptions,
+  value: unknown,
+  seedEntities?: Array<string | null | undefined>
+): unknown {
+  if (!options.privacyScope) {
+    return value;
+  }
+  const normalizedSeeds = (seedEntities ?? []).filter(
+    (item): item is string => typeof item === "string" && item.trim().length > 0
+  );
+  return options.privacyScope.maskStructuredPayload(value, {
+    seedEntities: normalizedSeeds,
+  });
 }
 
 async function appendPreferenceToFileMemory(
@@ -190,15 +217,22 @@ export async function createMailAssistantTools(
         limit: z.number().int().min(5).max(100).optional(),
         horizonDays: z.number().int().min(1).max(30).optional(),
       }),
-      execute: async ({ query, limit, horizonDays }: any) =>
-        answerMailQuestion({
+      execute: async (rawArgs: unknown) => {
+        const { query, limit, horizonDays } = restoreToolInput<{
+          query: string;
+          limit?: number;
+          horizonDays?: number;
+        }>(options, rawArgs);
+        const result = await answerMailQuestion({
           question: query,
           limit: limit ?? 40,
           horizonDays: horizonDays ?? 14,
           timeZone: options.timeZone,
           priorityRules,
           sourceContext: tenant,
-        }),
+        });
+        return maskToolResult(options, result, [query]);
+      },
     }),
     getMailDetail: defineMailTool({
       id: "getMailDetail",
@@ -207,12 +241,13 @@ export async function createMailAssistantTools(
       inputSchema: z.object({
         messageId: z.string().trim().min(1).max(512),
       }),
-      execute: async ({ messageId }: any) => {
+      execute: async (rawArgs: unknown) => {
+        const { messageId } = restoreToolInput<{ messageId: string }>(options, rawArgs);
         const detail = await getMailMessageById(messageId, tenant);
-        return {
+        return maskToolResult(options, {
           ...detail,
           bodyContent: truncateText(detail.bodyContent, MAX_DETAIL_BODY_CHARS),
-        };
+        });
       },
     }),
     summarizeInbox: defineMailTool({
@@ -222,7 +257,11 @@ export async function createMailAssistantTools(
         limit: z.number().int().min(5).max(100).optional(),
         horizonDays: z.number().int().min(1).max(30).optional(),
       }),
-      execute: async ({ limit, horizonDays }: any) => {
+      execute: async (rawArgs: unknown) => {
+        const { limit, horizonDays } = restoreToolInput<{
+          limit?: number;
+          horizonDays?: number;
+        }>(options, rawArgs);
         const insights = await buildMailInsights(
           limit ?? 40,
           horizonDays ?? 14,
@@ -230,7 +269,7 @@ export async function createMailAssistantTools(
           priorityRules,
           tenant
         );
-        return {
+        return maskToolResult(options, {
           generatedAt: insights.generatedAt,
           horizonDays: insights.horizonDays,
           timeZone: insights.timeZone,
@@ -238,7 +277,7 @@ export async function createMailAssistantTools(
           tomorrowDdl: insights.tomorrowDdl.slice(0, 8),
           upcoming: insights.upcoming.slice(0, 12),
           signalsWithoutDate: insights.signalsWithoutDate.slice(0, 8),
-        };
+        });
       },
     }),
     extractEvents: defineMailTool({
@@ -249,7 +288,12 @@ export async function createMailAssistantTools(
         horizonDays: z.number().int().min(1).max(30).optional(),
         type: insightTypeSchema.optional(),
       }),
-      execute: async ({ limit, horizonDays, type }: any) => {
+      execute: async (rawArgs: unknown) => {
+        const { limit, horizonDays, type } = restoreToolInput<{
+          limit?: number;
+          horizonDays?: number;
+          type?: MailInsightType;
+        }>(options, rawArgs);
         const insights = await buildMailInsights(
           limit ?? 60,
           horizonDays ?? 21,
@@ -260,14 +304,14 @@ export async function createMailAssistantTools(
         const filterByType = <T extends { type: MailInsightType }>(items: T[]) =>
           type ? items.filter((item) => item.type === type) : items;
 
-        return {
+        return maskToolResult(options, {
           generatedAt: insights.generatedAt,
           horizonDays: insights.horizonDays,
           timeZone: insights.timeZone,
           tomorrowDdl: filterByType(insights.tomorrowDdl).slice(0, 10),
           upcoming: filterByType(insights.upcoming).slice(0, 20),
           signalsWithoutDate: filterByType(insights.signalsWithoutDate).slice(0, 12),
-        };
+        });
       },
     }),
     syncCalendar: defineMailTool({
@@ -283,17 +327,26 @@ export async function createMailAssistantTools(
         evidence: z.string().trim().max(500).optional(),
         timeZone: z.string().trim().max(80).optional(),
       }),
-      execute: async (input: any) => {
+      execute: async (rawArgs: unknown) => {
+        const input = restoreToolInput<{
+          messageId: string;
+          subject: string;
+          type: z.infer<typeof insightTypeSchema>;
+          dueAt: string;
+          dueDateLabel?: string;
+          evidence?: string;
+          timeZone?: string;
+        }>(options, rawArgs);
         const hasCalendarConnection =
           tenant.connectionType === "microsoft"
             ? Boolean(tenant.microsoftAccountId)
             : Boolean(tenant.connectedAccountId);
         if (!hasCalendarConnection) {
-          return {
+          return maskToolResult(options, {
             ok: false,
             error: "OUTLOOK_NOT_CONNECTED",
-            message: "当前邮箱还没有可用的 Outlook connectedAccountId，请先完成邮箱连接/授权。",
-          };
+            message: "Outlook calendar is not connected for the current mail source.",
+          });
         }
 
         const result = await createCalendarEventFromInsight(
@@ -303,11 +356,10 @@ export async function createMailAssistantTools(
           },
           tenant
         );
-
-        return {
+        return maskToolResult(options, {
           ok: true,
           result,
-        };
+        });
       },
     }),
     summarizeMailboxHistory: defineMailTool({
@@ -318,12 +370,16 @@ export async function createMailAssistantTools(
         limit: z.number().int().min(30).max(400).optional(),
         windowDays: z.number().int().min(1).max(90).optional(),
       }),
-      execute: async ({ limit, windowDays }: any) => {
+      execute: async (rawArgs: unknown) => {
+        const { limit, windowDays } = restoreToolInput<{
+          limit?: number;
+          windowDays?: number;
+        }>(options, rawArgs);
         if (tenant.isLegacySession || tenant.userId.startsWith("legacy:")) {
-          return {
+          return maskToolResult(options, {
             ok: false,
             error: "KNOWLEDGE_BASE_UNAVAILABLE_FOR_LEGACY_SESSION",
-          };
+          });
         }
 
         const { jobId } = await triggerMailSummary({
@@ -337,14 +393,14 @@ export async function createMailAssistantTools(
         });
         const latestJob = getLatestKnowledgeBaseJob(tenant.userId, tenant.sourceId);
 
-        return {
+        return maskToolResult(options, {
           ok: true,
           jobId,
           status: latestJob?.status ?? "pending",
           message:
-            "旧邮件归纳任务已经启动。你可以继续提问，我会在知识库完成后直接基于归纳结果回答。",
+            "Historical mailbox summarization has started. You can keep chatting while the backfill runs.",
           latestJob: serializeKnowledgeBaseJob(latestJob),
-        };
+        });
       },
     }),
     knowledgeBaseArtifacts: defineMailTool({
@@ -354,18 +410,43 @@ export async function createMailAssistantTools(
       inputSchema: z.object({}),
       execute: async () => {
         const store = await getMailKnowledgeBaseStore(tenant.userId, tenant.sourceId);
-        return {
+        return maskToolResult(options, {
           ok: true,
           baselineStatus: store.readBaselineStatus(),
           artifacts: [
-            { key: "mailIds", label: "邮件标识码清单", path: publicMailKbArtifactPath("mail-ids.md") },
-            { key: "subjects", label: "邮件题目索引", path: publicMailKbArtifactPath("mail-subject-index.md"), count: store.getAllSubjectIndexes().length },
-            { key: "scores", label: "邮件评分索引", path: publicMailKbArtifactPath("mail-score-index.md"), count: store.getAllScoreIndexes().length },
-            { key: "summaries", label: "邮件总结正文库", path: publicMailKbArtifactPath("mail-summaries.md"), count: store.getAllMails().length },
-            { key: "events", label: "事件聚类索引", path: publicMailKbArtifactPath("event-clusters.md"), count: store.getAllEvents().length },
-            { key: "senders", label: "发件人画像索引", path: publicMailKbArtifactPath("sender-profiles.md"), count: store.getAllPersons().length },
+            { key: "mailIds", label: "Mail ids", path: publicMailKbArtifactPath("mail-ids.md") },
+            {
+              key: "subjects",
+              label: "Mail subjects",
+              path: publicMailKbArtifactPath("mail-subject-index.md"),
+              count: store.getAllSubjectIndexes().length,
+            },
+            {
+              key: "scores",
+              label: "Mail scores",
+              path: publicMailKbArtifactPath("mail-score-index.md"),
+              count: store.getAllScoreIndexes().length,
+            },
+            {
+              key: "summaries",
+              label: "Mail summaries",
+              path: publicMailKbArtifactPath("mail-summaries.md"),
+              count: store.getAllMails().length,
+            },
+            {
+              key: "events",
+              label: "Event clusters",
+              path: publicMailKbArtifactPath("event-clusters.md"),
+              count: store.getAllEvents().length,
+            },
+            {
+              key: "senders",
+              label: "Sender profiles",
+              path: publicMailKbArtifactPath("sender-profiles.md"),
+              count: store.getAllPersons().length,
+            },
           ],
-        };
+        });
       },
     }),
     knowledgeBaseStatus: defineMailTool({
@@ -378,13 +459,13 @@ export async function createMailAssistantTools(
         const baselineStatus = store.readBaselineStatus();
         const stats = store.getStats();
         const latestJob = getLatestKnowledgeBaseJob(tenant.userId, tenant.sourceId);
-        return {
+        return maskToolResult(options, {
           ok: true,
           ready: Boolean(baselineStatus?.backfillCompleted),
           stats,
           baselineStatus,
           latestJob: serializeKnowledgeBaseJob(latestJob),
-        };
+        });
       },
     }),
     searchMailKnowledgeBase: defineMailTool({
@@ -395,7 +476,11 @@ export async function createMailAssistantTools(
         query: z.string().trim().min(1).max(300),
         limit: z.number().int().min(1).max(50).optional(),
       }),
-      execute: async ({ query, limit }: any) => {
+      execute: async (rawArgs: unknown) => {
+        const { query, limit } = restoreToolInput<{
+          query: string;
+          limit?: number;
+        }>(options, rawArgs);
         const store = await getMailKnowledgeBaseStore(tenant.userId, tenant.sourceId);
         const baselineStatus = store.readBaselineStatus();
         const matches = await searchKnowledgeBaseMailSummaries(
@@ -404,12 +489,12 @@ export async function createMailAssistantTools(
           query,
           limit ?? 8
         );
-        return {
+        return maskToolResult(options, {
           ok: true,
           ready: Boolean(baselineStatus?.backfillCompleted),
           totalIndexedMails: store.getStats().totalMails,
           matches,
-        };
+        }, [query]);
       },
     }),
     rememberPreference: defineMailTool({
@@ -420,30 +505,31 @@ export async function createMailAssistantTools(
         key: z.string().trim().min(1).max(120),
         value: z.string().trim().min(1).max(1200),
       }),
-      execute: async ({ key, value }: any) => {
+      execute: async (rawArgs: unknown) => {
+        const { key, value } = restoreToolInput<{ key: string; value: string }>(options, rawArgs);
         if (tenant.isLegacySession || tenant.userId.startsWith("legacy:")) {
-          return {
+          return maskToolResult(options, {
             ok: false,
             error: "MEMORY_UNAVAILABLE_FOR_LEGACY_SESSION",
-          };
+          });
         }
 
         const fileMemory = await appendPreferenceToFileMemory(tenant, options, key, value);
         if (!fileMemory.ok) {
-          return {
+          return maskToolResult(options, {
             ok: false,
             error: "MEMORY_STORE_UNAVAILABLE",
-          };
+          });
         }
 
         const prisma = await safeGetAgentPrisma(options.logger);
         if (!prisma?.agentMemory?.upsert) {
-          return {
+          return maskToolResult(options, {
             ok: true,
             key,
             storage: "file",
             memoryId: fileMemory.id,
-          };
+          });
         }
 
         try {
@@ -473,12 +559,12 @@ export async function createMailAssistantTools(
             },
           });
 
-          return {
+          return maskToolResult(options, {
             ok: true,
             key,
             storage: "file+database",
             memoryId: fileMemory.id,
-          };
+          });
         } catch (error) {
           options.logger.warn(
             {
@@ -488,12 +574,12 @@ export async function createMailAssistantTools(
             },
             "Preference persistence mirrored to file memory but database upsert failed"
           );
-          return {
+          return maskToolResult(options, {
             ok: true,
             key,
             storage: "file",
             memoryId: fileMemory.id,
-          };
+          });
         }
       },
     }),
@@ -501,14 +587,23 @@ export async function createMailAssistantTools(
 
   return {
     ...tools,
-    ...(await loadComposioMastraTools(tenant, options.logger)),
+    ...(await loadComposioMastraTools(tenant, options.logger, options.privacyScope)),
   };
 }
 
 async function loadComposioMastraTools(
   tenant: TenantContext,
-  logger: FastifyBaseLogger
+  logger: FastifyBaseLogger,
+  privacyScope?: MailPrivacyScope | null
 ): Promise<ToolsInput> {
+  if (privacyScope) {
+    logger.info(
+      { userId: tenant.userId, sourceId: tenant.sourceId },
+      "Skipping direct Composio Mastra tools because mail privacy wrapping is enabled"
+    );
+    return {};
+  }
+
   if (!env.composioApiKey || !tenant.connectedAccountId) {
     return {};
   }
@@ -518,6 +613,7 @@ async function loadComposioMastraTools(
       import("@composio/core"),
       import("@composio/mastra"),
     ]);
+
     const composio = new Composio({
       apiKey: env.composioApiKey,
       baseURL: env.COMPOSIO_PLATFORM_URL,

@@ -6,7 +6,7 @@ import type { AgentRuntime } from "./types.js";
 
 export function createAgentRuntime(logger: FastifyBaseLogger): AgentRuntime {
   if (env.agentRuntime === "openclaw") {
-    return new OpenClawRuntime();
+    return new OpenClawRuntime(logger);
   }
 
   return new MastraRuntime(logger);

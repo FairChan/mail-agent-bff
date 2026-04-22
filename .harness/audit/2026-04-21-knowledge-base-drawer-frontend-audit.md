@@ -1,0 +1,9 @@
+No Critical findings. I found 1 High and 1 Low.
+
+- High: drawer state is not invalidated across auth/source transitions, so stale private KB content can stay visible over the next screen. `GlobalDrawerHost` is mounted outside the auth gate in [App.tsx](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/App.tsx#L532), the store keeps full snapshot props in [drawerStore.ts](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/components/drawer/drawerStore.ts#L49), and KB source changes only reset local paging in [KnowledgeBaseView.tsx](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/components/dashboard/knowledgebase/KnowledgeBaseView.tsx#L85) rather than closing drawers. If a user logs out or switches mailbox source while a drawer is open, the old drawer can remain on top with stale mail/event/person/document data and an active focus trap/body lock.
+
+- Low: the nested mail-detail flow loses human-readable context and stays partially hardcoded to Chinese. [EventClusterDetailDrawer.tsx](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/components/drawer/EventClusterDetailDrawer.tsx#L47) passes `personName: mail.personId`, [PersonProfileDetailDrawer.tsx](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/components/drawer/PersonProfileDetailDrawer.tsx#L28) passes `eventName: mail.eventId`, and [MailKnowledgeDetailDrawer.tsx](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/components/drawer/MailKnowledgeDetailDrawer.tsx#L18) renders `zh-CN` dates plus mixed Chinese copy. In en/ja locales, drilling into a mail from an event/person drawer shows raw IDs and inconsistent labels.
+
+Coverage gap: [smoke.spec.ts](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/e2e/smoke.spec.ts#L1342) covers open/close and link sanitization, but not logout/source-switch cleanup or stacked-drawer focus/backdrop behavior.
+
+Validation: `rtk npm --workspace apps/webui run check` passed.

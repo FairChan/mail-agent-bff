@@ -12,6 +12,7 @@ import { useTheme } from "../../contexts/ThemeContext";
 import { cn } from "../../lib/utils";
 import { LoadingSpinner } from "../shared/LoadingSpinner";
 import { CalmButton, CalmPill, CalmSectionLabel, CalmSurface } from "../ui/Calm";
+import { formatImapConnectionError, formatOauthConnectionError } from "../../utils/mailConnectionFeedback";
 
 function padTime(value: number): string {
   return String(value).padStart(2, "0");
@@ -35,14 +36,18 @@ function fromTimeInputValue(value: string): { hour: number; minute: number } {
 export function SettingsView() {
   const {
     sources,
+    providers,
     activeSourceId,
     isLoadingSources,
     fetchSources,
+    fetchProviders,
     addSource,
+    connectImapSource,
     selectSource,
     deleteSource,
     verifySource,
     launchOutlookAuth,
+    launchGmailAuth,
     notificationPrefs,
     fetchNotificationPrefs,
     updateNotificationPrefs,
@@ -57,10 +62,22 @@ export function SettingsView() {
   const [newSourceLabel, setNewSourceLabel] = useState("");
   const [newMailboxUserId, setNewMailboxUserId] = useState("");
   const [newConnectedAccountId, setNewConnectedAccountId] = useState("");
+  const [imapProvider, setImapProvider] = useState<"gmail" | "icloud" | "netease163" | "qq" | "aliyun" | "custom_imap">("gmail");
+  const [imapLabel, setImapLabel] = useState("");
+  const [imapEmail, setImapEmail] = useState("");
+  const [imapUsername, setImapUsername] = useState("");
+  const [imapPassword, setImapPassword] = useState("");
+  const [imapHost, setImapHost] = useState("");
+  const [imapPort, setImapPort] = useState("");
+  const [imapSecure, setImapSecure] = useState(true);
+  const [isConnectingImap, setIsConnectingImap] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [authInfo, setAuthInfo] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [isGmailAuthenticating, setIsGmailAuthenticating] = useState(false);
+  const [gmailAuthInfo, setGmailAuthInfo] = useState<string | null>(null);
+  const [gmailAuthError, setGmailAuthError] = useState<string | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [sourceInfo, setSourceInfo] = useState<string | null>(null);
   const [urgentPushEnabled, setUrgentPushEnabled] = useState(true);
@@ -76,6 +93,19 @@ export function SettingsView() {
   const allowLegacyComposioSource = import.meta.env.VITE_ENABLE_LEGACY_COMPOSIO === "true";
   const activeSource = sources.find((source) => source.id === activeSourceId) ?? null;
   const notificationPrefsReady = !activeSourceId || notificationPrefs !== null;
+  const imapProviders = useMemo(
+    () => providers.filter((provider) => provider.connectionTypes.includes("imap_password") && provider.id !== "outlook"),
+    [providers]
+  );
+  const selectedImapProvider = imapProviders.find((provider) => provider.id === imapProvider);
+
+  useEffect(() => {
+    if (selectedImapProvider?.imap && !imapHost.trim()) {
+      setImapHost(selectedImapProvider.imap.host);
+      setImapPort(String(selectedImapProvider.imap.port));
+      setImapSecure(selectedImapProvider.imap.secure);
+    }
+  }, [imapHost, selectedImapProvider]);
 
   const digestScheduleSummary = useMemo(() => {
     if (!dailyDigestEnabled) {
@@ -88,8 +118,9 @@ export function SettingsView() {
   }, [dailyDigestEnabled, digestTimeValue, digestTimeZone, locale]);
 
   useEffect(() => {
+    fetchProviders();
     fetchSources();
-  }, [fetchSources]);
+  }, [fetchProviders, fetchSources]);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.Notification === "undefined") {
@@ -150,18 +181,35 @@ export function SettingsView() {
       setAuthInfo(result.message || "Microsoft Outlook 已连接，邮箱数据源已返回。");
       void fetchSources();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "授权失败";
-      if (msg.includes("401") || msg.includes("Unauthorized")) {
-        setAuthError("会话已过期，请重新登录后重试。");
-      } else if (msg.includes("MICROSOFT_OAUTH_NOT_CONFIGURED") || msg.includes("MICROSOFT_CLIENT_ID")) {
-        setAuthError("Microsoft OAuth 尚未配置，请先在 BFF 环境变量中填写客户端信息。");
-      } else {
-        setAuthError(`授权失败: ${msg}`);
-      }
+      setAuthError(formatOauthConnectionError("outlook", err));
     } finally {
       setIsAuthenticating(false);
     }
   }, [launchOutlookAuth, fetchSources]);
+
+  const handleGmailAuth = useCallback(async () => {
+    setIsGmailAuthenticating(true);
+    setGmailAuthError(null);
+    setGmailAuthInfo(null);
+
+    try {
+      const result = await launchGmailAuth();
+      if (result.mailboxUserIdHint) {
+        setImapEmail(result.mailboxUserIdHint);
+        setImapUsername(result.mailboxUserIdHint);
+      }
+      if (result.account?.email) {
+        setImapProvider("gmail");
+        setImapLabel(`Gmail ${result.account.email}`);
+      }
+      setGmailAuthInfo(result.message || "Google Gmail 已连接，邮箱数据源已返回。");
+      void fetchSources();
+    } catch (err) {
+      setGmailAuthError(formatOauthConnectionError("gmail", err));
+    } finally {
+      setIsGmailAuthenticating(false);
+    }
+  }, [fetchSources, launchGmailAuth]);
 
   // ========== 数据源管理 ==========
 
@@ -191,6 +239,52 @@ export function SettingsView() {
       setIsCreating(false);
     }
   }, [newSourceLabel, newMailboxUserId, newConnectedAccountId, addSource]);
+
+  const handleConnectImap = useCallback(async () => {
+    if (!imapEmail.trim()) {
+      setSourceError("请输入邮箱地址");
+      return;
+    }
+    if (!imapPassword.trim()) {
+      setSourceError("请输入授权码或应用专用密码");
+      return;
+    }
+
+    setIsConnectingImap(true);
+    setSourceError(null);
+    setSourceInfo(null);
+    try {
+      const connected = await connectImapSource({
+        provider: imapProvider,
+        label: imapLabel.trim() || undefined,
+        email: imapEmail.trim(),
+        username: imapUsername.trim() || imapEmail.trim(),
+        appPassword: imapPassword.trim(),
+        imapHost: imapHost.trim() || undefined,
+        imapPort: imapPort.trim() ? Number(imapPort) : undefined,
+        imapSecure,
+      });
+      setSourceInfo(`${connected?.name ?? "IMAP 邮箱"} 已连接，系统会按现有邮件预处理流程读取收件箱。`);
+      setImapLabel("");
+      setImapEmail("");
+      setImapUsername("");
+      setImapPassword("");
+    } catch (err) {
+      setSourceError(formatImapConnectionError(err));
+    } finally {
+      setIsConnectingImap(false);
+    }
+  }, [
+    connectImapSource,
+    imapEmail,
+    imapHost,
+    imapLabel,
+    imapPassword,
+    imapPort,
+    imapProvider,
+    imapSecure,
+    imapUsername,
+  ]);
 
   const handleSelectSource = useCallback(async (sourceId: string) => {
     try {
@@ -528,6 +622,172 @@ export function SettingsView() {
                 </div>
               </SettingsCard>
 
+              <SettingsCard title={locale === "zh" ? "Google Gmail 直连" : locale === "ja" ? "Google Gmail 直結" : "Google Gmail Direct"}>
+                <div className="flex items-start gap-3">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-rose-500 text-white">
+                    <MailNavIcon />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                      {locale === "zh" ? "跳转 Google 官方登录页，授权后自动回到当前产品。当前先提供 Gmail 邮件读取直连。" : locale === "ja" ? "Google 公式ログインへ遷移し、認可後に自動で戻ります。現状は Gmail メール読取の直結です。" : "Jump to the official Google sign-in flow and return automatically. This direct path currently enables Gmail mail read access."}
+                    </p>
+                    <CalmButton
+                      type="button"
+                      onClick={handleGmailAuth}
+                      disabled={isGmailAuthenticating}
+                      variant="secondary"
+                      className="mt-3"
+                    >
+                      {isGmailAuthenticating ? <LoadingSpinner size="sm" /> : <MailNavIcon />}
+                      {locale === "zh" ? "登录 Google Gmail" : locale === "ja" ? "Google Gmail にログイン" : "Connect Gmail"}
+                    </CalmButton>
+                    {gmailAuthInfo ? <p className="mt-3 text-xs text-emerald-600 dark:text-emerald-400">{gmailAuthInfo}</p> : null}
+                    {gmailAuthError ? <p className="mt-3 text-xs text-red-600 dark:text-red-400">{gmailAuthError}</p> : null}
+                  </div>
+                </div>
+              </SettingsCard>
+
+              <SettingsCard title={locale === "zh" ? "多邮箱 IMAP 接入" : locale === "ja" ? "マルチメール IMAP 接続" : "Multi-Mail IMAP"}>
+                <div className="space-y-4">
+                  <p className="text-sm text-[color:var(--ink-muted)]">
+                    {locale === "zh"
+                      ? "Gmail 现在优先推荐上面的 Google 直连；Apple iCloud、163、QQ、阿里邮箱仍然使用官方 IMAP + 授权码接入。IMAP 负责读取邮件；日历写入会在对应 OAuth/Calendar API 接好后开启。"
+                      : locale === "ja"
+                        ? "Gmail は上の Google 直結を優先し、iCloud、163、QQ、Ali Mail は IMAP とアプリパスワードでメール読取を接続します。"
+                        : "Gmail now prefers the direct Google OAuth path above, while iCloud, 163, QQ, and Ali Mail continue to use official IMAP with an app password or authorization code."}
+                  </p>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="grid gap-1 text-sm text-[color:var(--ink-muted)]">
+                      <span>{locale === "zh" ? "邮箱类型" : "Provider"}</span>
+                      <select
+                        value={imapProvider}
+                        onChange={(event) => {
+                          const nextProvider = event.target.value as typeof imapProvider;
+                          setImapProvider(nextProvider);
+                          const descriptor = imapProviders.find((provider) => provider.id === nextProvider);
+                          setImapHost(descriptor?.imap?.host ?? "");
+                          setImapPort(descriptor?.imap?.port ? String(descriptor.imap.port) : "");
+                          setImapSecure(descriptor?.imap?.secure ?? true);
+                        }}
+                        className="calm-input h-11"
+                      >
+                        {(imapProviders.length > 0 ? imapProviders : [
+                          { id: "gmail", label: "Gmail" },
+                          { id: "icloud", label: "Apple iCloud Mail" },
+                          { id: "netease163", label: "网易 163 邮箱" },
+                          { id: "qq", label: "QQ 邮箱" },
+                          { id: "aliyun", label: "阿里邮箱" },
+                          { id: "custom_imap", label: "Custom IMAP" },
+                        ]).map((provider) => (
+                          <option key={provider.id} value={provider.id}>
+                            {provider.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="grid gap-1 text-sm text-[color:var(--ink-muted)]">
+                      <span>{locale === "zh" ? "显示名称" : "Label"}</span>
+                      <input
+                        type="text"
+                        value={imapLabel}
+                        onChange={(event) => setImapLabel(event.target.value)}
+                        placeholder={selectedImapProvider ? `${selectedImapProvider.label} name@example.com` : "Mail source label"}
+                        className="calm-input h-11"
+                      />
+                    </label>
+
+                    <label className="grid gap-1 text-sm text-[color:var(--ink-muted)]">
+                      <span>{locale === "zh" ? "邮箱地址" : "Email"}</span>
+                      <input
+                        type="email"
+                        value={imapEmail}
+                        onChange={(event) => setImapEmail(event.target.value)}
+                        placeholder="name@example.com"
+                        className="calm-input h-11"
+                      />
+                    </label>
+
+                    <label className="grid gap-1 text-sm text-[color:var(--ink-muted)]">
+                      <span>{locale === "zh" ? "用户名" : "Username"}</span>
+                      <input
+                        type="text"
+                        value={imapUsername}
+                        onChange={(event) => setImapUsername(event.target.value)}
+                        placeholder={locale === "zh" ? "默认使用邮箱地址" : "Defaults to email address"}
+                        className="calm-input h-11"
+                      />
+                    </label>
+
+                    <label className="grid gap-1 text-sm text-[color:var(--ink-muted)]">
+                      <span>{locale === "zh" ? "授权码 / 应用专用密码" : "App password / authorization code"}</span>
+                      <input
+                        type="password"
+                        value={imapPassword}
+                        onChange={(event) => setImapPassword(event.target.value)}
+                        placeholder={locale === "zh" ? "不会发送给大模型，仅本地加密保存" : "Encrypted locally, never sent to the model"}
+                        className="calm-input h-11"
+                      />
+                    </label>
+
+                    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_7rem]">
+                      <label className="grid gap-1 text-sm text-[color:var(--ink-muted)]">
+                        <span>IMAP Host</span>
+                        <input
+                          type="text"
+                          value={imapHost}
+                          onChange={(event) => setImapHost(event.target.value)}
+                          placeholder="imap.example.com"
+                          className="calm-input h-11"
+                        />
+                      </label>
+                      <label className="grid gap-1 text-sm text-[color:var(--ink-muted)]">
+                        <span>Port</span>
+                        <input
+                          type="number"
+                          value={imapPort}
+                          onChange={(event) => setImapPort(event.target.value)}
+                          placeholder="993"
+                          className="calm-input h-11"
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 rounded-[1.25rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-4 py-3 text-sm text-[color:var(--ink-muted)] shadow-[var(--shadow-inset)]">
+                    <div className="grid gap-1">
+                      <span>{locale === "zh" ? "使用 SSL/TLS 加密连接" : "Use SSL/TLS"}</span>
+                      <span className="text-xs text-[color:var(--ink-subtle)]">
+                        {locale === "zh"
+                          ? "当前版本强制开启 TLS，避免授权码通过明文 IMAP 发送。"
+                          : "TLS is mandatory in the current rollout so app passwords never travel over plaintext IMAP."}
+                      </span>
+                    </div>
+                    <span className="rounded-full border border-emerald-400/35 bg-emerald-500/12 px-3 py-1 text-xs font-medium text-emerald-200">
+                      TLS
+                    </span>
+                  </div>
+
+                  {selectedImapProvider?.notes.length ? (
+                    <div className="rounded-[1.25rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-4 py-3 text-xs text-[color:var(--ink-subtle)] shadow-[var(--shadow-inset)]">
+                      {selectedImapProvider.notes[0]}
+                    </div>
+                  ) : null}
+
+                  <CalmButton
+                    type="button"
+                    onClick={handleConnectImap}
+                    disabled={isConnectingImap || !imapEmail.trim() || !imapPassword.trim()}
+                    variant="primary"
+                    className="h-11"
+                  >
+                    {isConnectingImap ? <LoadingSpinner size="sm" /> : <MailNavIcon />}
+                    {locale === "zh" ? "连接 IMAP 邮箱" : locale === "ja" ? "IMAP メールを接続" : "Connect IMAP mailbox"}
+                  </CalmButton>
+                </div>
+              </SettingsCard>
+
               <SettingsCard title={locale === "zh" ? "邮箱源管理" : locale === "ja" ? "メールソース管理" : "Mail Sources"}>
                 <div className="mb-3 flex items-center justify-between">
                   <p className="text-xs text-[color:var(--ink-subtle)]">
@@ -559,6 +819,9 @@ export function SettingsView() {
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-semibold text-[color:var(--ink)]">{source.name}</p>
                             <p className="mt-1 truncate text-xs text-[color:var(--ink-subtle)]">{source.emailHint || source.id}</p>
+                            <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-[color:var(--ink-subtle)]">
+                              {source.provider} · {source.connectionType ?? "unknown"}
+                            </p>
                           </div>
                           <div className="flex flex-wrap items-center gap-2">
                             <StatusPill tone={source.ready ? "success" : "warning"}>{source.ready ? copy.ready : copy.pending}</StatusPill>

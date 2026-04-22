@@ -3,39 +3,17 @@
  * 使用 MailContext 和 AppContext
  */
 
-import React, { useState, useEffect, useCallback, useRef } from "react";
-import DOMPurify from "dompurify";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import type { MailQuadrant } from "@mail-agent/shared-types";
 import { useMail } from "../../contexts/MailContext";
 import { useApp } from "../../contexts/AppContext";
-import { sanitizeExternalLink } from "../../utils/sanitize";
+import { sanitizeExternalLink, sanitizeMailBodyHtml } from "../../utils/sanitize";
 import { CalmButton, CalmPill, CalmSectionLabel, CalmSurface } from "../ui/Calm";
-
-function formatBodyContent(content: string): string {
-  if (!content) return "";
-  let formatted = content;
-  formatted = formatted.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
-
-  if (formatted.includes("<")) {
-    const stripped = formatted
-      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-      .replace(/<[^>]+>/g, "\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
-    if (stripped.length > 50) {
-      formatted = stripped;
-    } else {
-      formatted = DOMPurify.sanitize(formatted, {
-        ALLOWED_TAGS: ["p", "br", "strong", "em", "b", "i", "u", "a", "ul", "ol", "li", "div", "span", "pre", "code"],
-        ALLOWED_ATTR: ["href", "target", "rel"],
-      });
-    }
-  }
-  return formatted;
-}
+import { QuadrantOverrideControl } from "../personalization/QuadrantOverrideControl";
+import { useDetailFeedbackSession } from "../../hooks/useDetailFeedbackSession";
 
 export function MailDetailModal() {
-  const { selectedMail, fetchMailDetail, clearSelectedMail, mailBodyCache } = useMail();
+  const { selectedMail, fetchMailDetail, clearSelectedMail, mailBodyCache, activeSourceId, savePersonalizationOverride } = useMail();
   const { locale } = useApp();
 
   const modalRef = useRef<HTMLDivElement>(null);
@@ -44,6 +22,36 @@ export function MailDetailModal() {
   const [bodyContent, setBodyContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const localeKey = locale === "zh" ? "zh" : locale === "ja" ? "ja" : "en";
+  const fallbackQuadrant = selectedMail?.quadrant ?? "unprocessed";
+  const [effectiveQuadrant, setEffectiveQuadrant] = useState<MailQuadrant>(
+    selectedMail?.personalization?.effectiveQuadrant ?? fallbackQuadrant
+  );
+  const [manualQuadrant, setManualQuadrant] = useState<MailQuadrant | null>(
+    selectedMail?.personalization?.manualQuadrant ?? null
+  );
+  const [isSavingOverride, setIsSavingOverride] = useState(false);
+  const personalizationContext = useMemo(
+    () =>
+      selectedMail
+        ? {
+            rawMessageId: selectedMail.id,
+            mailId: selectedMail.id,
+            fromAddress: selectedMail.fromAddress,
+            fromName: selectedMail.fromName,
+            subject: selectedMail.subject,
+            currentQuadrant: effectiveQuadrant,
+          }
+        : undefined,
+    [effectiveQuadrant, selectedMail]
+  );
+  const { recordAction } = useDetailFeedbackSession({
+    enabled: Boolean(selectedMail),
+    targetType: "mail",
+    targetId: selectedMail?.id ?? "",
+    quadrant: effectiveQuadrant,
+    context: personalizationContext,
+  });
 
   useEffect(() => {
     if (selectedMail) {
@@ -59,9 +67,19 @@ export function MailDetailModal() {
   }, [selectedMail]);
 
   useEffect(() => {
+    setEffectiveQuadrant(selectedMail?.personalization?.effectiveQuadrant ?? selectedMail?.quadrant ?? "unprocessed");
+    setManualQuadrant(selectedMail?.personalization?.manualQuadrant ?? null);
+  }, [
+    selectedMail?.id,
+    selectedMail?.personalization?.effectiveQuadrant,
+    selectedMail?.personalization?.manualQuadrant,
+    selectedMail?.quadrant,
+  ]);
+
+  useEffect(() => {
     if (selectedMail) {
       // 优先使用缓存
-      const cached = mailBodyCache.get(selectedMail.id);
+      const cached = mailBodyCache.get(`${activeSourceId ?? "no-source"}::${selectedMail.id}`);
       if (cached) {
         setBodyContent(cached);
         setLoading(false);
@@ -83,7 +101,7 @@ export function MailDetailModal() {
         })
         .finally(() => setLoading(false));
     }
-  }, [selectedMail?.id, mailBodyCache]);
+  }, [selectedMail?.id, activeSourceId, mailBodyCache, fetchMailDetail]);
 
   const handleClose = useCallback(() => {
     clearSelectedMail();
@@ -101,12 +119,34 @@ export function MailDetailModal() {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
 
-  const handleOpenInOutlook = () => {
+  const handleOpenInOutlook = async () => {
     if (selectedMail?.webLink) {
       const safeLink = sanitizeExternalLink(selectedMail.webLink);
-      if (safeLink) window.open(safeLink, "_blank", "noopener,noreferrer");
+      if (safeLink) {
+        await recordAction("external_mail_open");
+        window.open(safeLink, "_blank", "noopener,noreferrer");
+      }
     }
   };
+
+  const handleOverrideChange = useCallback(async (quadrant: MailQuadrant | null) => {
+    if (!selectedMail) {
+      return;
+    }
+    setIsSavingOverride(true);
+    try {
+      await savePersonalizationOverride({
+        targetType: "mail",
+        targetId: selectedMail.id,
+        quadrant,
+        context: personalizationContext,
+      });
+      setManualQuadrant(quadrant);
+      setEffectiveQuadrant(quadrant ?? selectedMail.quadrant);
+    } finally {
+      setIsSavingOverride(false);
+    }
+  }, [personalizationContext, savePersonalizationOverride, selectedMail]);
 
   const formatDate = (dateStr: string | undefined) => {
     if (!dateStr) return "";
@@ -176,18 +216,32 @@ export function MailDetailModal() {
                       : locale === "zh" ? "普通" : locale === "ja" ? "普通" : "Normal"}
                 </CalmPill>
               </div>
+              {selectedMail.personalization?.explanation ? (
+                <p className="mt-2 text-xs leading-6 text-[color:var(--ink-subtle)]">
+                  {selectedMail.personalization.explanation}
+                </p>
+              ) : null}
             </div>
-            <CalmButton
-              type="button"
-              onClick={handleClose}
-              variant="ghost"
-              className="h-10 w-10 shrink-0 rounded-full p-0 text-[color:var(--ink-subtle)]"
-              aria-label={labels.close}
-            >
-              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </CalmButton>
+            <div className="flex shrink-0 items-start gap-2">
+              <QuadrantOverrideControl
+                locale={localeKey}
+                value={effectiveQuadrant}
+                manualValue={manualQuadrant}
+                saving={isSavingOverride}
+                onChange={handleOverrideChange}
+              />
+              <CalmButton
+                type="button"
+                onClick={handleClose}
+                variant="ghost"
+                className="h-10 w-10 shrink-0 rounded-full p-0 text-[color:var(--ink-subtle)]"
+                aria-label={labels.close}
+              >
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </CalmButton>
+            </div>
           </div>
         </div>
 
@@ -220,7 +274,7 @@ export function MailDetailModal() {
           {loading ? (
             <div className="space-y-3">
               {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="h-4 w-full animate-pulse rounded-full bg-[color:var(--surface-muted)]" />
+                <div key={i} className="h-4 w-full rounded-full bg-[color:var(--surface-muted)]" />
               ))}
             </div>
           ) : error ? (
@@ -228,7 +282,7 @@ export function MailDetailModal() {
           ) : (
             <div
               className="prose prose-sm max-w-none whitespace-pre-wrap text-sm leading-relaxed text-[color:var(--ink-muted)] prose-a:text-[color:var(--button-primary)]"
-              dangerouslySetInnerHTML={{ __html: formatBodyContent(bodyContent || "") }}
+              dangerouslySetInnerHTML={{ __html: sanitizeMailBodyHtml(bodyContent) }}
             />
           )}
         </div>
@@ -246,7 +300,9 @@ export function MailDetailModal() {
             {selectedMail.webLink && (
               <CalmButton
                 type="button"
-                onClick={handleOpenInOutlook}
+                onClick={() => {
+                  void handleOpenInOutlook();
+                }}
                 variant="primary"
               >
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

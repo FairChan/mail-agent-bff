@@ -1,17 +1,19 @@
 import { useMemo, useState } from "react";
-import type { PersonProfile, MailKnowledgeRecord } from "@mail-agent/shared-types";
+import type { EventCluster, PersonProfile, MailKnowledgeRecord } from "@mail-agent/shared-types";
 import { useApp } from "../../../contexts/AppContext";
+import { useDrawerStore } from "../../drawer";
 import { CalmPill, CalmSectionLabel, CalmSurface } from "../../ui/Calm";
 
 interface PersonsProfilePanelProps {
   persons: PersonProfile[];
   mails: MailKnowledgeRecord[];
+  events: EventCluster[];
 }
 
-export function PersonsProfilePanel({ persons, mails }: PersonsProfilePanelProps) {
+export function PersonsProfilePanel({ persons, mails, events }: PersonsProfilePanelProps) {
   const { locale } = useApp();
-  const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const openDrawer = useDrawerStore((state) => state.openDrawer);
 
   const dateLocale = locale === "zh" ? "zh-CN" : locale === "ja" ? "ja-JP" : "en-US";
   const labels = {
@@ -26,7 +28,14 @@ export function PersonsProfilePanel({ persons, mails }: PersonsProfilePanelProps
     mailCount: locale === "zh" ? "邮件数" : locale === "ja" ? "メール数" : "Mail count",
     interactions: locale === "zh" ? "交互次数" : locale === "ja" ? "やり取り" : "Interactions",
     updatedAt: locale === "zh" ? "最后更新" : locale === "ja" ? "最終更新" : "Updated",
-    pickPrompt: locale === "zh" ? "选择一个人物查看详情" : locale === "ja" ? "人物を選ぶと詳細が表示されます" : "Select a person to inspect details",
+    openDrawer: locale === "zh" ? "打开人物叠页" : locale === "ja" ? "人物ページを開く" : "Open profile page",
+    noMatches: locale === "zh" ? "没有匹配的人物" : locale === "ja" ? "一致する人物はありません" : "No matching people",
+    intro:
+      locale === "zh"
+        ? "人物卡片作为知识库索引停留在主页面，完整画像与往来邮件通过右侧叠页展开。"
+        : locale === "ja"
+          ? "人物カードを索引として残し、詳細は右側の重なったページで開きます。"
+          : "Use people cards as the index and open full relationship context in stacked right-side pages.",
     mailsUnit: locale === "zh" ? "封邮件" : locale === "ja" ? "通のメール" : "mails",
   };
 
@@ -43,18 +52,28 @@ export function PersonsProfilePanel({ persons, mails }: PersonsProfilePanelProps
     [persons, searchQuery]
   );
 
-  const selectedPerson =
-    filteredPersons.find((person) => person.personId === selectedPersonId) ??
-    filteredPersons[0] ??
-    null;
-
-  const relatedMails = useMemo(
-    () =>
-      selectedPerson
-        ? mails.filter((mail) => mail.personId === selectedPerson.personId)
-        : [],
-    [mails, selectedPerson]
+  const mailCountByPersonId = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const mail of mails) {
+      counts.set(mail.personId, (counts.get(mail.personId) ?? 0) + 1);
+    }
+    return counts;
+  }, [mails]);
+  const eventNameById = useMemo(
+    () => Object.fromEntries(events.map((event) => [event.eventId, event.name])),
+    [events]
   );
+
+  const getRelatedMails = (person: PersonProfile) =>
+    mails.filter((mail) => mail.personId === person.personId);
+
+  const openPersonDrawer = (person: PersonProfile) => {
+    openDrawer("personProfileDetail", {
+      person,
+      relatedMails: getRelatedMails(person),
+      eventNameById,
+    });
+  };
 
   const formatDate = (dateStr: string) => {
     try {
@@ -69,10 +88,14 @@ export function PersonsProfilePanel({ persons, mails }: PersonsProfilePanelProps
   };
 
   const getImportanceTone = (importance: number) => {
-    if (importance >= 8) return "urgent";
-    if (importance >= 5) return "warning";
+    const normalized = importance > 1 ? importance / 10 : importance;
+    if (normalized >= 0.8) return "urgent";
+    if (normalized >= 0.5) return "warning";
     return "muted";
   };
+
+  const formatImportance = (importance: number) =>
+    importance > 1 ? `${importance}/10` : `${Math.round(importance * 100)}%`;
 
   if (persons.length === 0) {
     return (
@@ -86,125 +109,80 @@ export function PersonsProfilePanel({ persons, mails }: PersonsProfilePanelProps
   }
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
-      <CalmSurface className="flex min-h-[36rem] flex-col p-5" beam>
-        <CalmSectionLabel>{labels.explorer}</CalmSectionLabel>
+    <div className="flex min-h-full flex-col gap-5">
+      <CalmSurface className="p-5" beam>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <CalmSectionLabel>{labels.explorer}</CalmSectionLabel>
+            <h2 className="mt-2 text-xl font-semibold tracking-[-0.02em] text-[color:var(--ink)]">
+              {labels.detail}
+            </h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-[color:var(--ink-muted)]">{labels.intro}</p>
+          </div>
+          <div className="rounded-[1.15rem] border border-[color:var(--border-info)] bg-[color:var(--surface-info)] px-4 py-3 text-right">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[color:var(--pill-info-ink)]">
+              People
+            </p>
+            <p className="mt-1 text-lg font-semibold text-[color:var(--ink)]">{filteredPersons.length}</p>
+          </div>
+        </div>
+
         <input
           type="text"
           placeholder={labels.search}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="calm-input mt-4 w-full px-4 py-2.5 text-sm"
+          className="calm-input mt-5 w-full px-4 py-2.5 text-sm"
         />
-
-        <div className="mt-4 flex-1 space-y-2 overflow-auto">
-          {filteredPersons.map((person) => {
-            const isSelected = selectedPerson?.personId === person.personId;
-            const mailCount = mails.filter((mail) => mail.personId === person.personId).length;
-            return (
-              <button
-                key={person.personId}
-                type="button"
-                onClick={() => setSelectedPersonId(person.personId)}
-                className={`w-full rounded-[1.1rem] border px-4 py-4 text-left transition ${
-                  isSelected
-                    ? "border-[color:var(--border-strong)] bg-[color:var(--surface-elevated)] shadow-[var(--shadow-soft)]"
-                    : "border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] hover:border-[color:var(--border-strong)] hover:bg-[color:var(--surface-elevated)]"
-                }`}
-              >
-                <div className="flex items-center gap-4">
-                  <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,rgba(17,40,79,0.92),rgba(86,154,255,0.78))] text-lg font-semibold text-white shadow-[var(--shadow-soft)]">
-                    {person.name.charAt(0).toUpperCase()}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h4 className="truncate text-sm font-semibold text-[color:var(--ink)]">{person.name}</h4>
-                      <CalmPill tone={getImportanceTone(person.importance)}>{labels.importance} {person.importance}</CalmPill>
-                    </div>
-                    <p className="mt-1 text-sm text-[color:var(--ink-muted)]">{person.role || labels.unknownRole}</p>
-                    <p className="mt-1 truncate text-xs text-[color:var(--ink-subtle)]">{person.email}</p>
-                    <div className="mt-2 flex flex-wrap gap-3 text-xs text-[color:var(--ink-subtle)]">
-                      <span>{mailCount} {labels.mailsUnit}</span>
-                      <span>{person.recentInteractions} {labels.interactions}</span>
-                    </div>
-                  </div>
-                </div>
-              </button>
-            );
-          })}
-        </div>
       </CalmSurface>
 
-      <CalmSurface className="min-h-[36rem] p-6">
-        {selectedPerson ? (
-          <div className="space-y-5">
-            <div className="flex items-center gap-4">
-              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[linear-gradient(135deg,rgba(17,40,79,0.92),rgba(86,154,255,0.78))] text-2xl font-semibold text-white shadow-[var(--shadow-soft)]">
-                {selectedPerson.name.charAt(0).toUpperCase()}
-              </div>
-              <div className="min-w-0">
-                <CalmSectionLabel>{labels.detail}</CalmSectionLabel>
-                <h3 className="mt-1 text-xl font-semibold text-[color:var(--ink)]">{selectedPerson.name}</h3>
-                <p className="text-sm text-[color:var(--ink-muted)]">{selectedPerson.role || labels.unknownRole}</p>
-                <p className="text-sm text-[color:var(--ink-subtle)]">{selectedPerson.email}</p>
-              </div>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-3">
-              {[
-                [labels.importance, selectedPerson.importance],
-                [labels.mailCount, relatedMails.length],
-                [labels.interactions, selectedPerson.recentInteractions],
-              ].map(([label, value]) => (
-                <div
-                  key={String(label)}
-                  className="rounded-[1rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] p-4 text-center"
-                >
-                  <p className="text-2xl font-bold text-[color:var(--ink)]">{value}</p>
-                  <p className="mt-1 text-xs text-[color:var(--ink-subtle)]">{label}</p>
+      <div className="grid gap-3 lg:grid-cols-2">
+        {filteredPersons.map((person, index) => {
+          const mailCount = mailCountByPersonId.get(person.personId) ?? 0;
+          return (
+            <button
+              key={person.personId}
+              type="button"
+              onClick={() => openPersonDrawer(person)}
+              className={`mail-stack-card group rounded-[1.35rem] border bg-[color:var(--surface-elevated)] p-5 text-left transition duration-150 hover:-translate-y-0.5 hover:border-[color:var(--border-info)] hover:bg-[color:var(--surface-soft)] ${
+                index === 0 ? "border-[color:var(--border-info)]" : "border-[color:var(--border-soft)]"
+              }`}
+              aria-label={`打开人物详情：${person.name || person.personId}`}
+            >
+              <div className="flex items-start gap-4">
+                <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,rgba(17,40,79,0.92),rgba(86,154,255,0.78))] text-xl font-semibold text-white shadow-[var(--shadow-soft)]">
+                  {person.name.charAt(0).toUpperCase()}
                 </div>
-              ))}
-            </div>
-
-            <div>
-              <p className="mb-2 text-sm font-medium text-[color:var(--ink)]">{labels.profile}</p>
-              <div className="rounded-[1rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] p-4 text-sm leading-7 text-[color:var(--ink-muted)]">
-                {selectedPerson.profile}
-              </div>
-            </div>
-
-            <div>
-              <p className="mb-3 text-sm font-medium text-[color:var(--ink)]">
-                {labels.relatedMails} ({relatedMails.length})
-              </p>
-              <div className="space-y-2">
-                {relatedMails.slice(0, 5).map((mail) => (
-                  <div
-                    key={mail.mailId}
-                    className="rounded-[1rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-4 py-3"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-[color:var(--ink)]">{mail.subject}</p>
-                        <p className="mt-1 line-clamp-2 text-xs leading-6 text-[color:var(--ink-subtle)]">{mail.summary}</p>
-                      </div>
-                      <span className="text-xs text-[color:var(--ink-subtle)]">{formatDate(mail.receivedAt)}</span>
-                    </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="truncate text-base font-semibold text-[color:var(--ink)]">{person.name}</h3>
+                    <CalmPill tone={getImportanceTone(person.importance)}>
+                      {labels.importance} {formatImportance(person.importance)}
+                    </CalmPill>
                   </div>
-                ))}
+                  <p className="mt-1 text-sm text-[color:var(--ink-muted)]">{person.role || labels.unknownRole}</p>
+                  <p className="mt-1 truncate text-xs text-[color:var(--ink-subtle)]">{person.email}</p>
+                  <p className="mt-3 line-clamp-2 text-sm leading-6 text-[color:var(--ink-muted)]">{person.profile}</p>
+                  <div className="mt-3 flex flex-wrap gap-3 text-xs text-[color:var(--ink-subtle)]">
+                    <span>{mailCount} {labels.mailsUnit}</span>
+                    <span>{person.recentInteractions} {labels.interactions}</span>
+                    <span>{labels.updatedAt}: {formatDate(person.lastUpdated)}</span>
+                  </div>
+                  <p className="mt-4 text-xs font-semibold text-[color:var(--pill-info-ink)] transition group-hover:translate-x-0.5">
+                    {labels.openDrawer} →
+                  </p>
+                </div>
               </div>
-            </div>
+            </button>
+          );
+        })}
 
-            <p className="text-xs text-[color:var(--ink-subtle)]">
-              {labels.updatedAt}: {formatDate(selectedPerson.lastUpdated)}
-            </p>
+        {filteredPersons.length === 0 ? (
+          <div className="rounded-[1.25rem] border border-dashed border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-4 py-8 text-center text-sm text-[color:var(--ink-subtle)] lg:col-span-2">
+            {labels.noMatches}
           </div>
-        ) : (
-          <div className="flex h-full items-center justify-center text-sm text-[color:var(--ink-subtle)]">
-            {labels.pickPrompt}
-          </div>
-        )}
-      </CalmSurface>
+        ) : null}
+      </div>
     </div>
   );
 }

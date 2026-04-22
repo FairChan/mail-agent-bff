@@ -1,16 +1,12 @@
-import { type ReactNode } from "react";
-
 interface LoadingStateProps {
-  /** 骨架屏行数 */
   rows?: number;
-  /** 自定义高度（px）*/
   height?: number;
 }
 
 export function SkeletonBlock({ className = "h-4 rounded" }: { className?: string }) {
   return (
     <div
-      className={`animate-pulse bg-zinc-200 ${className}`}
+      className={`bg-[rgba(223,230,240,0.9)] dark:bg-[rgba(40,50,66,0.92)] ${className}`}
       aria-hidden="true"
     />
   );
@@ -19,10 +15,10 @@ export function SkeletonBlock({ className = "h-4 rounded" }: { className?: strin
 export function FormSkeleton() {
   return (
     <div className="space-y-3" aria-label="加载中">
-      <SkeletonBlock className="h-10 w-full rounded-lg" />
-      <SkeletonBlock className="h-10 w-full rounded-lg" />
-      <SkeletonBlock className="h-10 w-full rounded-lg" />
-      <SkeletonBlock className="h-10 w-1/2 rounded-lg" />
+      <SkeletonBlock className="h-10 w-full rounded-[1rem]" />
+      <SkeletonBlock className="h-10 w-full rounded-[1rem]" />
+      <SkeletonBlock className="h-10 w-full rounded-[1rem]" />
+      <SkeletonBlock className="h-10 w-1/2 rounded-[1rem]" />
     </div>
   );
 }
@@ -34,11 +30,14 @@ export function InboxSkeleton() {
         <SkeletonBlock className="h-4 w-24 rounded" />
         <SkeletonBlock className="h-4 w-16 rounded" />
       </div>
-      {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className="flex items-center gap-3 rounded-xl border border-zinc-100 bg-white p-3">
+      {Array.from({ length: 6 }).map((_, index) => (
+        <div
+          key={index}
+          className="flex items-center gap-3 rounded-[1.15rem] border border-[color:var(--border-soft)] bg-[color:var(--surface-elevated)] p-3 shadow-[var(--shadow-inset)]"
+        >
           <SkeletonBlock className="h-10 w-10 shrink-0 rounded-full" />
           <div className="min-w-0 flex-1 space-y-2">
-            <div className="flex justify-between">
+            <div className="flex justify-between gap-3">
               <SkeletonBlock className="h-3 w-32 rounded" />
               <SkeletonBlock className="h-3 w-16 rounded" />
             </div>

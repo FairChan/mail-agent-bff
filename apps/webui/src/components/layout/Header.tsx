@@ -8,6 +8,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { useApp } from "../../contexts/AppContext";
 import { useMail } from "../../contexts/MailContext";
 import { NotificationCenter } from "../notification";
+import { BrandLogo } from "../shared/BrandLogo";
 import { RefreshIcon } from "../shared/Icons";
 import { AnimatedThemeToggle } from "../ui/AnimatedThemeToggle";
 import { CalmButton, CalmPill } from "../ui/Calm";
@@ -138,9 +139,13 @@ export function Header({ onMenuToggle }: HeaderProps) {
       const digestKey = `${sourceKey}:${notificationSnapshot.dailyDigest.dateKey}`;
       if (!seenDigestNotificationKeysRef.current.has(digestKey)) {
         seenDigestNotificationKeysRef.current.add(digestKey);
-        const { digest } = notificationSnapshot.dailyDigest;
+        const dailyDigest = notificationSnapshot.dailyDigest;
+        const { digest } = dailyDigest;
         const notification = new window.Notification("今日邮件摘要", {
-          body: `${digest.total} 封邮件，${digest.urgentImportant} 封紧急重要，${digest.upcomingCount} 个近期事项`,
+          body:
+            dailyDigest.summaryLines?.[0] ||
+            dailyDigest.summaryTitle ||
+            `${digest.total} 封邮件，${digest.urgentImportant} 封紧急重要，${digest.upcomingCount} 个近期事项`,
           tag: `mail-digest-${digestKey}`,
         });
         notification.onclick = () => {
@@ -186,9 +191,11 @@ export function Header({ onMenuToggle }: HeaderProps) {
           </CalmButton>
 
           <div className="flex min-w-0 items-center gap-2">
-            <span className="hidden text-[11px] font-semibold uppercase tracking-[0.22em] text-[color:var(--ink-subtle)] sm:inline">
-              Mery
-            </span>
+            <BrandLogo
+              showText
+              imageClassName="h-8 w-8"
+              textClassName="hidden text-[11px] uppercase tracking-[0.22em] text-[color:var(--ink-subtle)] sm:inline"
+            />
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-[color:var(--ink)]" title={activeSource?.name || activeSource?.emailHint || copy.noMailbox}>
                 {activeSource?.name || activeSource?.emailHint || copy.noMailbox}

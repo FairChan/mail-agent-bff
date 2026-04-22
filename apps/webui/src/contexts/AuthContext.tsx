@@ -8,6 +8,7 @@ import type {
   AuthUser,
   SessionEnvelope,
 } from "@mail-agent/shared-types";
+import { getApiErrorMessage, readApiPayload } from "../utils/http";
 
 // ========== 类型定义 ==========
 
@@ -90,19 +91,22 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 // ========== API 函数 ==========
 
 async function apiFetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const headers = new Headers(options?.headers ?? undefined);
+  const hasBody = options?.body !== undefined && options.body !== null;
+  if (hasBody && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
   const response = await fetch(endpoint, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options?.headers,
-    },
+    headers,
     credentials: "include",
   });
 
-  const data = await response.json();
+  const data = await readApiPayload(response);
 
   if (!response.ok) {
-    throw new Error(data.error || data.message || "Request failed");
+    throw new Error(getApiErrorMessage(data, response));
   }
 
   return data as T;

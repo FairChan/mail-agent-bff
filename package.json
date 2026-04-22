@@ -15,6 +15,7 @@
     "db:migrate:status": "npm run db:ensure-local && cd apps/bff && npx prisma migrate status --schema prisma/schema.prisma",
     "build": "npm run build --workspaces --if-present",
     "check": "npm run check --workspaces --if-present",
+    "check:repo-boundary": "node scripts/check-repo-boundary.mjs",
     "check:standard": "node scripts/harness-check-standard.mjs",
     "check:tenant": "node scripts/harness-domain-check.mjs tenant",
     "check:audit": "node scripts/harness-domain-check.mjs audit",

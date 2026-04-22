@@ -100,7 +100,7 @@ export function StatsView() {
                         ? "bg-blue-500"
                         : row.key === "urgent_not_important"
                           ? "bg-orange-500"
-                          : "bg-zinc-400"
+                          : "bg-[linear-gradient(90deg,rgba(134,145,168,0.95),rgba(171,182,200,0.92))]"
                     }`}
                   style={{ width: `${Math.max(2, Math.min(100, row.ratio))}%` }}
                 />
@@ -168,7 +168,7 @@ export function StatsView() {
       {tomorrowDdlCount > 0 && (
         <CalmSurface tone="urgent" className="p-4">
           <h3 className="flex items-center gap-2 text-sm font-semibold text-[color:var(--pill-urgent-ink)]">
-            <span className="flex h-2 w-2 animate-pulse rounded-full bg-red-500" />
+            <span className="flex h-2 w-2 rounded-full bg-red-500" />
             {locale === "zh" ? "紧急提醒" : locale === "ja" ? "緊急通知" : "Urgent Reminder"}
           </h3>
           <p className="mt-2 text-sm text-[color:var(--ink)]">

@@ -9,6 +9,21 @@ import {
   listMicrosoftInboxMessagesPage,
   MicrosoftGraphHttpError,
 } from "./microsoft-graph.js";
+import {
+  getGoogleMessageById,
+  listGoogleInboxMessages,
+  listGoogleInboxMessagesPage,
+} from "./google-gmail.js";
+import type { MailPersonalizationEntityState, MailSourceConnectionType, MailSourceProvider } from "@mail-agent/shared-types";
+import { getImapCredentialForSource } from "./imap-credential-store.js";
+import {
+  getImapMessageById,
+  listImapInboxMessages,
+} from "./imap-mail.js";
+import {
+  applyPersonalizationToTriageItems,
+  getResolvedMailPersonalizationRuntimeProfile,
+} from "./personalization-learning-store.js";
 
 const rawToolContentItemSchema = z.object({
   type: z.string(),
@@ -50,6 +65,10 @@ const composioMultiExecutePayloadSchema = z.object({
     .optional(),
   error: z.string().nullable().optional(),
 }).passthrough();
+
+type MailPersonalizationRuntimeProfile = NonNullable<
+  Awaited<ReturnType<typeof getResolvedMailPersonalizationRuntimeProfile>>
+>;
 
 const outlookAddressSchema = z.object({
   emailAddress: z
@@ -101,7 +120,8 @@ export type MailSourceContext = {
   userId?: string;
   sourceId: string;
   sessionToken?: string;
-  connectionType?: "composio" | "microsoft";
+  provider?: MailSourceProvider;
+  connectionType?: MailSourceConnectionType;
   microsoftAccountId?: string;
   mailboxUserId?: string;
   connectedAccountId?: string;
@@ -126,11 +146,12 @@ export type TriageMailItem = {
   hasAttachments: boolean;
   webLink: string;
   quadrant: MailQuadrant;
-  score: {
+  score?: {
     urgency: number;
     importance: number;
   };
-  reasons: string[];
+  reasons?: string[];
+  personalization?: MailPersonalizationEntityState;
 };
 
 export type MailTriageResponse = {
@@ -984,6 +1005,7 @@ export function normalizeSourceContext(sourceContext?: MailSourceContext): MailS
 
   const sessionToken = sourceContext.sessionToken?.trim();
   const userId = sourceContext.userId?.trim();
+  const provider = sourceContext.provider;
   const connectionType = sourceContext.connectionType;
   const microsoftAccountId = sourceContext.microsoftAccountId?.trim();
   const mailboxUserId = sourceContext.mailboxUserId?.trim();
@@ -993,6 +1015,7 @@ export function normalizeSourceContext(sourceContext?: MailSourceContext): MailS
     ...(userId ? { userId } : {}),
     sourceId,
     ...(sessionToken ? { sessionToken } : {}),
+    ...(provider ? { provider } : {}),
     ...(connectionType ? { connectionType } : {}),
     ...(microsoftAccountId ? { microsoftAccountId } : {}),
     ...(mailboxUserId ? { mailboxUserId } : {}),
@@ -1015,6 +1038,54 @@ function isDirectMicrosoftSourceContext(
       typeof sourceContext.microsoftAccountId === "string" &&
       sourceContext.microsoftAccountId.trim().length > 0
   );
+}
+
+function isImapPasswordSourceContext(
+  sourceContext: MailSourceContext | null
+): sourceContext is MailSourceContext & {
+  userId: string;
+  connectionType: "imap_password";
+} {
+  return Boolean(
+    sourceContext &&
+      sourceContext.connectionType === "imap_password" &&
+      typeof sourceContext.userId === "string" &&
+      sourceContext.userId.trim().length > 0
+  );
+}
+
+function isDirectGmailSourceContext(
+  sourceContext: MailSourceContext | null
+): sourceContext is MailSourceContext & {
+  userId: string;
+  sessionToken: string;
+  connectionType: "gmail_oauth";
+  mailboxUserId: string;
+} {
+  return Boolean(
+    sourceContext &&
+      sourceContext.connectionType === "gmail_oauth" &&
+      typeof sourceContext.userId === "string" &&
+      sourceContext.userId.trim().length > 0 &&
+      typeof sourceContext.sessionToken === "string" &&
+      sourceContext.sessionToken.trim().length > 0 &&
+      typeof sourceContext.mailboxUserId === "string" &&
+      sourceContext.mailboxUserId.trim().length > 0
+  );
+}
+
+async function requireImapCredential(sourceContext: MailSourceContext & { userId: string }) {
+  const credential = await getImapCredentialForSource(sourceContext.userId, sourceContext.sourceId);
+  if (!credential) {
+    throw new Error("IMAP_CREDENTIAL_NOT_FOUND");
+  }
+  return {
+    host: credential.host,
+    port: credential.port,
+    secure: credential.secure,
+    username: credential.username,
+    password: credential.password,
+  };
 }
 
 function withSourceAwareToolArguments(
@@ -1278,7 +1349,41 @@ function forceScoresByQuadrant(
   };
 }
 
-function normalizeMessage(message: OutlookMessage, priorityRules: MailPriorityRule[] = []): TriageMailItem | null {
+function firstMatchedPersonalizationItem(terms: string[], candidates: string[]): string | null {
+  if (terms.length === 0 || candidates.length === 0) {
+    return null;
+  }
+
+  const normalizedCandidates = candidates
+    .map((candidate) => candidate.toLowerCase())
+    .filter((candidate) => candidate.trim().length > 0);
+  if (normalizedCandidates.length === 0) {
+    return null;
+  }
+
+  for (const term of terms) {
+    const normalizedTerm = term.toLowerCase().trim();
+    if (!normalizedTerm) {
+      continue;
+    }
+    if (normalizedCandidates.some((candidate) => candidate.includes(normalizedTerm))) {
+      return term;
+    }
+  }
+
+  return null;
+}
+
+function looksLikeOptionalRequest(text: string): boolean {
+  return /\b(invitation|invite|optional|volunteer|join us|register now|rsvp|survey|collaboration)\b/i.test(text)
+    || /(讲座|报名|邀请|招募|合作|志愿者|可选|参加)/.test(text);
+}
+
+function normalizeMessage(
+  message: OutlookMessage,
+  priorityRules: MailPriorityRule[] = [],
+  personalizationProfile: MailPersonalizationRuntimeProfile | null = null
+): TriageMailItem | null {
   const id = message.id?.trim();
   if (!id) {
     return null;
@@ -1296,13 +1401,14 @@ function normalizeMessage(message: OutlookMessage, priorityRules: MailPriorityRu
 
   const scored = classifyMessage({
     subject,
+    fromName,
     fromAddress,
     bodyPreview,
     importance,
     isRead,
     hasAttachments,
     receivedDateTime,
-  }, priorityRules);
+  }, priorityRules, personalizationProfile);
 
   return {
     id,
@@ -1349,6 +1455,7 @@ function normalizeInboxViewerMessage(message: OutlookMessage): MailInboxViewerIt
 
 function classifyMessage(input: {
   subject: string;
+  fromName: string;
   fromAddress: string;
   bodyPreview: string;
   importance: string;
@@ -1356,13 +1463,15 @@ function classifyMessage(input: {
   hasAttachments: boolean;
   receivedDateTime: string;
 },
-priorityRules: MailPriorityRule[] = []): {
+priorityRules: MailPriorityRule[] = [],
+personalizationProfile: MailPersonalizationRuntimeProfile | null = null): {
   quadrant: MailQuadrant;
   urgency: number;
   importance: number;
   reasons: string[];
 } {
   const text = `${input.subject}\n${input.bodyPreview}`.toLowerCase();
+  const senderText = `${input.fromName}\n${input.fromAddress}`.toLowerCase();
   const fromAddress = input.fromAddress.toLowerCase();
   const reasons: string[] = [];
 
@@ -1453,6 +1562,65 @@ priorityRules: MailPriorityRule[] = []): {
     if (ageHours <= 6) {
       urgency += 1;
       reasons.push("近 6 小时新邮件");
+    }
+  }
+
+  if (personalizationProfile) {
+    const vipMatch = firstMatchedPersonalizationItem(personalizationProfile.vipSenders, [senderText]);
+    if (vipMatch) {
+      urgency = Math.max(urgency, 4);
+      importance = Math.max(importance, 4);
+      reasons.unshift(`命中个人优先联系人: ${vipMatch}`);
+    }
+
+    const urgentSignalMatch = firstMatchedPersonalizationItem(personalizationProfile.urgentSignals, [text, input.subject]);
+    if (urgentSignalMatch) {
+      urgency += 2;
+      reasons.push(`命中个人紧急信号: ${urgentSignalMatch}`);
+    }
+
+    const hiddenImportantMatch = firstMatchedPersonalizationItem(
+      personalizationProfile.hiddenImportantTopics,
+      [text, input.subject]
+    );
+    if (hiddenImportantMatch) {
+      importance += 2;
+      reasons.push(`命中个人高价值主题: ${hiddenImportantMatch}`);
+    }
+
+    const noiseMatch = firstMatchedPersonalizationItem(personalizationProfile.noiseSources, [senderText, text]);
+    if (noiseMatch && !vipMatch) {
+      urgency = Math.min(urgency, 1);
+      importance = Math.min(importance, 1);
+      reasons.push(`命中个人噪音来源: ${noiseMatch}`);
+    }
+
+    if (personalizationProfile.softRejectNotes && looksLikeOptionalRequest(text) && !vipMatch) {
+      importance = Math.max(0, importance - 1);
+      reasons.push(
+        personalizationProfile.softRejectMode === "draft_reject"
+          ? "命中可委婉拒绝请求，后续适合生成草稿"
+          : "命中可委婉拒绝请求，优先降低处理优先级"
+      );
+    }
+
+    const dueSignal = detectInsightType(text);
+    const dueAt = extractDueDateTime(
+      `${input.subject}\n${input.bodyPreview}`,
+      new Date(),
+      dueSignal?.type ?? "event",
+      normalizeTimeZone(undefined)
+    );
+    if (dueAt) {
+      const hoursUntil = (dueAt.dueAt.getTime() - Date.now()) / 3600000;
+      if (hoursUntil <= personalizationProfile.deadlineAlertWindowHours) {
+        urgency = Math.max(urgency, hoursUntil <= 0 ? 4 : 3);
+        reasons.push(
+          hoursUntil <= 0
+            ? "命中个人时间窗口: 事项已到期或逾期"
+            : `命中个人时间窗口: 剩余 ${Math.max(1, Math.ceil(hoursUntil))} 小时`
+        );
+      }
     }
   }
 
@@ -1905,6 +2073,22 @@ export async function queryInboxMessagesForSource(
     return messages.map((message) => outlookMessageSchema.parse(message));
   }
 
+  if (isDirectGmailSourceContext(normalizedContext)) {
+    const messages = await listGoogleInboxMessages(
+      normalizedContext.sessionToken,
+      normalizedContext.mailboxUserId,
+      requestedTop,
+      normalizedContext.userId
+    );
+    return messages.map((message) => outlookMessageSchema.parse(message));
+  }
+
+  if (isImapPasswordSourceContext(normalizedContext)) {
+    const credential = await requireImapCredential(normalizedContext);
+    const messages = await listImapInboxMessages(credential, { limit: requestedTop });
+    return messages.map((message) => outlookMessageSchema.parse(message));
+  }
+
   const executeQuery = async (top: number, skip: number): Promise<OutlookMessage[]> => {
     const raw = await invokeTool({
       tool: "COMPOSIO_MULTI_EXECUTE_TOOL",
@@ -2018,6 +2202,30 @@ export async function queryInboxMessagesPageForSource(
     return messages.map((message) => outlookMessageSchema.parse(message));
   }
 
+  if (isDirectGmailSourceContext(normalizedContext)) {
+    const messages = await listGoogleInboxMessagesPage(
+      normalizedContext.sessionToken,
+      normalizedContext.mailboxUserId,
+      {
+        top: requestedTop,
+        skip,
+        receivedAfter: options.receivedAfter,
+        userId: normalizedContext.userId,
+      }
+    );
+    return messages.map((message) => outlookMessageSchema.parse(message));
+  }
+
+  if (isImapPasswordSourceContext(normalizedContext)) {
+    const credential = await requireImapCredential(normalizedContext);
+    const messages = await listImapInboxMessages(credential, {
+      limit: requestedTop,
+      skip,
+      receivedAfter: options.receivedAfter,
+    });
+    return messages.map((message) => outlookMessageSchema.parse(message));
+  }
+
   const raw = await invokeTool({
     tool: "COMPOSIO_MULTI_EXECUTE_TOOL",
     args: composioMultiExecuteArgs(
@@ -2072,10 +2280,12 @@ async function fetchInboxNormalized(
   const cappedLimit = Math.max(5, Math.min(limit, 100));
   const messages = await queryInboxMessagesForSource(cappedLimit, sourceContext);
 
-  return messages
+  const normalized = messages
     .slice(0, cappedLimit)
-    .map((message) => normalizeMessage(message, priorityRules))
+    .map((message) => normalizeMessage(message, priorityRules, null))
     .filter((item): item is TriageMailItem => item !== null);
+
+  return applyPersonalizationToTriageItems(sourceContext?.userId, sourceContext?.sourceId, normalized);
 }
 
 export async function listInboxForViewer(
@@ -2216,7 +2426,7 @@ export async function buildMailInsights(
       dueDateLabel: dueInTz.dateTimeLabel,
       confidence: clamp((typeConfidence + due.confidence) / 2, 0.58, 0.99),
       evidence: typeDetection ? `${typeDetection.evidence}; ${due.evidence}` : due.evidence,
-      reasons: [...item.reasons, ...(typeDetection?.reasons ?? [])],
+      reasons: [...(item.reasons ?? []), ...(typeDetection?.reasons ?? [])],
     });
   }
 
@@ -2641,6 +2851,14 @@ export async function createCalendarEventFromInsight(
     };
   }
 
+  if (isDirectGmailSourceContext(normalizedContext)) {
+    throw new Error("MAIL_PROVIDER_CALENDAR_UNSUPPORTED");
+  }
+
+  if (isImapPasswordSourceContext(normalizedContext)) {
+    throw new Error("MAIL_PROVIDER_CALENDAR_UNSUPPORTED");
+  }
+
   const raw = await invokeTool({
     tool: "COMPOSIO_MULTI_EXECUTE_TOOL",
     args: composioMultiExecuteArgs(
@@ -2724,6 +2942,10 @@ export async function deleteCalendarEventById(
       }
       throw error;
     }
+  }
+
+  if (isDirectGmailSourceContext(normalizedContext)) {
+    throw new Error("MAIL_PROVIDER_CALENDAR_UNSUPPORTED");
   }
 
   const raw = await invokeTool({
@@ -2820,6 +3042,10 @@ export async function isCalendarEventExisting(
     }
   }
 
+  if (isDirectGmailSourceContext(normalizedContext)) {
+    throw new Error("MAIL_PROVIDER_CALENDAR_UNSUPPORTED");
+  }
+
   const raw = await invokeTool({
     tool: "COMPOSIO_MULTI_EXECUTE_TOOL",
     args: composioMultiExecuteArgs(
@@ -2880,6 +3106,52 @@ export async function getMailMessageById(
       messageId,
       normalizedContext.userId
     );
+    const bodyContent = detail.body?.content ?? "";
+
+    return {
+      id: detail.id ?? messageId,
+      subject: detail.subject ?? "(No Subject)",
+      fromName: detail.from?.emailAddress?.name ?? detail.from?.emailAddress?.address ?? "Unknown Sender",
+      fromAddress: detail.from?.emailAddress?.address ?? "",
+      receivedDateTime: detail.receivedDateTime ?? "",
+      importance: (detail.importance ?? "normal").toLowerCase(),
+      isRead: Boolean(detail.isRead),
+      hasAttachments: Boolean(detail.hasAttachments),
+      webLink: detail.webLink ?? "",
+      bodyContentType: detail.body?.contentType ?? "text",
+      bodyContent,
+      bodyPreview: detail.bodyPreview ?? stripHtmlTags(bodyContent).slice(0, 320),
+    };
+  }
+
+  if (isDirectGmailSourceContext(normalizedContext)) {
+    const detail = await getGoogleMessageById(
+      normalizedContext.sessionToken,
+      normalizedContext.mailboxUserId,
+      messageId,
+      normalizedContext.userId
+    );
+    const bodyContent = detail.body?.content ?? "";
+
+    return {
+      id: detail.id ?? messageId,
+      subject: detail.subject ?? "(No Subject)",
+      fromName: detail.from?.emailAddress?.name ?? detail.from?.emailAddress?.address ?? "Unknown Sender",
+      fromAddress: detail.from?.emailAddress?.address ?? "",
+      receivedDateTime: detail.receivedDateTime ?? "",
+      importance: (detail.importance ?? "normal").toLowerCase(),
+      isRead: Boolean(detail.isRead),
+      hasAttachments: Boolean(detail.hasAttachments),
+      webLink: detail.webLink ?? "",
+      bodyContentType: detail.body?.contentType ?? "text",
+      bodyContent,
+      bodyPreview: detail.bodyPreview ?? stripHtmlTags(bodyContent).slice(0, 320),
+    };
+  }
+
+  if (isImapPasswordSourceContext(normalizedContext)) {
+    const credential = await requireImapCredential(normalizedContext);
+    const detail = await getImapMessageById(credential, messageId);
     const bodyContent = detail.body?.content ?? "";
 
     return {

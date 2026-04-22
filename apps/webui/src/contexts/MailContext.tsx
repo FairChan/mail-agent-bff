@@ -6,6 +6,8 @@
 import React, { createContext, useContext, useReducer, useCallback, useEffect, useRef } from "react";
 import type {
   MailSourceProfile,
+  MailSourceProvider,
+  MailProviderDescriptor,
   MailTriageResult,
   MailInsightsResult,
   MailInboxViewerResponse,
@@ -20,8 +22,13 @@ import type {
   EventCluster,
   PersonProfile,
   MailProcessingRunResult,
+  MailPersonalizationFeedbackInput,
+  MailPersonalizationLearningResult,
+  MailPersonalizationTargetType,
+  MailQuadrant,
 } from "@mail-agent/shared-types";
 import { useAuth } from "./AuthContext";
+import { getApiErrorMessage, readApiPayload } from "../utils/http";
 
 // ========== 类型定义 ==========
 
@@ -30,6 +37,7 @@ interface MailState {
   sources: MailSourceProfile[];
   activeSourceId: string | null;
   isLoadingSources: boolean;
+  providers: MailProviderDescriptor[];
 
   // 邮件列表
   inbox: MailInboxViewerResponse | null;
@@ -59,6 +67,11 @@ interface MailState {
   // 知识库
   kbStats: KnowledgeBaseStats | null;
   kbMails: MailKnowledgeRecord[];
+  kbMailsPage: {
+    total: number;
+    limit: number;
+    offset: number;
+  };
   kbEvents: EventCluster[];
   kbPersons: PersonProfile[];
 
@@ -66,8 +79,13 @@ interface MailState {
   error: string | null;
 }
 
+function mailBodyCacheKey(sourceId: string | null | undefined, messageId: string): string {
+  return `${sourceId ?? "no-source"}::${messageId}`;
+}
+
 type MailAction =
   | { type: "SET_SOURCES"; payload: { sources: MailSourceProfile[]; activeSourceId: string | null } }
+  | { type: "SET_PROVIDERS"; payload: MailProviderDescriptor[] }
   | { type: "SET_ACTIVE_SOURCE"; payload: string | null }
   | { type: "SET_LOADING_SOURCES"; payload: boolean }
   | { type: "SET_INBOX"; payload: MailInboxViewerResponse }
@@ -85,7 +103,7 @@ type MailAction =
   | { type: "SET_PROCESSING_RESULT"; payload: MailProcessingRunResult | null }
   | { type: "SET_PROCESSING_MAIL"; payload: boolean }
   | { type: "SET_KB_STATS"; payload: KnowledgeBaseStats }
-  | { type: "SET_KB_MAILS"; payload: MailKnowledgeRecord[] }
+  | { type: "SET_KB_MAILS"; payload: { mails: MailKnowledgeRecord[]; total?: number; limit?: number; offset?: number } }
   | { type: "SET_KB_EVENTS"; payload: EventCluster[] }
   | { type: "SET_KB_PERSONS"; payload: PersonProfile[] }
   | { type: "SET_ERROR"; payload: string | null }
@@ -96,6 +114,7 @@ const initialState: MailState = {
   sources: [],
   activeSourceId: null,
   isLoadingSources: false,
+  providers: [],
   inbox: null,
   triage: null,
   insights: null,
@@ -113,6 +132,11 @@ const initialState: MailState = {
   isProcessingMail: false,
   kbStats: null,
   kbMails: [],
+  kbMailsPage: {
+    total: 0,
+    limit: 20,
+    offset: 0,
+  },
   kbEvents: [],
   kbPersons: [],
   error: null,
@@ -128,6 +152,7 @@ function mailReducer(state: MailState, action: MailAction): MailState {
         isLoadingSources: false,
         ...(state.activeSourceId !== action.payload.activeSourceId
           ? {
+              mailBodyCache: new Map(),
               inbox: null,
               triage: null,
               insights: null,
@@ -142,6 +167,7 @@ function mailReducer(state: MailState, action: MailAction): MailState {
               processingResult: null,
               kbStats: null,
               kbMails: [],
+              kbMailsPage: initialState.kbMailsPage,
               kbEvents: [],
               kbPersons: [],
               error: null,
@@ -152,6 +178,7 @@ function mailReducer(state: MailState, action: MailAction): MailState {
       return {
         ...state,
         activeSourceId: action.payload,
+        mailBodyCache: new Map(),
         inbox: null,
         triage: null,
         insights: null,
@@ -166,10 +193,13 @@ function mailReducer(state: MailState, action: MailAction): MailState {
         processingResult: null,
         kbStats: null,
         kbMails: [],
+        kbMailsPage: initialState.kbMailsPage,
         kbEvents: [],
         kbPersons: [],
         error: null,
       };
+    case "SET_PROVIDERS":
+      return { ...state, providers: action.payload };
     case "SET_LOADING_SOURCES":
       return { ...state, isLoadingSources: action.payload };
     case "SET_INBOX":
@@ -212,7 +242,15 @@ function mailReducer(state: MailState, action: MailAction): MailState {
     case "SET_KB_STATS":
       return { ...state, kbStats: action.payload };
     case "SET_KB_MAILS":
-      return { ...state, kbMails: action.payload };
+      return {
+        ...state,
+        kbMails: action.payload.mails,
+        kbMailsPage: {
+          total: action.payload.total ?? action.payload.mails.length,
+          limit: action.payload.limit ?? state.kbMailsPage.limit,
+          offset: action.payload.offset ?? state.kbMailsPage.offset,
+        },
+      };
     case "SET_KB_EVENTS":
       return { ...state, kbEvents: action.payload };
     case "SET_KB_PERSONS":
@@ -234,11 +272,23 @@ function mailReducer(state: MailState, action: MailAction): MailState {
 interface MailContextValue extends MailState {
   // 邮件源操作
   fetchSources: () => Promise<void>;
+  fetchProviders: () => Promise<void>;
   addSource: (label: string, mailboxUserId?: string, connectedAccountId?: string) => Promise<void>;
+  connectImapSource: (input: {
+    provider: Exclude<MailSourceProvider, "outlook">;
+    label?: string;
+    email: string;
+    username?: string;
+    appPassword: string;
+    imapHost?: string;
+    imapPort?: number;
+    imapSecure?: boolean;
+  }) => Promise<MailSourceProfile | null>;
   selectSource: (sourceId: string) => Promise<void>;
   deleteSource: (sourceId: string) => Promise<void>;
   verifySource: (sourceId: string) => Promise<boolean>;
   launchOutlookAuth: (forceReinitiate?: boolean) => Promise<OutlookLaunchResult>;
+  launchGmailAuth: () => Promise<GmailLaunchResult>;
 
   // 邮件操作
   fetchInbox: (limit?: number) => Promise<void>;
@@ -255,6 +305,19 @@ interface MailContextValue extends MailState {
   addPriorityRule: (rule: Omit<MailPriorityRule, "id" | "createdAt" | "updatedAt">) => Promise<void>;
   updatePriorityRule: (rule: MailPriorityRule) => Promise<void>;
   deletePriorityRule: (ruleId: string) => Promise<void>;
+
+  // 个性化反馈
+  fetchPersonalizationLearning: () => Promise<MailPersonalizationLearningResult | null>;
+  recordPersonalizationFeedback: (
+    events: MailPersonalizationFeedbackInput[],
+    options?: { silent?: boolean; sourceId?: string | null }
+  ) => Promise<MailPersonalizationLearningResult | null>;
+  savePersonalizationOverride: (input: {
+    targetType: MailPersonalizationTargetType;
+    targetId: string;
+    quadrant: MailQuadrant | null;
+    context?: MailPersonalizationFeedbackInput["context"];
+  }) => Promise<MailPersonalizationLearningResult | null>;
 
   // 通知偏好
   fetchNotificationPrefs: () => Promise<void>;
@@ -280,7 +343,7 @@ interface MailContextValue extends MailState {
 
   // 知识库
   fetchKbStats: () => Promise<void>;
-  fetchKbMails: () => Promise<void>;
+  fetchKbMails: (options?: { limit?: number; offset?: number }) => Promise<void>;
   fetchKbEvents: () => Promise<void>;
   fetchKbPersons: () => Promise<void>;
   triggerSummarize: (options?: { windowDays?: number; limit?: number }) => Promise<string | null>;
@@ -313,6 +376,28 @@ type OutlookLaunchResult = {
   sessionInstructions?: string | null;
 };
 
+type GmailLaunchResult = {
+  status: string;
+  ready: boolean;
+  sourceId: string | null;
+  activeSourceId: string | null;
+  mailboxUserIdHint: string | null;
+  message: string | null;
+  account: {
+    email: string;
+    mailboxUserIdHint: string;
+  } | null;
+  source: MailSourceProfile | null;
+};
+
+type DirectAuthAttemptState = "pending" | "succeeded" | "failed" | "unknown";
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 const MailContext = createContext<MailContextValue | null>(null);
 
 // ========== API 函数 ==========
@@ -335,10 +420,10 @@ async function apiFetch<T>(endpoint: string, options?: RequestInit): Promise<T> 
     credentials: "include",
   });
 
-  const data = await response.json();
+  const data = await readApiPayload(response);
 
   if (!response.ok) {
-    throw new Error(data.error || data.message || "Request failed");
+    throw new Error(getApiErrorMessage(data, response));
   }
 
   return data as T;
@@ -414,6 +499,19 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     }
   }, [apiBase]);
 
+  const fetchProviders = useCallback(async () => {
+    try {
+      const data = await apiFetch<{ ok: boolean; result: { providers: MailProviderDescriptor[] } }>(
+        `${apiBase}/mail/providers`
+      );
+      if (data.ok) {
+        dispatch({ type: "SET_PROVIDERS", payload: data.result.providers });
+      }
+    } catch (err) {
+      dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to fetch providers" });
+    }
+  }, [apiBase]);
+
   const addSource = useCallback(async (label: string, mailboxUserId?: string, connectedAccountId?: string) => {
     try {
       await apiFetch(`${apiBase}/mail/sources`, {
@@ -429,6 +527,32 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
       await fetchSources();
     } catch (err) {
       dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to add source" });
+      throw err;
+    }
+  }, [apiBase, fetchSources]);
+
+  const connectImapSource = useCallback(async (input: {
+    provider: Exclude<MailSourceProvider, "outlook">;
+    label?: string;
+    email: string;
+    username?: string;
+    appPassword: string;
+    imapHost?: string;
+    imapPort?: number;
+    imapSecure?: boolean;
+  }) => {
+    try {
+      const data = await apiFetch<{
+        ok: boolean;
+        result: { source: MailSourceProfile; activeSourceId: string | null };
+      }>(`${apiBase}/mail/connections/imap`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      await fetchSources();
+      return data.result.source ?? null;
+    } catch (err) {
+      dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to connect IMAP source" });
       throw err;
     }
   }, [apiBase, fetchSources]);
@@ -472,6 +596,110 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     }
   }, [apiBase]);
 
+  const mergeConnectedSource = useCallback((payload: {
+    source?: MailSourceProfile | null;
+    sourceId?: string | null;
+    activeSourceId?: string | null;
+  }) => {
+    if (!payload.source && !payload.sourceId && !payload.activeSourceId) {
+      return;
+    }
+
+    const existing = stateRef.current.sources;
+    const mergedSources = payload.source
+      ? [
+          payload.source,
+          ...existing.filter((source) => source.id !== payload.source?.id),
+        ]
+      : existing;
+
+    dispatch({
+      type: "SET_SOURCES",
+      payload: {
+        sources: mergedSources,
+        activeSourceId: payload.activeSourceId ?? payload.sourceId ?? stateRef.current.activeSourceId,
+      },
+    });
+    void fetchSources();
+  }, [fetchSources]);
+
+  const pollDirectAuthStatus = useCallback(async <TPayload extends Record<string, unknown>>(
+    provider: "outlook" | "gmail",
+    attemptId: string
+  ): Promise<{
+    state: DirectAuthAttemptState;
+    message: string | null;
+    detail: string | null;
+    payload: TPayload | null;
+  } | null> => {
+    const deadline = Date.now() + 20000;
+    let lastObserved:
+      | {
+          state: DirectAuthAttemptState;
+          message: string | null;
+          detail: string | null;
+          payload: TPayload | null;
+        }
+      | null = null;
+
+    while (Date.now() < deadline) {
+      try {
+        const data = await apiFetch<{
+          ok: boolean;
+          result: {
+            state: DirectAuthAttemptState;
+            message?: string | null;
+            detail?: string | null;
+            payload?: TPayload | null;
+          };
+        }>(`${apiBase}/mail/connections/${provider}/direct/status?attemptId=${encodeURIComponent(attemptId)}`);
+        const result = data.result;
+        lastObserved = {
+          state: result.state,
+          message: result.message ?? null,
+          detail: result.detail ?? null,
+          payload: result.payload ?? null,
+        };
+        if (result.state === "succeeded" || result.state === "failed") {
+          return lastObserved;
+        }
+      } catch (error) {
+        if (error instanceof Error && (error.message.includes("Unauthorized") || error.message.includes("401"))) {
+          throw error;
+        }
+      }
+
+      await delay(450);
+    }
+
+    return lastObserved;
+  }, [apiBase]);
+
+  const resolveAllowedDirectAuthOrigins = useCallback(() => {
+    if (typeof window === "undefined") {
+      return new Set<string>();
+    }
+
+    const allowed = new Set<string>([window.location.origin]);
+    const addOrigin = (value: string) => {
+      try {
+        const parsed = new URL(value, window.location.origin);
+        allowed.add(parsed.origin);
+
+        if (parsed.hostname === "127.0.0.1") {
+          allowed.add(`${parsed.protocol}//localhost${parsed.port ? `:${parsed.port}` : ""}`);
+        } else if (parsed.hostname === "localhost") {
+          allowed.add(`${parsed.protocol}//127.0.0.1${parsed.port ? `:${parsed.port}` : ""}`);
+        }
+      } catch {
+        // Ignore invalid origins.
+      }
+    };
+
+    addOrigin(apiBase);
+    return allowed;
+  }, [apiBase]);
+
   const launchOutlookAuth = useCallback(async (_forceReinitiate = false): Promise<OutlookLaunchResult> => {
     if (typeof window === "undefined") {
       throw new Error("Microsoft Outlook 登录只能在浏览器环境中发起");
@@ -494,7 +722,7 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
       }
 
       let settled = false;
-      let closeFailureTimer: number | null = null;
+      let closeRecoveryStarted = false;
       const timeout = window.setTimeout(() => {
         if (settled) {
           return;
@@ -511,35 +739,132 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
 
       const poll = window.setInterval(() => {
         if (!settled && popup.closed) {
-          if (closeFailureTimer !== null) {
+          if (closeRecoveryStarted) {
             return;
           }
-          closeFailureTimer = window.setTimeout(() => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            cleanup();
-            reject(new Error("Microsoft 登录窗口已关闭，授权未完成。"));
-          }, 1200);
+          closeRecoveryStarted = true;
+          window.clearInterval(poll);
+          void recoverAfterPopupClosed();
         }
       }, 500);
 
       const cleanup = () => {
         window.clearTimeout(timeout);
         window.clearInterval(poll);
-        if (closeFailureTimer !== null) {
-          window.clearTimeout(closeFailureTimer);
-          closeFailureTimer = null;
-        }
         window.removeEventListener("message", onMessage);
       };
 
-      const onMessage = (event: MessageEvent) => {
-        if (event.source !== popup) {
+      const resolveSuccess = (payload: {
+        status?: string;
+        ready?: boolean;
+        sourceId?: string | null;
+        activeSourceId?: string | null;
+        mailboxUserIdHint?: string | null;
+        message?: string | null;
+        account?: {
+          accountId: string;
+          displayName: string;
+          email: string;
+          mailboxUserIdHint: string;
+        } | null;
+        source?: MailSourceProfile | null;
+      }) => {
+        settled = true;
+        cleanup();
+        try {
+          popup.close();
+        } catch {
+          // Ignore close failures.
+        }
+
+        mergeConnectedSource(payload);
+        resolve({
+          status: payload.status || "connected",
+          ready: Boolean(payload.ready),
+          sourceId: payload.sourceId ?? null,
+          activeSourceId: payload.activeSourceId ?? null,
+          mailboxUserIdHint: payload.mailboxUserIdHint ?? payload.account?.mailboxUserIdHint ?? null,
+          message: payload.message ?? null,
+          account: payload.account ?? null,
+          source: payload.source ?? null,
+        });
+      };
+
+      const resolveFailure = (
+        payload: { detail?: string | null; message?: string | null; error?: string | null } | null | undefined,
+        fallback: string
+      ) => {
+        settled = true;
+        cleanup();
+        try {
+          popup.close();
+        } catch {
+          // Ignore close failures.
+        }
+        reject(new Error(payload?.detail || payload?.message || payload?.error || fallback));
+      };
+
+      const recoverAfterPopupClosed = async () => {
+        try {
+          const status = await pollDirectAuthStatus<{
+            status?: string;
+            ready?: boolean;
+            sourceId?: string | null;
+            activeSourceId?: string | null;
+            mailboxUserIdHint?: string | null;
+            message?: string | null;
+            account?: {
+              accountId: string;
+              displayName: string;
+              email: string;
+              mailboxUserIdHint: string;
+            } | null;
+            source?: MailSourceProfile | null;
+            detail?: string | null;
+            error?: string | null;
+          }>("outlook", attemptId);
+          if (settled) {
+            return;
+          }
+          if (status?.state === "succeeded" && status.payload) {
+            resolveSuccess(status.payload);
+            return;
+          }
+          if (status?.state === "failed") {
+            resolveFailure(
+              status.payload ?? {
+                detail: status.detail,
+                message: status.message,
+              },
+              "Microsoft 登录失败"
+            );
+            return;
+          }
+        } catch (error) {
+          if (settled) {
+            return;
+          }
+          resolveFailure(
+            {
+              message: error instanceof Error ? error.message : "Microsoft 登录失败",
+            },
+            "Microsoft 登录失败"
+          );
           return;
         }
 
+        if (settled) {
+          return;
+        }
+        resolveFailure(
+          {
+            message: "Microsoft 登录窗口已关闭，授权未完成。",
+          },
+          "Microsoft 登录窗口已关闭，授权未完成。"
+        );
+      };
+
+      const onMessage = (event: MessageEvent) => {
         const payload = event.data as
           | {
               type?: string;
@@ -567,10 +892,95 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
           return;
         }
 
+        const allowedOrigins = resolveAllowedDirectAuthOrigins();
+        if (event.source !== popup || !allowedOrigins.has(event.origin)) {
+          return;
+        }
+
         if (payload.attemptId !== attemptId) {
           return;
         }
 
+        if (!payload.ok) {
+          resolveFailure(payload, "Microsoft 登录失败");
+          return;
+        }
+
+        resolveSuccess(payload);
+      };
+
+      window.addEventListener("message", onMessage);
+      popup.focus();
+    });
+  }, [apiBase, mergeConnectedSource, pollDirectAuthStatus, resolveAllowedDirectAuthOrigins]);
+
+  const launchGmailAuth = useCallback(async (): Promise<GmailLaunchResult> => {
+    if (typeof window === "undefined") {
+      throw new Error("Google Gmail 登录只能在浏览器环境中发起");
+    }
+
+    return await new Promise<GmailLaunchResult>((resolve, reject) => {
+      const attemptId =
+        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `attempt-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const popup = window.open(
+        `${apiBase}/mail/connections/gmail/direct/start?appOrigin=${encodeURIComponent(window.location.origin)}&attemptId=${encodeURIComponent(attemptId)}`,
+        "true-sight-gmail-direct-auth",
+        "popup=yes,width=540,height=720,resizable=yes,scrollbars=yes"
+      );
+
+      if (!popup) {
+        reject(new Error("浏览器拦截了 Gmail 登录窗口，请允许弹窗后重试。"));
+        return;
+      }
+
+      let settled = false;
+      let closeRecoveryStarted = false;
+      const timeout = window.setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        try {
+          popup.close();
+        } catch {
+          // Ignore close failures.
+        }
+        reject(new Error("Gmail 登录超时，请重试。"));
+      }, 180000);
+
+      const poll = window.setInterval(() => {
+        if (!settled && popup.closed) {
+          if (closeRecoveryStarted) {
+            return;
+          }
+          closeRecoveryStarted = true;
+          window.clearInterval(poll);
+          void recoverAfterPopupClosed();
+        }
+      }, 500);
+
+      const cleanup = () => {
+        window.clearTimeout(timeout);
+        window.clearInterval(poll);
+        window.removeEventListener("message", onMessage);
+      };
+
+      const resolveSuccess = (payload: {
+        status?: string;
+        ready?: boolean;
+        sourceId?: string | null;
+        activeSourceId?: string | null;
+        mailboxUserIdHint?: string | null;
+        message?: string | null;
+        account?: {
+          email: string;
+          mailboxUserIdHint: string;
+        } | null;
+        source?: MailSourceProfile | null;
+      }) => {
         settled = true;
         cleanup();
         try {
@@ -579,29 +989,7 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
           // Ignore close failures.
         }
 
-        if (!payload.ok) {
-          reject(new Error(payload.detail || payload.message || payload.error || "Microsoft 登录失败"));
-          return;
-        }
-
-        if (payload.source || payload.sourceId || payload.activeSourceId) {
-          const existing = stateRef.current.sources;
-          const mergedSources = payload.source
-            ? [
-                payload.source,
-                ...existing.filter((source) => source.id !== payload.source?.id),
-              ]
-            : existing;
-          dispatch({
-            type: "SET_SOURCES",
-            payload: {
-              sources: mergedSources,
-              activeSourceId: payload.activeSourceId ?? payload.sourceId ?? stateRef.current.activeSourceId,
-            },
-          });
-          void fetchSources();
-        }
-
+        mergeConnectedSource(payload);
         resolve({
           status: payload.status || "connected",
           ready: Boolean(payload.ready),
@@ -614,10 +1002,125 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
         });
       };
 
+      const resolveFailure = (
+        payload: { detail?: string | null; message?: string | null; error?: string | null } | null | undefined,
+        fallback: string
+      ) => {
+        settled = true;
+        cleanup();
+        try {
+          popup.close();
+        } catch {
+          // Ignore close failures.
+        }
+        reject(new Error(payload?.detail || payload?.message || payload?.error || fallback));
+      };
+
+      const recoverAfterPopupClosed = async () => {
+        try {
+          const status = await pollDirectAuthStatus<{
+            status?: string;
+            ready?: boolean;
+            sourceId?: string | null;
+            activeSourceId?: string | null;
+            mailboxUserIdHint?: string | null;
+            message?: string | null;
+            account?: {
+              email: string;
+              mailboxUserIdHint: string;
+            } | null;
+            source?: MailSourceProfile | null;
+            detail?: string | null;
+            error?: string | null;
+          }>("gmail", attemptId);
+          if (settled) {
+            return;
+          }
+          if (status?.state === "succeeded" && status.payload) {
+            resolveSuccess(status.payload);
+            return;
+          }
+          if (status?.state === "failed") {
+            resolveFailure(
+              status.payload ?? {
+                detail: status.detail,
+                message: status.message,
+              },
+              "Gmail 登录失败"
+            );
+            return;
+          }
+        } catch (error) {
+          if (settled) {
+            return;
+          }
+          resolveFailure(
+            {
+              message: error instanceof Error ? error.message : "Gmail 登录失败",
+            },
+            "Gmail 登录失败"
+          );
+          return;
+        }
+
+        if (settled) {
+          return;
+        }
+        resolveFailure(
+          {
+            message: "Gmail 登录窗口已关闭，授权未完成。",
+          },
+          "Gmail 登录窗口已关闭，授权未完成。"
+        );
+      };
+
+      const onMessage = (event: MessageEvent) => {
+        const payload = event.data as
+          | {
+              type?: string;
+              attemptId?: string;
+              ok?: boolean;
+              status?: string;
+              ready?: boolean;
+              sourceId?: string | null;
+              activeSourceId?: string | null;
+              mailboxUserIdHint?: string | null;
+              message?: string | null;
+              account?: {
+                email: string;
+                mailboxUserIdHint: string;
+              } | null;
+              source?: MailSourceProfile | null;
+              error?: string;
+              detail?: string;
+            }
+          | null;
+
+        if (!payload || payload.type !== "gmail-direct-auth") {
+          return;
+        }
+
+        const allowedOrigins = resolveAllowedDirectAuthOrigins();
+        if (event.source !== popup || !allowedOrigins.has(event.origin)) {
+          return;
+        }
+
+        if (payload.attemptId !== attemptId) {
+          return;
+        }
+
+        if (!payload.ok) {
+          resolveFailure(payload, "Gmail 登录失败");
+          return;
+        }
+
+        resolveSuccess(payload);
+      };
+
       window.addEventListener("message", onMessage);
       popup.focus();
     });
-  }, [apiBase, fetchSources]);
+  }, [apiBase, mergeConnectedSource, pollDirectAuthStatus, resolveAllowedDirectAuthOrigins]);
 
   // ========== 邮件操作 ==========
 
@@ -700,17 +1203,29 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
   }, [apiBase]);
 
   const fetchMailDetail = useCallback(async (messageId: string): Promise<{ bodyContent?: string; bodyPreview?: string } | null> => {
+    const requestedSourceId = activeSourceIdRef.current;
+    if (!requestedSourceId) {
+      return null;
+    }
     dispatch({ type: "SET_LOADING_DETAIL", payload: true });
     try {
       const data = await apiFetch<{ ok: boolean; result: { bodyContent?: string; bodyPreview?: string } }>(
-        `${apiBase}/mail/message?messageId=${encodeURIComponent(messageId)}`
+        `${apiBase}/mail/message?messageId=${encodeURIComponent(messageId)}&sourceId=${encodeURIComponent(requestedSourceId)}`
       );
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        dispatch({ type: "SET_LOADING_DETAIL", payload: false });
+        return null;
+      }
       if (data.ok) {
         dispatch({ type: "SET_LOADING_DETAIL", payload: false });
         return data.result;
       }
       return null;
     } catch (err) {
+      if (activeSourceIdRef.current !== requestedSourceId) {
+        dispatch({ type: "SET_LOADING_DETAIL", payload: false });
+        return null;
+      }
       dispatch({ type: "SET_ERROR", payload: err instanceof Error ? err.message : "Failed to fetch mail detail" });
       dispatch({ type: "SET_LOADING_DETAIL", payload: false });
       return null;
@@ -723,6 +1238,26 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
         method: "POST",
         body: JSON.stringify({ messageId, subject, type, dueAt, sourceId: state.activeSourceId ?? undefined }),
       });
+      if (state.activeSourceId) {
+        void apiFetch(`${apiBase}/mail/personalization-feedback`, {
+          method: "POST",
+          body: JSON.stringify({
+            sourceId: state.activeSourceId,
+            events: [
+              {
+                targetType: "mail",
+                targetId: messageId,
+                eventType: "calendar_sync",
+                context: {
+                  rawMessageId: messageId,
+                  mailId: messageId,
+                  subject,
+                },
+              },
+            ],
+          }),
+        }).catch(() => undefined);
+      }
     } catch (err) {
       throw err;
     }
@@ -798,6 +1333,127 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
       throw err;
     }
   }, [apiBase, fetchPriorityRules]);
+
+  const fetchPersonalizationLearning = useCallback(async (): Promise<MailPersonalizationLearningResult | null> => {
+    const requestedSourceId = activeSourceIdRef.current;
+    if (!requestedSourceId) {
+      return null;
+    }
+    try {
+      const data = await apiFetch<{
+        ok: boolean;
+        result?: {
+          sourceId: string;
+          state: MailPersonalizationLearningResult;
+        };
+      }>(`${apiBase}/mail/personalization-learning?sourceId=${encodeURIComponent(requestedSourceId)}`);
+      if (!data.ok || !data.result || activeSourceIdRef.current !== requestedSourceId) {
+        return null;
+      }
+      return data.result.state;
+    } catch (err) {
+      dispatch({
+        type: "SET_ERROR",
+        payload: err instanceof Error ? err.message : "Failed to load personalization learning state",
+      });
+      return null;
+    }
+  }, [apiBase]);
+
+  const recordPersonalizationFeedback = useCallback(async (
+    events: MailPersonalizationFeedbackInput[],
+    options?: { silent?: boolean; sourceId?: string | null }
+  ): Promise<MailPersonalizationLearningResult | null> => {
+    const requestedSourceId = options?.sourceId ?? activeSourceIdRef.current;
+    if (!requestedSourceId || events.length === 0) {
+      return null;
+    }
+
+    try {
+      const data = await apiFetch<{
+        ok: boolean;
+        result?: {
+          sourceId: string;
+          state: MailPersonalizationLearningResult;
+        };
+      }>(`${apiBase}/mail/personalization-feedback`, {
+        method: "POST",
+        keepalive: true,
+        body: JSON.stringify({
+          sourceId: requestedSourceId,
+          events,
+        }),
+      });
+      if (!data.ok || !data.result || activeSourceIdRef.current !== requestedSourceId) {
+        return null;
+      }
+      return data.result.state;
+    } catch (err) {
+      if (!options?.silent) {
+        dispatch({
+          type: "SET_ERROR",
+          payload: err instanceof Error ? err.message : "Failed to record personalization feedback",
+        });
+      }
+      return null;
+    }
+  }, [apiBase]);
+
+  async function refreshPersonalizationViews() {
+    await Promise.allSettled([
+      fetchInbox(30),
+      fetchTriage(50),
+      fetchKbStats(),
+      fetchKbMails({
+        limit: stateRef.current.kbMailsPage.limit,
+        offset: stateRef.current.kbMailsPage.offset,
+      }),
+      fetchKbEvents(),
+      fetchKbPersons(),
+    ]);
+  }
+
+  const savePersonalizationOverride = useCallback(async (input: {
+    targetType: MailPersonalizationTargetType;
+    targetId: string;
+    quadrant: MailQuadrant | null;
+    context?: MailPersonalizationFeedbackInput["context"];
+  }): Promise<MailPersonalizationLearningResult | null> => {
+    const requestedSourceId = activeSourceIdRef.current;
+    if (!requestedSourceId) {
+      throw new Error("No active mail source selected");
+    }
+
+    try {
+      const data = await apiFetch<{
+        ok: boolean;
+        result?: {
+          sourceId: string;
+          state: MailPersonalizationLearningResult;
+        };
+      }>(`${apiBase}/mail/personalization-overrides`, {
+        method: "POST",
+        body: JSON.stringify({
+          sourceId: requestedSourceId,
+          ...input,
+        }),
+      });
+
+      if (!data.ok || !data.result || activeSourceIdRef.current !== requestedSourceId) {
+        return null;
+      }
+
+      await refreshPersonalizationViews();
+
+      return data.result.state;
+    } catch (err) {
+      dispatch({
+        type: "SET_ERROR",
+        payload: err instanceof Error ? err.message : "Failed to save personalization override",
+      });
+      throw err;
+    }
+  }, [apiBase, fetchInbox, fetchTriage]);
 
   // ========== 通知偏好 ==========
 
@@ -968,6 +1624,26 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
           failedKeys.add(calendarDraftKey(item));
         }
       }
+    }
+
+    if (sourceId && syncedIds.size > 0) {
+      const syncedDrafts = items.filter((item) => syncedIds.has(item.messageId));
+      void apiFetch(`${apiBase}/mail/personalization-feedback`, {
+        method: "POST",
+        body: JSON.stringify({
+          sourceId,
+          events: syncedDrafts.map((item) => ({
+            targetType: "mail" as const,
+            targetId: item.messageId,
+            eventType: "calendar_sync" as const,
+            context: {
+              rawMessageId: item.messageId,
+              mailId: item.messageId,
+              subject: item.subject,
+            },
+          })),
+        }),
+      }).catch(() => undefined);
     }
 
     return {
@@ -1244,29 +1920,46 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     }
   }, [apiBase, state.activeSourceId]);
 
-  const fetchKbMails = useCallback(async () => {
+  const fetchKbMails = useCallback(async (options?: { limit?: number; offset?: number }) => {
     const requestedSourceId = state.activeSourceId;
     if (!requestedSourceId) {
       return;
     }
+    const limit = Math.min(200, Math.max(1, options?.limit ?? stateRef.current.kbMailsPage.limit));
+    const offset = Math.max(0, options?.offset ?? 0);
     try {
       const params = new URLSearchParams({
-        pageSize: "50",
+        pageSize: String(limit),
+        offset: String(offset),
         sourceId: requestedSourceId,
       });
       const data = await apiFetch<{
         ok: boolean;
         mails?: MailKnowledgeRecord[];
-        result?: { mails?: MailKnowledgeRecord[] };
+        total?: number;
+        limit?: number;
+        offset?: number;
+        result?: { mails?: MailKnowledgeRecord[]; total?: number; limit?: number; offset?: number };
       }>(
         `${apiBase}/mail-kb/mails?${params.toString()}`
       );
       const mails = data.mails ?? data.result?.mails ?? [];
+      const total = data.total ?? data.result?.total ?? mails.length;
+      const resolvedLimit = data.limit ?? data.result?.limit ?? limit;
+      const resolvedOffset = data.offset ?? data.result?.offset ?? offset;
       if (activeSourceIdRef.current !== requestedSourceId) {
         return;
       }
       if (data.ok) {
-        dispatch({ type: "SET_KB_MAILS", payload: mails });
+        dispatch({
+          type: "SET_KB_MAILS",
+          payload: {
+            mails,
+            total,
+            limit: resolvedLimit,
+            offset: resolvedOffset,
+          },
+        });
       }
     } catch (err) {
       if (activeSourceIdRef.current !== requestedSourceId) {
@@ -1361,10 +2054,15 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
       if (data.ok && record) {
         dispatch({
           type: "SET_KB_MAILS",
-          payload: [
-            record,
-            ...stateRef.current.kbMails.filter((mail) => mail.mailId !== record.mailId && mail.rawId !== record.rawId),
-          ].slice(0, 50),
+          payload: {
+            mails: [
+              record,
+              ...stateRef.current.kbMails.filter((mail) => mail.mailId !== record.mailId && mail.rawId !== record.rawId),
+            ].slice(0, stateRef.current.kbMailsPage.limit),
+            total: Math.max(stateRef.current.kbMailsPage.total, stateRef.current.kbMails.length + 1),
+            limit: stateRef.current.kbMailsPage.limit,
+            offset: 0,
+          },
         });
         void fetchKbStats();
       }
@@ -1421,8 +2119,14 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
   // ========== 预加载邮件内容 ==========
 
   const prefetchMailBodies = useCallback((messageIds: string[]) => {
+    const sourceId = activeSourceIdRef.current;
+    if (!sourceId) {
+      return;
+    }
     // 过滤掉已经在缓存中的 ID
-    const uncachedIds = messageIds.filter((id) => !state.mailBodyCache.has(id));
+    const uncachedIds = messageIds.filter(
+      (id) => !state.mailBodyCache.has(mailBodyCacheKey(sourceId, id))
+    );
 
     // 并行预取前 5 个邮件的内容
     uncachedIds.slice(0, 5).forEach((messageId) => {
@@ -1430,7 +2134,10 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
         if (result?.bodyContent) {
           dispatch({
             type: "SET_MAIL_BODY_CACHE",
-            payload: { messageId, bodyContent: result.bodyContent },
+            payload: {
+              messageId: mailBodyCacheKey(sourceId, messageId),
+              bodyContent: result.bodyContent,
+            },
           });
         }
       }).catch(() => {
@@ -1443,12 +2150,13 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
 
   useEffect(() => {
     if (isAuthenticated) {
+      fetchProviders();
       fetchSources();
       fetchPriorityRules();
     } else {
       resetMailState();
     }
-  }, [isAuthenticated, fetchSources, fetchPriorityRules, resetMailState]);
+  }, [isAuthenticated, fetchProviders, fetchSources, fetchPriorityRules, resetMailState]);
 
   useEffect(() => {
     if (isAuthenticated && state.activeSourceId) {
@@ -1459,11 +2167,14 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
   const value: MailContextValue = {
     ...state,
     fetchSources,
+    fetchProviders,
     addSource,
+    connectImapSource,
     selectSource,
     deleteSource,
     verifySource,
     launchOutlookAuth,
+    launchGmailAuth,
     fetchInbox,
     fetchTriage,
     fetchInsights,
@@ -1474,6 +2185,9 @@ export function MailProvider({ children, apiBase = "/api" }: MailProviderProps) 
     addPriorityRule,
     updatePriorityRule,
     deletePriorityRule,
+    fetchPersonalizationLearning,
+    recordPersonalizationFeedback,
+    savePersonalizationOverride,
     fetchNotificationPrefs,
     updateNotificationPrefs,
 	    pollNotifications,

@@ -21,6 +21,9 @@ const envSchema = z.object({
   LLM_PROVIDER_API_KEY: z.string().optional(),
   LLM_PROVIDER_MODEL: z.string().optional(),
   APP_ENCRYPTION_KEY: z.string().default(""),
+  MAIL_PRIVACY_ENABLED: z.string().default("true"),
+  MAIL_PRIVACY_HMAC_KEY: z.string().default(""),
+  MAIL_PRIVACY_KEY_VERSION: z.string().default("v1"),
   SILICONFLOW_API_KEY: z.string().default(""),
   SILICONFLOW_BASE_URL: z.string().default("https://api.siliconflow.cn/v1"),
   SILICONFLOW_MODEL: z.string().default("Pro/zai-org/GLM-5.1"),
@@ -31,6 +34,12 @@ const envSchema = z.object({
   MICROSOFT_SCOPES: z
     .string()
     .default("openid profile email offline_access User.Read Mail.Read Calendars.ReadWrite"),
+  GOOGLE_CLIENT_ID: z.string().default(""),
+  GOOGLE_CLIENT_SECRET: z.string().default(""),
+  GOOGLE_REDIRECT_URI: z.string().default(""),
+  GOOGLE_SCOPES: z
+    .string()
+    .default("https://www.googleapis.com/auth/gmail.readonly"),
   AGENT_SKILLS_DIR: z.string().default(""),
   AGENT_DATA_DIR: z.string().default(""),
   AGENT_MEMORY_MAX_ENTRIES: z.coerce.number().int().min(20).max(2000).default(200),
@@ -92,6 +101,11 @@ const microsoftRedirectUri =
   (publicBaseUrl
     ? `${publicBaseUrl}/api/mail/connections/outlook/direct/callback`
     : "http://127.0.0.1:8787/api/mail/connections/outlook/direct/callback");
+const googleRedirectUri =
+  parsed.data?.GOOGLE_REDIRECT_URI?.trim() ||
+  (publicBaseUrl
+    ? `${publicBaseUrl}/api/mail/connections/gmail/direct/callback`
+    : "http://127.0.0.1:8787/api/mail/connections/gmail/direct/callback");
 
 if (parsed.success) {
   const runtime = parsed.data.AGENT_RUNTIME;
@@ -108,6 +122,21 @@ if (parsed.success) {
     if (!parsed.data.DATABASE_URL?.trim()) missing.push("DATABASE_URL");
     if (!parsed.data.APP_ENCRYPTION_KEY?.trim()) missing.push("APP_ENCRYPTION_KEY");
     if (!parsed.data.MICROSOFT_CLIENT_ID?.trim()) missing.push("MICROSOFT_CLIENT_ID");
+    if (!parseBooleanFlag(parsed.data.REDIS_AUTH_SESSIONS_ENABLED)) {
+      missing.push("REDIS_AUTH_SESSIONS_ENABLED=true");
+    }
+    if (!parseBooleanFlag(parsed.data.PRISMA_AUTH_ENABLED)) {
+      missing.push("PRISMA_AUTH_ENABLED=true");
+    }
+    if (!parseBooleanFlag(parsed.data.ENABLE_EMAIL_PERSISTENCE)) {
+      missing.push("ENABLE_EMAIL_PERSISTENCE=true");
+    }
+    if (parseBooleanFlag(parsed.data.MAIL_SOURCE_MEMORY_FALLBACK_ENABLED)) {
+      missing.push("MAIL_SOURCE_MEMORY_FALLBACK_ENABLED=false");
+    }
+    if (parseBooleanFlag(parsed.data.LOCAL_ADMIN_ENABLED)) {
+      missing.push("LOCAL_ADMIN_ENABLED=false");
+    }
     if (!parsed.data.MICROSOFT_REDIRECT_URI?.trim() && !publicBaseUrl) {
       missing.push("MICROSOFT_REDIRECT_URI or PUBLIC_BASE_URL");
     }
@@ -154,6 +183,9 @@ export const env = {
   llmProviderModel,
   publicBaseUrl,
   appEncryptionKey: parsed.data.APP_ENCRYPTION_KEY.trim(),
+  mailPrivacyEnabled: parseBooleanFlag(parsed.data.MAIL_PRIVACY_ENABLED),
+  mailPrivacyHmacKey: parsed.data.MAIL_PRIVACY_HMAC_KEY.trim(),
+  mailPrivacyKeyVersion: parsed.data.MAIL_PRIVACY_KEY_VERSION.trim() || "v1",
   smtpEnabled: parseBooleanFlag(parsed.data.SMTP_ENABLED),
   smtpSecure: parseBooleanFlag(parsed.data.SMTP_SECURE),
   oauthEnabled: parseBooleanFlag(parsed.data.OAUTH_ENABLED),
@@ -187,6 +219,10 @@ export const env = {
   microsoftTenantId: parsed.data.MICROSOFT_TENANT_ID.trim() || "common",
   microsoftRedirectUri,
   microsoftScopes: parsed.data.MICROSOFT_SCOPES.trim(),
+  googleClientId: parsed.data.GOOGLE_CLIENT_ID.trim(),
+  googleClientSecret: parsed.data.GOOGLE_CLIENT_SECRET.trim(),
+  googleRedirectUri,
+  googleScopes: parsed.data.GOOGLE_SCOPES.trim(),
   agentSkillsDir: parsed.data.AGENT_SKILLS_DIR.trim(),
   agentDataDir: parsed.data.AGENT_DATA_DIR.trim(),
   agentMemoryMaxEntries: parsed.data.AGENT_MEMORY_MAX_ENTRIES,

@@ -2,7 +2,8 @@ import type { FormEvent } from "react";
 import type { AuthLocale, AuthMode } from "../../types";
 import { LoginForm } from "./LoginForm";
 import { RegisterForm } from "./RegisterForm";
-import { CalmBackground, CalmPill, CalmSurface } from "../ui/Calm";
+import { BrandLogo } from "../shared/BrandLogo";
+import { CalmBackground, CalmSurface } from "../ui/Calm";
 
 interface AuthScreenProps {
   authLocale: AuthLocale;
@@ -85,7 +86,14 @@ export function AuthScreen({
       <div className="relative mx-auto grid min-h-[calc(100vh-4rem)] w-full max-w-6xl items-center gap-6 lg:grid-cols-[minmax(0,1.05fr)_minmax(24rem,0.95fr)]">
         <CalmSurface className="hidden min-h-[40rem] p-8 lg:flex lg:flex-col lg:justify-between" beam>
           <div>
-            <CalmPill tone="info">{authCopy.brand}</CalmPill>
+            <div className="inline-flex items-center rounded-full border border-[color:var(--border-info)] bg-[color:var(--surface-info)] px-3 py-1.5">
+              <BrandLogo
+                label={authCopy.brand}
+                showText
+                imageClassName="h-7 w-7"
+                textClassName="text-xs text-[color:var(--pill-info-ink)]"
+              />
+            </div>
             <h1 className="mt-5 max-w-lg text-4xl font-semibold tracking-tight text-[color:var(--ink)]">
               Calm Bento for mailbox triage, knowledge capture, and agent workflows.
             </h1>
@@ -112,7 +120,12 @@ export function AuthScreen({
         <CalmSurface className="w-full max-w-xl justify-self-center p-6 sm:p-7" beam>
           <div className="flex items-center justify-between gap-2">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--ink-subtle)]">{authCopy.brand}</p>
+              <BrandLogo
+                label={authCopy.brand}
+                showText
+                imageClassName="h-8 w-8"
+                textClassName="text-[11px] uppercase tracking-[0.18em] text-[color:var(--ink-subtle)]"
+              />
               <p className="mt-1 text-sm text-[color:var(--ink-muted)]">{isLoginMode ? "Welcome back" : "Create your workspace"}</p>
             </div>
             <div

@@ -16,7 +16,23 @@ export type MailScoreScale = "ratio" | "ten";
 
 export type MailInsightType = "ddl" | "meeting" | "exam" | "event";
 
-export type MailSourceProvider = "outlook";
+export type MailSourceProvider =
+  | "outlook"
+  | "gmail"
+  | "icloud"
+  | "netease163"
+  | "qq"
+  | "aliyun"
+  | "custom_imap";
+
+export type MailSourceConnectionType =
+  | "composio"
+  | "microsoft"
+  | "gmail_oauth"
+  | "imap_password"
+  | "imap_oauth2";
+
+export type MailProviderCapability = "mail_read" | "calendar_write" | "push" | "oauth" | "imap";
 
 export type MailRoutingCheckStatus = "skipped" | "verified" | "failed" | "unverifiable";
 
@@ -51,10 +67,17 @@ export type TriageMailItem = {
   bodyPreview: string;
   webLink: string;
   aiSummary?: string;
-  isRead?: boolean;
-  importance?: string;
-  quadrant?: MailQuadrant;
-  receivedDateTime?: string;
+  isRead: boolean;
+  importance: string;
+  hasAttachments: boolean;
+  quadrant: MailQuadrant;
+  receivedDateTime: string;
+  score?: {
+    urgency: number;
+    importance: number;
+  };
+  reasons?: string[];
+  personalization?: MailPersonalizationEntityState;
 };
 
 export type MailTriageResult = {
@@ -161,7 +184,7 @@ export type MailSourceProfile = {
   id: string;
   name: string;
   provider: MailSourceProvider;
-  connectionType?: "composio" | "microsoft";
+  connectionType?: MailSourceConnectionType;
   microsoftAccountId?: string;
   emailHint: string;
   mailboxUserId?: string;
@@ -171,6 +194,23 @@ export type MailSourceProfile = {
   routingStatus?: MailSourceRoutingStatus;
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type MailProviderImapDefaults = {
+  host: string;
+  port: number;
+  secure: boolean;
+  usernameHint: "email" | "local_part" | "custom";
+};
+
+export type MailProviderDescriptor = {
+  id: MailSourceProvider;
+  label: string;
+  connectionTypes: MailSourceConnectionType[];
+  capabilities: MailProviderCapability[];
+  imap?: MailProviderImapDefaults;
+  notes: string[];
+  setupUrl?: string;
 };
 
 export type MailRoutingProbeResult = {
@@ -192,6 +232,140 @@ export type MailPriorityRule = {
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
+};
+
+export type MailPersonalizationRejectMode = "downgrade_only" | "draft_reject";
+
+export type MailPersonalizationArtifact = {
+  key: string;
+  label: string;
+  path: string;
+};
+
+export type MailPersonalizationAnswers = {
+  urgentSignals: string;
+  hiddenImportantTopics: string;
+  deadlineAlertWindowHours: number;
+  vipSenders: string;
+  softRejectMode: MailPersonalizationRejectMode;
+  softRejectNotes: string;
+  noiseSources: string;
+  notes: string;
+};
+
+export type MailPersonalizationStructuredProfile = {
+  urgentSignals: string[];
+  hiddenImportantTopics: string[];
+  deadlineAlertWindowHours: number;
+  vipSenders: string[];
+  softRejectMode: MailPersonalizationRejectMode;
+  softRejectNotes: string;
+  noiseSources: string[];
+  notes: string[];
+};
+
+export type MailPersonalizationProfile = {
+  profileId: string;
+  sourceId: string;
+  completed: boolean;
+  createdAt: string;
+  updatedAt: string;
+  answers: MailPersonalizationAnswers;
+  profile: MailPersonalizationStructuredProfile;
+  summaryLines: string[];
+  artifacts: MailPersonalizationArtifact[];
+};
+
+export type MailPersonalizationTargetType = "mail" | "event" | "person";
+
+export type MailPersonalizationFeedbackEventType =
+  | "detail_view"
+  | "related_mail_open"
+  | "external_mail_open"
+  | "knowledge_card_saved"
+  | "calendar_sync"
+  | "manual_override";
+
+export type MailPersonalizationEffectiveSource =
+  | "auto"
+  | "manual_mail"
+  | "manual_event"
+  | "manual_person"
+  | "learned";
+
+export type MailPersonalizationEntityState = {
+  effectiveQuadrant: MailQuadrant;
+  source: MailPersonalizationEffectiveSource;
+  manualQuadrant?: MailQuadrant | null;
+  lastFeedbackAt?: string | null;
+  explanation?: string | null;
+};
+
+export type MailPersonalizationFeedbackContext = {
+  rawMessageId?: string;
+  mailId?: string;
+  fromAddress?: string;
+  fromName?: string;
+  subject?: string;
+  personId?: string;
+  personName?: string;
+  personEmail?: string;
+  eventId?: string;
+  eventName?: string;
+  currentQuadrant?: MailQuadrant;
+  tags?: string[];
+};
+
+export type MailPersonalizationFeedbackInput = {
+  targetType: MailPersonalizationTargetType;
+  targetId: string;
+  eventType: MailPersonalizationFeedbackEventType;
+  dwellMs?: number;
+  quadrant?: MailQuadrant;
+  context?: MailPersonalizationFeedbackContext;
+};
+
+export type MailPersonalizationFeedbackEvent = MailPersonalizationFeedbackInput & {
+  id: string;
+  createdAt: string;
+};
+
+export type MailPersonalizationOverride = {
+  targetType: MailPersonalizationTargetType;
+  targetId: string;
+  quadrant: MailQuadrant;
+  updatedAt: string;
+  context?: MailPersonalizationFeedbackContext;
+};
+
+export type MailPersonalizationLearnedSignalKind =
+  | "vip_sender"
+  | "urgent_signal"
+  | "important_topic"
+  | "noise_source";
+
+export type MailPersonalizationLearnedSignal = {
+  kind: MailPersonalizationLearnedSignalKind;
+  value: string;
+  label: string;
+  weight: number;
+  sampleCount: number;
+  lastLearnedAt: string;
+  evidence: string[];
+};
+
+export type MailPersonalizationLearningResult = {
+  updatedAt: string;
+  recentFeedback: MailPersonalizationFeedbackEvent[];
+  overrides: MailPersonalizationOverride[];
+  learnedSignals: {
+    vipSenders: MailPersonalizationLearnedSignal[];
+    urgentSignals: MailPersonalizationLearnedSignal[];
+    hiddenImportantTopics: MailPersonalizationLearnedSignal[];
+    noiseSources: MailPersonalizationLearnedSignal[];
+  };
+  effectiveProfile: MailPersonalizationStructuredProfile;
+  artifacts: MailPersonalizationArtifact[];
 };
 
 // ========== 日历相关 ==========
@@ -342,6 +516,7 @@ export type MailKnowledgeRecord = {
     savedAt: string;
     tags: string[];
   };
+  personalization?: MailPersonalizationEntityState;
 };
 
 export type EventCluster = {
@@ -352,6 +527,7 @@ export type EventCluster = {
   relatedMailIds: string[];
   lastUpdated: string;
   tags: string[];
+  personalization?: MailPersonalizationEntityState;
 };
 
 export type PersonProfile = {
@@ -364,6 +540,7 @@ export type PersonProfile = {
   recentInteractions: number;
   lastUpdated: string;
   avatarUrl?: string;
+  personalization?: MailPersonalizationEntityState;
 };
 
 export type MailSubjectIndex = {
@@ -482,6 +659,16 @@ export type AutoConnectEnvelope = ApiResponse<{
   activeSourceId: string | null;
 }>;
 
+export type MailPersonalizationEnvelope = ApiResponse<{
+  sourceId: string;
+  profile: MailPersonalizationProfile;
+}>;
+
+export type MailPersonalizationLearningEnvelope = ApiResponse<{
+  sourceId: string;
+  state: MailPersonalizationLearningResult;
+}>;
+
 export type NotificationPreferences = {
   urgentPushEnabled: boolean;
   dailyDigestEnabled: boolean;
@@ -517,6 +704,22 @@ export type MailDailyDigestNotification = {
   triggeredAt: string;
   dateKey: string;
   timeZone: string;
+  summaryTitle: string;
+  summaryLines: string[];
+  urgentHighlights: Array<{
+    messageId: string;
+    subject: string;
+    fromName: string;
+    reason: string;
+  }>;
+  scheduleHighlights: Array<{
+    messageId: string;
+    subject: string;
+    type: MailInsightType;
+    dueDateLabel: string;
+  }>;
+  recommendedActions: string[];
+  quietCount: number;
   digest: {
     date: string;
     total: number;

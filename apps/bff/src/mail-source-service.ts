@@ -1,13 +1,20 @@
 import { createHash, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type { FastifyBaseLogger } from "fastify";
+import type { MailSourceConnectionType, MailSourceProvider } from "@mail-agent/shared-types";
 import { env } from "./config.js";
+import {
+  isMailSourceConnectionType,
+  isMailSourceProvider,
+  providerSupportsConnectionType,
+} from "./mail-provider-registry.js";
+import { deleteImapCredentialForSource } from "./imap-credential-store.js";
 import { getPrismaClient } from "./persistence.js";
 import { runtimePaths } from "./runtime/paths.js";
 import { listJsonFiles, readJsonFile, writeJsonFile } from "./runtime/json-file-store.js";
 
-export type DbMailSourceConnectionType = "composio" | "microsoft";
-export type DbMailSourceProvider = "outlook";
+export type DbMailSourceConnectionType = MailSourceConnectionType;
+export type DbMailSourceProvider = MailSourceProvider;
 
 export type DbMailSourceRoutingCheckStatus = "skipped" | "verified" | "failed" | "unverifiable";
 export type DbMailSourceRoutingCheckResult = {
@@ -58,6 +65,7 @@ export type MailSourceCreateInput = {
   connectedAccountId?: string;
   microsoftAccountId?: string;
   trustedConnectedAccountId?: boolean;
+  trustedImapConnection?: boolean;
 };
 
 export type MailSourceUpdateInput = {
@@ -169,8 +177,8 @@ function deserializeMemoryRow(row: MemoryMailSourceRowSnapshot): MemoryMailSourc
     externalId: row.externalId,
     userId: row.userId,
     label: row.label,
-    provider: row.provider === "outlook" ? "outlook" : "outlook",
-    connectionType: row.connectionType === "microsoft" ? "microsoft" : "composio",
+    provider: isProvider(row.provider) ? row.provider : "outlook",
+    connectionType: isConnectionType(row.connectionType) ? row.connectionType : "composio",
     emailHint: row.emailHint ?? "",
     mailboxUserId: row.mailboxUserId ?? null,
     connectedAccountId: row.connectedAccountId ?? null,
@@ -242,7 +250,11 @@ function cleanOptionalText(value: unknown): string | undefined {
 }
 
 function isConnectionType(value: string): value is DbMailSourceConnectionType {
-  return value === "composio" || value === "microsoft";
+  return isMailSourceConnectionType(value);
+}
+
+function isProvider(value: string): value is DbMailSourceProvider {
+  return isMailSourceProvider(value);
 }
 
 function parseRoutingStatus(raw: string | null | undefined): DbMailSourceRoutingStatus | undefined {
@@ -279,9 +291,17 @@ function enforceMapLimit<K, V>(map: Map<K, V>, limit: number): void {
 }
 
 function sourceNeedsConnection(row: any): boolean {
-  const connectionType = row.connectionType === "microsoft" ? "microsoft" : "composio";
+  const connectionType = isConnectionType(row.connectionType) ? row.connectionType : "composio";
   if (connectionType === "microsoft") {
     return !cleanOptionalText(row.microsoftAccountId);
+  }
+
+  if (connectionType === "gmail_oauth") {
+    return !cleanOptionalText(row.mailboxUserId);
+  }
+
+  if (connectionType === "imap_password") {
+    return !cleanOptionalText(row.mailboxUserId);
   }
 
   return !cleanOptionalText(row.mailboxUserId) || !cleanOptionalText(row.connectedAccountId);
@@ -302,10 +322,11 @@ function sourceReady(row: any, status: DbMailSourceRoutingStatus | undefined): b
 function profileFromRow(row: any): DbMailSourceProfileView {
   const routingStatus = parseRoutingStatus(row.routingStatusJson);
   const connectionType = isConnectionType(row.connectionType) ? row.connectionType : "composio";
+  const provider = isProvider(row.provider) ? row.provider : "outlook";
   return {
     id: row.id,
     name: row.label,
-    provider: row.provider === "outlook" ? "outlook" : "outlook",
+    provider,
     connectionType,
     ...(cleanOptionalText(row.microsoftAccountId) ? { microsoftAccountId: cleanOptionalText(row.microsoftAccountId) } : {}),
     emailHint: row.emailHint ?? "",
@@ -492,6 +513,7 @@ function validateMemorySourceInput(input: {
   connectedAccountId?: string;
   microsoftAccountId?: string;
   trustedConnectedAccountId?: boolean;
+  trustedImapConnection?: boolean;
 }): {
   mailboxUserId?: string;
   connectedAccountId?: string;
@@ -512,6 +534,19 @@ function validateMemorySourceInput(input: {
 
   if (input.connectionType === "microsoft" && !microsoftAccountId) {
     throw new Error("MAIL_SOURCE_CONNECTION_REQUIRED");
+  }
+
+  if (input.connectionType === "gmail_oauth" && !mailboxUserId) {
+    throw new Error("MAIL_SOURCE_CONNECTION_REQUIRED");
+  }
+
+  if (input.connectionType === "imap_password") {
+    if (!mailboxUserId) {
+      throw new Error("MAIL_SOURCE_CONNECTION_REQUIRED");
+    }
+    if (!input.trustedImapConnection) {
+      throw new Error("IMAP_CONNECTION_VERIFICATION_REQUIRED");
+    }
   }
 
   return {
@@ -591,6 +626,19 @@ export class MailSourceService {
     const connectedAccountId = cleanOptionalText(input.connectedAccountId);
     const microsoftAccountId = cleanOptionalText(input.microsoftAccountId);
 
+    if (!providerSupportsConnectionType(input.provider, connectionType)) {
+      throw new Error("MAIL_SOURCE_PROVIDER_CONNECTION_UNSUPPORTED");
+    }
+
+    if (
+      connectionType !== "composio" &&
+      connectionType !== "microsoft" &&
+      connectionType !== "gmail_oauth" &&
+      connectionType !== "imap_password"
+    ) {
+      throw new Error("MAIL_SOURCE_CONNECTION_TYPE_NOT_IMPLEMENTED");
+    }
+
     if (connectionType === "composio") {
       if (!mailboxUserId || !connectedAccountId) {
         throw new Error("MAIL_SOURCE_CONNECTION_REQUIRED");
@@ -609,6 +657,19 @@ export class MailSourceService {
       }
     }
 
+    if (connectionType === "gmail_oauth" && !mailboxUserId) {
+      throw new Error("MAIL_SOURCE_CONNECTION_REQUIRED");
+    }
+
+    if (connectionType === "imap_password") {
+      if (!mailboxUserId) {
+        throw new Error("MAIL_SOURCE_CONNECTION_REQUIRED");
+      }
+      if (!input.trustedImapConnection) {
+        throw new Error("IMAP_CONNECTION_VERIFICATION_REQUIRED");
+      }
+    }
+
     if (!prisma) {
       await hydrateMemorySourceStoreForUser(userId);
       const normalized = validateMemorySourceInput({
@@ -617,6 +678,7 @@ export class MailSourceService {
         connectedAccountId,
         microsoftAccountId,
         trustedConnectedAccountId: input.trustedConnectedAccountId,
+        trustedImapConnection: input.trustedImapConnection,
       });
       const store = getMemorySourceStore(userId, true);
       const now = new Date();
@@ -632,12 +694,19 @@ export class MailSourceService {
         connectedAccountId: connectionType === "composio" ? normalized.connectedAccountId ?? null : null,
         microsoftAccountId: connectionType === "microsoft" ? normalized.microsoftAccountId ?? null : null,
         connectionTrustedAt: now,
-        connectionTrustSource: connectionType === "microsoft" ? "microsoft_direct_session" : "composio_server_verified",
+        connectionTrustSource:
+          connectionType === "microsoft"
+            ? "microsoft_direct_session"
+            : connectionType === "imap_password"
+              ? "imap_password_verified"
+              : "composio_server_verified",
         connectionTrustDetailsJson: JSON.stringify({
           reason:
             connectionType === "microsoft"
               ? "Owned Microsoft account verified in the current OAuth session"
-              : "Composio connected account ownership verified by server flow",
+              : connectionType === "imap_password"
+                ? "IMAP mailbox login verified before source creation"
+                : "Composio connected account ownership verified by server flow",
         }),
         routingVerifiedAt: null,
         routingStatusJson: null,
@@ -672,12 +741,19 @@ export class MailSourceService {
         connectedAccountId: connectionType === "composio" ? connectedAccountId ?? null : null,
         microsoftAccountId: connectionType === "microsoft" ? microsoftAccountId ?? null : null,
         connectionTrustedAt: new Date(),
-        connectionTrustSource: connectionType === "microsoft" ? "microsoft_direct" : "composio_server_verified",
+        connectionTrustSource:
+          connectionType === "microsoft"
+            ? "microsoft_direct"
+            : connectionType === "imap_password"
+              ? "imap_password_verified"
+              : "composio_server_verified",
         connectionTrustDetailsJson: JSON.stringify({
           reason:
             connectionType === "microsoft"
               ? "Owned Microsoft account verified before source creation"
-              : "Composio connected account ownership verified by server flow",
+              : connectionType === "imap_password"
+                ? "IMAP mailbox login verified before source creation"
+                : "Composio connected account ownership verified by server flow",
         }),
         enabled: true,
       },
@@ -722,6 +798,7 @@ export class MailSourceService {
         connectedAccountId: nextConnectedAccountId,
         microsoftAccountId: nextMicrosoftAccountId,
         trustedConnectedAccountId: input.trustedConnectedAccountId || nextConnectedAccountId === cleanOptionalText(current.connectedAccountId ?? undefined),
+        trustedImapConnection: connectionType === "imap_password" ? sourceConnectionTrusted(current) : false,
       });
 
       const routingContextChanged =
@@ -789,6 +866,10 @@ export class MailSourceService {
       await requireOwnedMicrosoftAccount(prisma, userId, nextMicrosoftAccountId);
     }
 
+    if (connectionType === "imap_password" && !nextMailboxUserId) {
+      throw new Error("MAIL_SOURCE_CONNECTION_REQUIRED");
+    }
+
     const routingContextChanged =
       nextMailboxUserId !== cleanOptionalText(current.mailboxUserId) ||
       nextConnectedAccountId !== cleanOptionalText(current.connectedAccountId) ||
@@ -796,18 +877,26 @@ export class MailSourceService {
     const shouldTrustConnection =
       connectionType === "microsoft"
         ? microsoftAccountChanged || !sourceConnectionTrusted(current)
-        : Boolean(input.trustedConnectedAccountId && (connectedAccountChanged || !sourceConnectionTrusted(current)));
+        : connectionType === "imap_password"
+          ? !sourceConnectionTrusted(current)
+          : Boolean(input.trustedConnectedAccountId && (connectedAccountChanged || !sourceConnectionTrusted(current)));
     const trustPatch =
       shouldTrustConnection
         ? {
             connectionTrustedAt: new Date(),
             connectionTrustSource:
-              connectionType === "microsoft" ? "microsoft_direct" : "composio_server_verified",
+              connectionType === "microsoft"
+                ? "microsoft_direct"
+                : connectionType === "imap_password"
+                  ? "imap_password_verified"
+                  : "composio_server_verified",
             connectionTrustDetailsJson: JSON.stringify({
               reason:
                 connectionType === "microsoft"
                   ? "Owned Microsoft account verified before source update"
-                  : "Composio connected account ownership verified by server flow",
+                  : connectionType === "imap_password"
+                    ? "Existing IMAP mailbox login remains trusted after metadata update"
+                    : "Composio connected account ownership verified by server flow",
             }),
           }
         : {};
@@ -848,6 +937,7 @@ export class MailSourceService {
       if (!store.has(sourceId)) {
         throw new Error("MAIL_SOURCE_NOT_FOUND");
       }
+      await deleteImapCredentialForSource(this.logger, userId, sourceId).catch(() => undefined);
       store.delete(sourceId);
       if (memoryActiveMailSourceByUser.get(userId) === sourceId) {
         memoryActiveMailSourceByUser.delete(userId);
@@ -870,6 +960,7 @@ export class MailSourceService {
       throw new Error("MAIL_SOURCE_NOT_FOUND");
     }
 
+    await deleteImapCredentialForSource(this.logger, userId, current.id).catch(() => undefined);
     await prisma.mailSource.delete({ where: { id: current.id } });
     const fallbackId = await selectFallbackActiveSourceId(prisma, userId);
     await setActiveSourceId(prisma, userId, fallbackId);
@@ -1061,6 +1152,141 @@ export class MailSourceService {
             connectionTrustSource: "microsoft_direct",
             connectionTrustDetailsJson: JSON.stringify({
               reason: "Microsoft direct OAuth account persisted and connected",
+            }),
+            enabled: true,
+          },
+        });
+
+    await setActiveSourceId(prisma, input.userId, row.id);
+    return {
+      ...(await this.listForUser(input.userId)),
+      source: profileFromRow(row),
+    };
+  }
+
+  async upsertGoogleSourceForUser(input: {
+    userId: string;
+    email: string;
+    label?: string;
+  }): Promise<DbMailSourceSnapshot & { source: DbMailSourceProfileView }> {
+    const prisma = await prismaOrNull(this.logger);
+    const mailboxUserId = cleanOptionalText(input.email)?.toLowerCase();
+    if (!mailboxUserId) {
+      throw new Error("GOOGLE_ACCOUNT_NOT_FOUND");
+    }
+
+    const label = cleanOptionalText(input.label) ?? `Gmail ${mailboxUserId}`;
+
+    if (!prisma) {
+      await hydrateMemorySourceStoreForUser(input.userId);
+      const store = getMemorySourceStore(input.userId, true);
+      const existing = [...store.values()].find(
+        (row) =>
+          row.provider === "gmail" &&
+          row.connectionType === "gmail_oauth" &&
+          cleanOptionalText(row.mailboxUserId)?.toLowerCase() === mailboxUserId
+      );
+      const now = new Date();
+      const row: MemoryMailSourceRow = existing
+        ? {
+            ...existing,
+            label,
+            emailHint: mailboxUserId,
+            mailboxUserId,
+            connectedAccountId: null,
+            microsoftAccountId: null,
+            connectionTrustedAt: now,
+            connectionTrustSource: "gmail_direct_session",
+            connectionTrustDetailsJson: JSON.stringify({
+              reason: "Google direct OAuth account reconnected in the current session",
+            }),
+            routingVerifiedAt: null,
+            routingStatusJson: null,
+            enabled: true,
+            updatedAt: now,
+          }
+        : {
+            id: uniqueMemorySourceId(store, label),
+            externalId: uniqueMemoryExternalIdForUser(input.userId, label),
+            userId: input.userId,
+            label,
+            provider: "gmail",
+            connectionType: "gmail_oauth",
+            emailHint: mailboxUserId,
+            mailboxUserId,
+            connectedAccountId: null,
+            microsoftAccountId: null,
+            connectionTrustedAt: now,
+            connectionTrustSource: "gmail_direct_session",
+            connectionTrustDetailsJson: JSON.stringify({
+              reason: "Google direct OAuth account connected in the current session",
+            }),
+            routingVerifiedAt: null,
+            routingStatusJson: null,
+            enabled: true,
+            createdAt: now,
+            updatedAt: now,
+          };
+      store.set(row.id, row);
+      enforceMapLimit(store, maxMemoryMailSourcesPerUser);
+      memoryActiveMailSourceByUser.set(input.userId, row.id);
+      await persistMemorySourceStoreForUser(input.userId);
+      return {
+        ...memorySnapshotForUser(input.userId),
+        source: profileFromRow(row),
+      };
+    }
+
+    const account = await prisma.googleAccount.findFirst({
+      where: { userId: input.userId, email: mailboxUserId },
+    });
+    if (!account) {
+      throw new Error("GOOGLE_ACCOUNT_NOT_FOUND");
+    }
+
+    const existing = await prisma.mailSource.findFirst({
+      where: {
+        userId: input.userId,
+        provider: "gmail",
+        connectionType: "gmail_oauth",
+        mailboxUserId,
+      },
+    });
+
+    const row = existing
+      ? await prisma.mailSource.update({
+          where: { id: existing.id },
+          data: {
+            label,
+            emailHint: mailboxUserId,
+            mailboxUserId,
+            connectedAccountId: null,
+            microsoftAccountId: null,
+            connectionTrustedAt: new Date(),
+            connectionTrustSource: "gmail_direct",
+            connectionTrustDetailsJson: JSON.stringify({
+              reason: "Google direct OAuth account persisted and reconnected",
+            }),
+            enabled: true,
+            routingVerifiedAt: null,
+            routingStatusJson: null,
+          },
+        })
+      : await prisma.mailSource.create({
+          data: {
+            externalId: await uniqueExternalIdForUser(prisma, input.userId, label),
+            userId: input.userId,
+            label,
+            provider: "gmail",
+            connectionType: "gmail_oauth",
+            emailHint: mailboxUserId,
+            mailboxUserId,
+            connectedAccountId: null,
+            microsoftAccountId: null,
+            connectionTrustedAt: new Date(),
+            connectionTrustSource: "gmail_direct",
+            connectionTrustDetailsJson: JSON.stringify({
+              reason: "Google direct OAuth account persisted and connected",
             }),
             enabled: true,
           },

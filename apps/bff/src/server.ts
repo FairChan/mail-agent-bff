@@ -7,7 +7,13 @@ import cors from "@fastify/cors";
 import { z } from "zod";
 import { createAgentRuntime, type TenantContext } from "./agent/index.js";
 import { LlmGatewayService } from "./agent/llm-gateway.js";
+import { loadAgentPrivacyScope, saveAgentPrivacyScope } from "./agent/privacy-state-store.js";
 import { env } from "./config.js";
+import {
+  createPrivacyScope,
+  isMailPrivacyError,
+  mailPrivacyReadiness,
+} from "./mail-privacy.js";
 import {
   generateSixDigitCode,
   sendVerificationEmail,
@@ -37,7 +43,43 @@ import {
   MicrosoftDirectAuthSessionInactiveError,
   verifyMicrosoftMailboxAccess,
 } from "./microsoft-graph.js";
+import {
+  beginGoogleDirectAuth,
+  clearGoogleDirectAuthSessionState,
+  completeGoogleDirectAuth,
+  consumeGoogleDirectAuthState,
+  getGoogleAccountView,
+  GoogleDirectAuthSessionInactiveError,
+  isGoogleDirectAuthConfigured,
+  persistGoogleAccountForUser,
+  verifyGoogleMailboxAccess,
+} from "./google-gmail.js";
 import { MailSourceService } from "./mail-source-service.js";
+import {
+  getMailProviderDescriptor,
+  getMailProviderCatalog,
+  mailSourceConnectionTypeSchema,
+  mailSourceProviderSchema,
+  resolveImapDefaults,
+} from "./mail-provider-registry.js";
+import { saveImapCredential } from "./imap-credential-store.js";
+import { verifyImapConnection } from "./imap-mail.js";
+import {
+  getMailPersonalizationProfile,
+  saveMailPersonalizationProfile,
+} from "./personalization-profile-store.js";
+import {
+  applyPersonalizationToKnowledgeBaseSnapshot,
+  getCachedMailPersonalizationLearningState,
+  getResolvedMailPersonalizationRuntimeProfile,
+  rebuildMailPersonalizationLearningState,
+  recordMailPersonalizationFeedback,
+  saveMailPersonalizationOverride,
+} from "./personalization-learning-store.js";
+import {
+  getSavedNotificationPreferences,
+  saveNotificationPreferences,
+} from "./notification-preferences-store.js";
 import {
   createOutlookSyncState,
   findOutlookSyncStateBySubscriptionId,
@@ -68,11 +110,16 @@ import {
   isCalendarEventExisting,
   listInboxForViewer,
   probeOutlookRouting,
+  type MailQuadrant,
   type MailSourceContext,
   type MailRoutingProbeResult,
   type MailPriorityRule,
   triageInbox,
 } from "./mail.js";
+
+type MailPersonalizationRuntimeProfile = NonNullable<
+  Awaited<ReturnType<typeof getResolvedMailPersonalizationRuntimeProfile>>
+>;
 
 const server = Fastify({ logger: true, trustProxy: env.trustProxy });
 if (env.composioApiKey && env.composioMcpUrl) {
@@ -145,6 +192,7 @@ const authSessionUserByToken = new Map<string, string>();
 const authSessionUserViewByToken = new Map<string, AuthUserView>();
 const sessionTtlMsByToken = new Map<string, number>();
 const legacyApiKeySessions = new Set<string>();
+const authSessionPersistenceByToken = new Map<string, Promise<void>>();
 const recentlyClearedSessionTokens = new Map<string, number>();
 const dummyPasswordSalt = randomBytes(16).toString("hex");
 let prismaAuthStore: Awaited<ReturnType<typeof getPrismaClient>> = null;
@@ -155,12 +203,13 @@ const calendarSyncRecords = new Map<
     result: Awaited<ReturnType<typeof createCalendarEventFromInsight>>;
   }
 >();
-type MailSourceProvider = "outlook";
+type MailSourceProvider = z.infer<typeof mailSourceProviderSchema>;
+type MailSourceConnectionType = z.infer<typeof mailSourceConnectionTypeSchema>;
 type MailSourceProfile = {
   id: string;
   name: string;
   provider: MailSourceProvider;
-  connectionType?: "composio" | "microsoft";
+  connectionType?: MailSourceConnectionType;
   microsoftAccountId?: string;
   emailHint: string;
   mailboxUserId?: string;
@@ -204,6 +253,18 @@ type OutlookConnectionResult = {
   message: string | null;
   mailboxUserIdHint: string | null;
 };
+type DirectAuthProvider = "outlook" | "gmail";
+type DirectAuthAttemptState = "pending" | "succeeded" | "failed";
+type DirectAuthAttemptRecord = {
+  provider: DirectAuthProvider;
+  attemptId: string;
+  state: DirectAuthAttemptState;
+  updatedAt: number;
+  expiresAt: number;
+  message: string | null;
+  detail: string | null;
+  payload: Record<string, unknown> | null;
+};
 const defaultMailSourceId = "default_outlook";
 const sourceScopeSeparator = "|";
 const mailSourcesBySession = new Map<string, Map<string, MailSourceProfile>>();
@@ -236,6 +297,7 @@ const notificationPollLocksBySession = new Set<string>();
 const mailProcessingLocksBySession = new Set<string>();
 const autoMailProcessingLastRunBySession = new Map<string, number>();
 const outlookConnectionSessionsBySession = new Map<string, Set<string>>();
+const directAuthAttemptsBySession = new Map<string, DirectAuthAttemptRecord>();
 const aiSummaryCache = new Map<string, { expiresAt: number; summary: string }>();
 const sessionCookieName = "bff_session";
 const loginAttemptWindowMs = 60000;
@@ -263,11 +325,13 @@ const maxNotificationSeenUrgentEntriesPerSession = 1000;
 const maxNotificationSessionEntries = 5000;
 const maxOutlookConnectionSessionEntries = 5000;
 const maxOutlookSessionsPerSession = 32;
+const maxDirectAuthAttemptEntries = 5000;
 const maxAiSummaryCacheEntries = 50000;
 const maxAuthUserEntries = 200000;
 const maxPendingRegistrationEntries = 5000;
 const notificationSeenUrgentTtlMs = 14 * 24 * 60 * 60 * 1000;
 const aiSummaryCacheTtlMs = 24 * 60 * 60 * 1000;
+const directAuthAttemptTtlMs = 15 * 60 * 1000;
 const aiSummaryBatchSize = 6;
 const aiSummaryMaxLength = 96;
 const aiSummaryRequestBudgetMs = 9000;
@@ -313,6 +377,12 @@ const mailAutoProcessingWindowDays = boundedIntegerEnv("MAIL_AUTO_PROCESSING_WIN
 const mailAutoProcessingHorizonDays = boundedIntegerEnv("MAIL_AUTO_PROCESSING_HORIZON_DAYS", 14, 1, 30);
 const mailAutoCalendarMaxItems = boundedIntegerEnv("MAIL_AUTO_CALENDAR_MAX_ITEMS", 8, 1, 10);
 const mailAutoCalendarMinConfidence = boundedNumberEnv("MAIL_AUTO_CALENDAR_MIN_CONFIDENCE", 0.72, 0.58, 0.99);
+const notificationUrgentFreshWindowMs = boundedIntegerEnv(
+  "MAIL_NOTIFICATION_URGENT_FRESH_WINDOW_MS",
+  24 * 60 * 60 * 1000,
+  5 * 60 * 1000,
+  30 * 24 * 60 * 60 * 1000
+);
 const durableMailSyncIntervalMs = boundedIntegerEnv(
   "MAIL_DURABLE_SYNC_INTERVAL_MS",
   60000,
@@ -352,6 +422,8 @@ const mailMessageRateLimitPerMin = 80;
 const mailQueryRateLimitPerMin = 24;
 const priorityRulesReadRateLimitPerMin = 60;
 const priorityRulesWriteRateLimitPerMin = 24;
+const personalizationLearningReadRateLimitPerMin = 60;
+const personalizationLearningWriteRateLimitPerMin = 30;
 const mailSourcesReadRateLimitPerMin = 60;
 const mailSourcesWriteRateLimitPerMin = 20;
 const mailSourcesVerifyRateLimitPerMin = 20;
@@ -379,6 +451,8 @@ let lastBatchRouteSweepAt = 0;
 let lastCalendarSyncSweepAt = 0;
 let lastAiSummarySweepAt = 0;
 let lastPendingRegistrationSweepAt = 0;
+let lastDirectAuthAttemptSharedSweepAt = 0;
+let lastPersistedAuthSessionSweepAt = 0;
 const durableOutlookSyncLocks = new Set<string>();
 
 await server.register(cors, {
@@ -461,6 +535,260 @@ function clearAiSummaryCacheBySession(sessionToken: string) {
     if (key.startsWith(prefix)) {
       aiSummaryCache.delete(key);
     }
+  }
+}
+
+function directAuthAttemptScopedKey(
+  sessionToken: string,
+  provider: DirectAuthProvider,
+  attemptId: string
+): string {
+  return sourceScopedSessionKey(sessionToken, `direct-auth:${provider}:${attemptId}`);
+}
+
+function hashDirectAuthSessionToken(sessionToken: string): string {
+  return createHash("sha256").update(sessionToken).digest("hex");
+}
+
+function hashAuthSessionToken(sessionToken: string): string {
+  return createHash("sha256").update(sessionToken).digest("hex");
+}
+
+function purgeExpiredDirectAuthAttempts(now: number) {
+  for (const [key, record] of directAuthAttemptsBySession.entries()) {
+    if (record.expiresAt <= now) {
+      directAuthAttemptsBySession.delete(key);
+    }
+  }
+}
+
+function normalizeDirectAuthAttemptState(value: unknown): DirectAuthAttemptState | null {
+  return value === "pending" || value === "succeeded" || value === "failed" ? value : null;
+}
+
+function parseDirectAuthAttemptPayload(payloadJson: unknown): Record<string, unknown> | null {
+  if (typeof payloadJson !== "string" || payloadJson.trim().length === 0) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(payloadJson) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Ignore malformed payload snapshots and fall back to null.
+  }
+
+  return null;
+}
+
+function rememberDirectAuthAttemptInMemory(
+  sessionToken: string,
+  provider: DirectAuthProvider,
+  attemptId: string,
+  input: {
+    state: DirectAuthAttemptState;
+    message?: string | null;
+    detail?: string | null;
+    payload?: Record<string, unknown> | null;
+  }
+) {
+  const now = Date.now();
+  purgeExpiredDirectAuthAttempts(now);
+  const key = directAuthAttemptScopedKey(sessionToken, provider, attemptId);
+  setLruEntry(directAuthAttemptsBySession, key, {
+    provider,
+    attemptId,
+    state: input.state,
+    updatedAt: now,
+    expiresAt: now + directAuthAttemptTtlMs,
+    message: input.message ?? null,
+    detail: input.detail ?? null,
+    payload: input.payload ?? null,
+  });
+  enforceMapLimit(directAuthAttemptsBySession, maxDirectAuthAttemptEntries);
+}
+
+async function sweepExpiredPersistedDirectAuthAttempts(now: number) {
+  if (now - lastDirectAuthAttemptSharedSweepAt < 5 * 60 * 1000) {
+    return;
+  }
+
+  lastDirectAuthAttemptSharedSweepAt = now;
+
+  try {
+    const prisma = (await getPrismaClient(server.log)) as any;
+    if (!prisma?.directAuthAttempt) {
+      return;
+    }
+    await prisma.directAuthAttempt.deleteMany({
+      where: {
+        expiresAt: {
+          lte: new Date(now),
+        },
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    server.log.warn({ message }, "Failed to sweep persisted direct auth attempts");
+  }
+}
+
+async function persistDirectAuthAttempt(
+  sessionToken: string,
+  provider: DirectAuthProvider,
+  attemptId: string,
+  input: {
+    state: DirectAuthAttemptState;
+    message?: string | null;
+    detail?: string | null;
+    payload?: Record<string, unknown> | null;
+  }
+) {
+  const now = Date.now();
+  await sweepExpiredPersistedDirectAuthAttempts(now);
+
+  try {
+    const prisma = (await getPrismaClient(server.log)) as any;
+    if (!prisma?.directAuthAttempt) {
+      return;
+    }
+
+    const sessionHash = hashDirectAuthSessionToken(sessionToken);
+    const expiresAt = new Date(now + directAuthAttemptTtlMs);
+    await prisma.directAuthAttempt.upsert({
+      where: {
+        sessionHash_provider_attemptId: {
+          sessionHash,
+          provider,
+          attemptId,
+        },
+      },
+      create: {
+        sessionHash,
+        userId: getUserIdForSessionToken(sessionToken) ?? null,
+        provider,
+        attemptId,
+        state: input.state,
+        message: input.message ?? null,
+        detail: input.detail ?? null,
+        payloadJson: input.payload ? JSON.stringify(input.payload) : null,
+        expiresAt,
+      },
+      update: {
+        userId: getUserIdForSessionToken(sessionToken) ?? null,
+        state: input.state,
+        message: input.message ?? null,
+        detail: input.detail ?? null,
+        payloadJson: input.payload ? JSON.stringify(input.payload) : null,
+        expiresAt,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    server.log.warn({ message }, "Failed to persist direct auth attempt");
+  }
+}
+
+async function rememberDirectAuthAttempt(
+  sessionToken: string,
+  provider: DirectAuthProvider,
+  attemptId: string,
+  input: {
+    state: DirectAuthAttemptState;
+    message?: string | null;
+    detail?: string | null;
+    payload?: Record<string, unknown> | null;
+  }
+) {
+  rememberDirectAuthAttemptInMemory(sessionToken, provider, attemptId, input);
+  await persistDirectAuthAttempt(sessionToken, provider, attemptId, input);
+}
+
+async function loadPersistedDirectAuthAttempt(
+  sessionToken: string,
+  provider: DirectAuthProvider,
+  attemptId: string
+): Promise<DirectAuthAttemptRecord | null> {
+  const now = Date.now();
+  await sweepExpiredPersistedDirectAuthAttempts(now);
+
+  try {
+    const prisma = (await getPrismaClient(server.log)) as any;
+    if (!prisma?.directAuthAttempt) {
+      return null;
+    }
+
+    const row = await prisma.directAuthAttempt.findFirst({
+      where: {
+        sessionHash: hashDirectAuthSessionToken(sessionToken),
+        provider,
+        attemptId,
+        expiresAt: {
+          gt: new Date(now),
+        },
+      },
+    });
+    if (!row) {
+      return null;
+    }
+
+    const state = normalizeDirectAuthAttemptState(row.state);
+    if (!state) {
+      return null;
+    }
+
+    return {
+      provider,
+      attemptId,
+      state,
+      updatedAt: row.updatedAt instanceof Date ? row.updatedAt.getTime() : now,
+      expiresAt: row.expiresAt instanceof Date ? row.expiresAt.getTime() : now + directAuthAttemptTtlMs,
+      message: typeof row.message === "string" ? row.message : null,
+      detail: typeof row.detail === "string" ? row.detail : null,
+      payload: parseDirectAuthAttemptPayload(row.payloadJson),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    server.log.warn({ message }, "Failed to load persisted direct auth attempt");
+    return null;
+  }
+}
+
+async function getDirectAuthAttempt(
+  sessionToken: string,
+  provider: DirectAuthProvider,
+  attemptId: string
+): Promise<DirectAuthAttemptRecord | null> {
+  purgeExpiredDirectAuthAttempts(Date.now());
+  const key = directAuthAttemptScopedKey(sessionToken, provider, attemptId);
+  const inMemory = directAuthAttemptsBySession.get(key) ?? null;
+  const persisted = await loadPersistedDirectAuthAttempt(sessionToken, provider, attemptId);
+  if (persisted && (!inMemory || persisted.updatedAt >= inMemory.updatedAt)) {
+    setLruEntry(directAuthAttemptsBySession, key, persisted);
+    enforceMapLimit(directAuthAttemptsBySession, maxDirectAuthAttemptEntries);
+    return persisted;
+  }
+
+  return inMemory;
+}
+
+async function clearPersistedDirectAuthAttempts(sessionToken: string) {
+  try {
+    const prisma = (await getPrismaClient(server.log)) as any;
+    if (!prisma?.directAuthAttempt) {
+      return;
+    }
+
+    await prisma.directAuthAttempt.deleteMany({
+      where: {
+        sessionHash: hashDirectAuthSessionToken(sessionToken),
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    server.log.warn({ message }, "Failed to clear persisted direct auth attempts");
   }
 }
 
@@ -717,6 +1045,29 @@ function toAuthStoreUnavailableError(operation: string, error: unknown): AuthSto
   return new AuthStoreUnavailableError(operation, error);
 }
 
+class AuthSessionStoreUnavailableError extends Error {
+  readonly operation: string;
+  readonly detail: unknown;
+
+  constructor(operation: string, cause?: unknown) {
+    super("Session store is temporarily unavailable.");
+    this.name = "AuthSessionStoreUnavailableError";
+    this.operation = operation;
+    this.detail = cause;
+  }
+}
+
+function toAuthSessionStoreUnavailableError(
+  operation: string,
+  error: unknown
+): AuthSessionStoreUnavailableError {
+  if (error instanceof AuthSessionStoreUnavailableError) {
+    return error;
+  }
+
+  return new AuthSessionStoreUnavailableError(operation, error);
+}
+
 function authStoreUnavailableResponse() {
   const payload = authError("AUTH_STORE_UNAVAILABLE", {
     message: "Authentication store is temporarily unavailable.",
@@ -731,6 +1082,14 @@ function authStoreUnavailableResponse() {
 function sendAuthStoreUnavailable(reply: { status: (statusCode: number) => unknown }) {
   reply.status(503);
   return authStoreUnavailableResponse();
+}
+
+function authSessionStoreUnavailableResponse() {
+  return {
+    ok: false,
+    error: "Session store is temporarily unavailable.",
+    errorCode: "SESSION_STORE_UNAVAILABLE",
+  };
 }
 
 function getAuthUserBySessionToken(sessionToken: string | null): AuthUserRecord | null {
@@ -999,7 +1358,9 @@ async function updateAuthUserLocale(userId: string, locale: AiSummaryLocale): Pr
 function purgeExpiredSessions(now: number) {
   for (const [token, expiresAt] of sessions.entries()) {
     if (expiresAt <= now) {
+      const ttlMs = sessionTtlMsByToken.get(token) ?? env.SESSION_TTL_MS;
       clearSessionState(token);
+      void removePersistedAuthSession(token, { ttlMs });
     }
   }
 }
@@ -1145,17 +1506,173 @@ function setLruEntry<K, V>(map: Map<K, V>, key: K, value: V) {
   map.set(key, value);
 }
 
-function persistAuthSessionToRedis(sessionToken: string) {
+async function sweepExpiredPersistedAuthSessions(now: number) {
+  if (!prismaAuthStore) {
+    return;
+  }
+
+  if (now - lastPersistedAuthSessionSweepAt < 5 * 60 * 1000) {
+    return;
+  }
+
+  lastPersistedAuthSessionSweepAt = now;
+  try {
+    await (prismaAuthStore as any).appSession.deleteMany({
+      where: {
+        expiresAt: {
+          lte: new Date(now),
+        },
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    server.log.warn({ message }, "Failed to sweep expired persisted auth sessions");
+  }
+}
+
+async function persistAuthSessionToDatabase(sessionToken: string, now: number) {
+  if (!prismaAuthStore) {
+    return;
+  }
+
+  await sweepExpiredPersistedAuthSessions(now);
+  const expiresAt = sessions.get(sessionToken);
+  const tokenHash = hashAuthSessionToken(sessionToken);
+  if (!expiresAt) {
+    try {
+      await (prismaAuthStore as any).appSession.deleteMany({
+        where: {
+          tokenHash,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      server.log.warn({ message }, "Failed to delete auth session from Prisma");
+    }
+    return;
+  }
+
+  const userId = authSessionUserByToken.get(sessionToken) ?? null;
+  try {
+    await (prismaAuthStore as any).appSession.upsert({
+      where: {
+        tokenHash,
+      },
+      create: {
+        tokenHash,
+        userId,
+        createdAt: new Date(now),
+        expiresAt: new Date(expiresAt),
+      },
+      update: {
+        userId,
+        createdAt: new Date(now),
+        expiresAt: new Date(expiresAt),
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    server.log.warn({ message }, "Failed to persist auth session to Prisma");
+  }
+}
+
+async function removeAuthSessionFromDatabase(
+  sessionToken: string,
+  options?: {
+    strict?: boolean;
+  }
+) {
+  if (!prismaAuthStore) {
+    return;
+  }
+
+  try {
+    await (prismaAuthStore as any).appSession.deleteMany({
+      where: {
+        tokenHash: hashAuthSessionToken(sessionToken),
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    server.log.warn({ message }, "Failed to delete auth session from Prisma");
+    if (options?.strict) {
+      throw new Error("Failed to persist logout state in Prisma.");
+    }
+  }
+}
+
+async function loadPersistedAuthSessionFromDatabase(
+  sessionToken: string,
+  now: number,
+  options?: {
+    throwOnUnavailable?: boolean;
+  }
+): Promise<{
+  userId: string | null;
+  expiresAt: number;
+  ttlMs: number;
+} | null> {
+  if (!prismaAuthStore) {
+    return null;
+  }
+
+  await sweepExpiredPersistedAuthSessions(now);
+  try {
+    const persisted = await (prismaAuthStore as any).appSession.findUnique({
+      where: {
+        tokenHash: hashAuthSessionToken(sessionToken),
+      },
+    });
+    if (!persisted) {
+      return null;
+    }
+
+    const persistedExpiresAt =
+      persisted.expiresAt instanceof Date
+        ? persisted.expiresAt.getTime()
+        : new Date(persisted.expiresAt).getTime();
+    if (!Number.isFinite(persistedExpiresAt) || persistedExpiresAt <= now) {
+      await removeAuthSessionFromDatabase(sessionToken);
+      return null;
+    }
+
+    const persistedCreatedAt =
+      persisted.createdAt instanceof Date
+        ? persisted.createdAt.getTime()
+        : new Date(persisted.createdAt).getTime();
+    const inferredTtlMs =
+      Number.isFinite(persistedCreatedAt) && persistedCreatedAt < persistedExpiresAt
+        ? persistedExpiresAt - persistedCreatedAt
+        : env.SESSION_TTL_MS;
+
+    return {
+      userId: typeof persisted.userId === "string" && persisted.userId.length > 0 ? persisted.userId : null,
+      expiresAt: persistedExpiresAt,
+      ttlMs: inferredTtlMs,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    server.log.warn({ message }, "Failed to load auth session from Prisma");
+    if (options?.throwOnUnavailable) {
+      throw toAuthSessionStoreUnavailableError("load_persisted_auth_session", error);
+    }
+    return null;
+  }
+}
+
+async function persistAuthSessionToRedis(sessionToken: string): Promise<void> {
   if (!redisAuthSessionStore.enabled) {
     return;
   }
 
   const expiresAt = sessions.get(sessionToken);
   if (!expiresAt) {
-    void redisAuthSessionStore.remove(sessionToken).catch((error) => {
+    try {
+      await redisAuthSessionStore.remove(sessionToken);
+    } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       server.log.warn({ message }, "Failed to delete auth session from Redis");
-    });
+    }
     return;
   }
 
@@ -1163,18 +1680,18 @@ function persistAuthSessionToRedis(sessionToken: string) {
   const userId = authSessionUserByToken.get(sessionToken) ?? null;
   const userView = authSessionUserViewByToken.get(sessionToken) ?? null;
   const legacy = legacyApiKeySessions.has(sessionToken);
-  void redisAuthSessionStore
-    .save(sessionToken, {
+  try {
+    await redisAuthSessionStore.save(sessionToken, {
       expiresAt,
       ttlMs,
       userId,
       legacy,
       ...(userView ? { user: userView } : {}),
-    })
-    .catch((error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      server.log.warn({ message }, "Failed to persist auth session to Redis");
     });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    server.log.warn({ message }, "Failed to persist auth session to Redis");
+  }
 }
 
 async function removeAuthSessionFromRedis(
@@ -1183,28 +1700,26 @@ async function removeAuthSessionFromRedis(
     strict?: boolean;
     ttlMs?: number;
   }
-) {
+): Promise<boolean> {
   if (!redisAuthSessionStore.enabled) {
-    return;
+    return true;
   }
 
   const ttlMs = options?.ttlMs ?? sessionTtlMsByToken.get(sessionToken) ?? env.SESSION_TTL_MS;
   try {
     await redisAuthSessionStore.markCleared(sessionToken, ttlMs);
+    return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     server.log.warn({ message }, "Failed to mark auth session as cleared in Redis");
     if (options?.strict) {
       throw new Error("Failed to persist logout state in Redis.");
     }
+    return false;
   }
 }
 
 async function hydrateAuthSessionFromRedisIfNeeded(sessionToken: string, now: number) {
-  if (!redisAuthSessionStore.enabled) {
-    return;
-  }
-
   if (isSessionTokenRecentlyCleared(sessionToken, now)) {
     return;
   }
@@ -1213,58 +1728,103 @@ async function hydrateAuthSessionFromRedisIfNeeded(sessionToken: string, now: nu
     return;
   }
 
-  try {
-    const tombstoneExists = await redisAuthSessionStore.isCleared(sessionToken);
-    if (tombstoneExists) {
-      return;
+  if (redisAuthSessionStore.enabled) {
+    let persisted: Awaited<ReturnType<typeof redisAuthSessionStore.load>> | null = null;
+    try {
+      const tombstoneExists = await redisAuthSessionStore.isCleared(sessionToken);
+      if (tombstoneExists) {
+        return;
+      }
+
+      persisted = await redisAuthSessionStore.load(sessionToken);
+    } catch (error) {
+      throw toAuthSessionStoreUnavailableError("hydrate_auth_session_from_redis", error);
     }
 
-    const persisted = await redisAuthSessionStore.load(sessionToken);
-    if (!persisted) {
-      return;
-    }
+    if (persisted) {
+      if (prismaAuthStore) {
+        const persistedSession = await loadPersistedAuthSessionFromDatabase(sessionToken, now, {
+          throwOnUnavailable: true,
+        });
+        if (!persistedSession) {
+          try {
+            await redisAuthSessionStore.remove(sessionToken);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            server.log.warn({ message }, "Failed to delete stale Redis auth session");
+          }
+          return;
+        }
+      }
 
-    if (persisted.expiresAt <= now) {
-      void redisAuthSessionStore.remove(sessionToken).catch(() => {
-        // Ignore follow-up delete failures on expired records.
-      });
-      return;
-    }
+      if (persisted.expiresAt <= now) {
+        try {
+          await redisAuthSessionStore.remove(sessionToken);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          server.log.warn({ message }, "Failed to delete expired Redis auth session");
+        }
+        return;
+      }
 
-    setLruEntry(sessions, sessionToken, persisted.expiresAt);
-    setLruEntry(sessionTtlMsByToken, sessionToken, persisted.ttlMs);
+      setLruEntry(sessions, sessionToken, persisted.expiresAt);
+      setLruEntry(sessionTtlMsByToken, sessionToken, persisted.ttlMs);
 
-    if (persisted.userId) {
-      setLruEntry(authSessionUserByToken, sessionToken, persisted.userId);
-    } else {
-      authSessionUserByToken.delete(sessionToken);
+      if (persisted.userId) {
+        setLruEntry(authSessionUserByToken, sessionToken, persisted.userId);
+      } else {
+        authSessionUserByToken.delete(sessionToken);
+      }
+      if (persisted.user) {
+        const hydratedLocale = normalizeAiSummaryLocale(persisted.user.locale) ?? defaultAiSummaryLocale;
+        setLruEntry(authSessionUserViewByToken, sessionToken, {
+          ...persisted.user,
+          locale: hydratedLocale,
+        });
+      } else {
+        authSessionUserViewByToken.delete(sessionToken);
+      }
+
+      if (persisted.legacy) {
+        legacyApiKeySessions.add(sessionToken);
+      } else {
+        legacyApiKeySessions.delete(sessionToken);
+      }
+
+      enforceSessionEntryLimit();
     }
-    if (persisted.user) {
-      const hydratedLocale = normalizeAiSummaryLocale(persisted.user.locale) ?? defaultAiSummaryLocale;
-      setLruEntry(authSessionUserViewByToken, sessionToken, {
-        ...persisted.user,
-        locale: hydratedLocale,
-      });
+  }
+
+  if (!prismaAuthStore || sessions.has(sessionToken)) {
+    return;
+  }
+
+  const persisted = await loadPersistedAuthSessionFromDatabase(sessionToken, now, {
+    throwOnUnavailable: true,
+  });
+  if (!persisted) {
+    return;
+  }
+
+  setLruEntry(sessions, sessionToken, persisted.expiresAt);
+  setLruEntry(sessionTtlMsByToken, sessionToken, persisted.ttlMs);
+
+  if (persisted.userId) {
+    setLruEntry(authSessionUserByToken, sessionToken, persisted.userId);
+    const cachedUser = authUsersById.get(persisted.userId);
+    if (cachedUser) {
+      setLruEntry(authSessionUserViewByToken, sessionToken, toAuthUserView(cachedUser));
     } else {
       authSessionUserViewByToken.delete(sessionToken);
     }
-
-    if (persisted.legacy) {
-      legacyApiKeySessions.add(sessionToken);
-    } else {
-      legacyApiKeySessions.delete(sessionToken);
-    }
-
-    enforceSessionEntryLimit();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    server.log.warn(
-      {
-        message,
-      },
-      "Failed to hydrate auth session from Redis"
-    );
+    legacyApiKeySessions.delete(sessionToken);
+  } else {
+    authSessionUserByToken.delete(sessionToken);
+    authSessionUserViewByToken.delete(sessionToken);
+    legacyApiKeySessions.add(sessionToken);
   }
+
+  enforceSessionEntryLimit();
 }
 
 async function isAuthSessionRevokedInRedis(sessionToken: string): Promise<boolean> {
@@ -1276,7 +1836,7 @@ async function isAuthSessionRevokedInRedis(sessionToken: string): Promise<boolea
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     server.log.warn({ message }, "Failed to verify auth session tombstone in Redis");
-    return false;
+    throw toAuthSessionStoreUnavailableError("check_auth_session_revocation", error);
   }
 }
 
@@ -1292,6 +1852,60 @@ async function resolveSessionTtlMsForToken(sessionToken: string, now: number): P
 
 function isLegacyApiKeySession(sessionToken: string): boolean {
   return legacyApiKeySessions.has(sessionToken);
+}
+
+function enqueueAuthSessionPersistence(sessionToken: string, task: () => Promise<void>): Promise<void> {
+  const previous = authSessionPersistenceByToken.get(sessionToken) ?? Promise.resolve();
+  const next = previous
+    .catch(() => {
+      // Preserve ordering even if a previous persistence job failed.
+    })
+    .then(task);
+  authSessionPersistenceByToken.set(sessionToken, next);
+  void next.finally(() => {
+    if (authSessionPersistenceByToken.get(sessionToken) === next) {
+      authSessionPersistenceByToken.delete(sessionToken);
+    }
+  });
+  return next;
+}
+
+function persistAuthSession(sessionToken: string, now: number) {
+  void enqueueAuthSessionPersistence(sessionToken, async () => {
+    await persistAuthSessionToRedis(sessionToken);
+    await persistAuthSessionToDatabase(sessionToken, now);
+  });
+}
+
+async function removePersistedAuthSession(
+  sessionToken: string,
+  options?: {
+    strict?: boolean;
+    ttlMs?: number;
+  }
+) {
+  await enqueueAuthSessionPersistence(sessionToken, async () => {
+    let redisCleared = true;
+    let redisError: unknown = null;
+    try {
+      redisCleared = await removeAuthSessionFromRedis(sessionToken, options);
+    } catch (error) {
+      redisCleared = false;
+      redisError = error;
+    }
+    if (!redisCleared) {
+      server.log.warn(
+        {
+          sessionTokenHash: hashAuthSessionToken(sessionToken),
+        },
+        "Redis auth-session tombstone write failed; continuing with Prisma cleanup"
+      );
+    }
+    await removeAuthSessionFromDatabase(sessionToken, options);
+    if (redisError) {
+      throw redisError;
+    }
+  });
 }
 
 function establishSession(
@@ -1327,7 +1941,7 @@ function establishSession(
   }
 
   enforceSessionEntryLimit();
-  persistAuthSessionToRedis(sessionToken);
+  persistAuthSession(sessionToken, now);
 }
 
 function getSessionTokenFromRequest(request: { headers: { cookie?: string } }): string | null {
@@ -1335,8 +1949,16 @@ function getSessionTokenFromRequest(request: { headers: { cookie?: string } }): 
   return token ?? null;
 }
 
-function clearSessionState(sessionToken: string) {
-  markSessionTokenRecentlyCleared(sessionToken, Date.now());
+function clearSessionState(
+  sessionToken: string,
+  options?: {
+    markRecentlyCleared?: boolean;
+    clearPersistedDirectAuthAttempts?: boolean;
+  }
+) {
+  if (options?.markRecentlyCleared ?? true) {
+    markSessionTokenRecentlyCleared(sessionToken, Date.now());
+  }
   sessions.delete(sessionToken);
   sessionTtlMsByToken.delete(sessionToken);
   legacyApiKeySessions.delete(sessionToken);
@@ -1355,8 +1977,13 @@ function clearSessionState(sessionToken: string) {
   clearSessionScopedMapEntries(latestAutomaticMailProcessingResultBySession, sessionToken);
   defaultOutlookRoutingHintsBySession.delete(sessionToken);
   outlookConnectionSessionsBySession.delete(sessionToken);
+  clearSessionScopedMapEntries(directAuthAttemptsBySession, sessionToken);
+  if (options?.clearPersistedDirectAuthAttempts ?? true) {
+    void clearPersistedDirectAuthAttempts(sessionToken);
+  }
   clearCalendarSyncStateBySession(sessionToken);
   clearAiSummaryCacheBySession(sessionToken);
+  clearGoogleDirectAuthSessionState(sessionToken);
 }
 
 function clearCalendarSyncStateBySession(sessionToken: string) {
@@ -1381,7 +2008,10 @@ function enforceSessionEntryLimit() {
     if (!oldest) {
       break;
     }
-    clearSessionState(oldest);
+    clearSessionState(oldest, {
+      markRecentlyCleared: false,
+      clearPersistedDirectAuthAttempts: false,
+    });
   }
 }
 
@@ -1389,7 +2019,9 @@ function touchSessionIfActive(sessionToken: string, now: number): boolean {
   maybePurgeExpiredSessions(now);
   const expiresAt = sessions.get(sessionToken);
   if (!expiresAt || expiresAt <= now) {
+    const ttlMs = sessionTtlMsByToken.get(sessionToken) ?? env.SESSION_TTL_MS;
     clearSessionState(sessionToken);
+    void removePersistedAuthSession(sessionToken, { ttlMs });
     return false;
   }
 
@@ -1397,7 +2029,7 @@ function touchSessionIfActive(sessionToken: string, now: number): boolean {
   setLruEntry(sessions, sessionToken, now + ttlMs);
   setLruEntry(sessionTtlMsByToken, sessionToken, ttlMs);
   enforceSessionEntryLimit();
-  persistAuthSessionToRedis(sessionToken);
+  persistAuthSession(sessionToken, now);
   return true;
 }
 
@@ -1413,7 +2045,9 @@ async function touchAuthSessionForRequest(
   const now = Date.now();
   await hydrateAuthSessionFromRedisIfNeeded(sessionToken, now);
   if (await isAuthSessionRevokedInRedis(sessionToken)) {
+    const sessionTtlMs = await resolveSessionTtlMsForToken(sessionToken, now);
     clearSessionState(sessionToken);
+    await removePersistedAuthSession(sessionToken, { ttlMs: sessionTtlMs });
     if (reply) {
       reply.header("Set-Cookie", clearSessionCookie(shouldUseSecureCookie(request)));
     }
@@ -1431,7 +2065,9 @@ function isSessionActiveWithoutTouch(sessionToken: string, now: number): boolean
   }
 
   if (expiresAt <= now) {
+    const ttlMs = sessionTtlMsByToken.get(sessionToken) ?? env.SESSION_TTL_MS;
     clearSessionState(sessionToken);
+    void removePersistedAuthSession(sessionToken, { ttlMs });
     return false;
   }
 
@@ -2104,6 +2740,101 @@ function renderMicrosoftAuthPopupPage(input: {
 }): string {
   const payloadJson = inlineScriptJson({
     type: "outlook-direct-auth",
+    ok: input.ok,
+    ...input.payload,
+  });
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${escapeHtml(input.title)}</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: "Manrope", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+      }
+      main {
+        width: min(92vw, 420px);
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        background: rgba(255, 255, 255, 0.96);
+        border-radius: 16px;
+        box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
+        padding: 20px 18px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 18px;
+        color: #0f172a;
+      }
+      p {
+        margin: 10px 0 0;
+        font-size: 13px;
+        line-height: 1.5;
+        color: #334155;
+      }
+      button {
+        margin-top: 14px;
+        height: 36px;
+        border: 0;
+        border-radius: 8px;
+        background: #111827;
+        color: white;
+        font-size: 13px;
+        font-weight: 600;
+        padding: 0 14px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>${escapeHtml(input.heading)}</h1>
+      <p>${escapeHtml(input.message)}</p>
+      <button type="button" onclick="window.close()">关闭窗口</button>
+    </main>
+	    <script>
+	      const payload = ${payloadJson};
+	      const targetOrigin = ${inlineScriptJson(input.appOrigin)};
+	      const notifyOpener = () => {
+	        try {
+	          if (window.opener && targetOrigin) {
+	            window.opener.postMessage(payload, targetOrigin);
+	          }
+	        } catch {}
+	      };
+	      notifyOpener();
+	      try {
+	        setTimeout(notifyOpener, 160);
+	        setTimeout(notifyOpener, 420);
+	      } catch {}
+	      setTimeout(() => {
+	        try {
+	          window.close();
+	        } catch {}
+	      }, 900);
+	    </script>
+	  </body>
+	</html>`;
+}
+
+function renderGoogleAuthPopupPage(input: {
+  title: string;
+  heading: string;
+  message: string;
+  ok: boolean;
+  appOrigin: string;
+  payload: Record<string, unknown>;
+}): string {
+  const payloadJson = inlineScriptJson({
+    type: "gmail-direct-auth",
     ok: input.ok,
     ...input.payload,
   });
@@ -2920,11 +3651,19 @@ async function summarizeRecordsWithLlmGateway(
           eventType: record.eventType ?? "",
           evidence: record.evidence ?? "",
         }));
-        const prompt = buildAiSummaryPrompt(promptRecords, locale);
 
         let parsedSummaries = new Map<string, string>();
         let shouldSkipFuture = false;
         try {
+          const privacyScope = createPrivacyScope({
+            kind: "ai_summary",
+            scopeId: `ai_summary:${sourceId}:${locale}:${randomUUID()}`,
+            userId: tenant!.userId,
+            sourceId: tenant!.sourceId,
+          });
+          const maskedPromptRecords = privacyScope.maskStructuredPayload(promptRecords) as typeof promptRecords;
+          const prompt = buildAiSummaryPrompt(maskedPromptRecords, locale);
+
           const outputText = await llmGatewayService.generateText({
             tenant: tenant!,
             messages: [
@@ -2942,7 +3681,8 @@ async function summarizeRecordsWithLlmGateway(
             responseFormat: { type: "json_object" },
           });
           if (outputText) {
-            parsedSummaries = parseAiSummariesFromAgentText(outputText);
+            const restoredText = privacyScope.restoreText(outputText);
+            parsedSummaries = parseAiSummariesFromAgentText(restoredText);
             if (parsedSummaries.size === 0) {
               server.log.warn(
                 {
@@ -2956,11 +3696,15 @@ async function summarizeRecordsWithLlmGateway(
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          if (/(\b429\b|\b504\b|timeout|abort)/i.test(message)) {
+          if (isMailPrivacyError(error) || /(\b429\b|\b504\b|timeout|abort)/i.test(message)) {
             shouldSkipFuture = true;
           }
           server.log.warn(
-            { message, sourceId },
+            {
+              sourceId,
+              code: isMailPrivacyError(error) ? error.code : undefined,
+              message,
+            },
             "AI summary generation failed, using fallback summary"
           );
         }
@@ -3007,9 +3751,10 @@ async function enrichTriageWithAiSummaries(
     receivedDateTime: item.receivedDateTime,
   }));
   const summaryById = await summarizeRecordsWithLlmGateway(sessionToken, sourceId, summaryRecords, locale);
-  const allItems = result.allItems.map((item) => ({
+  const allItems: Array<(typeof result.allItems)[number] & { aiSummary: string; quadrant: MailQuadrant }> =
+    result.allItems.map((item) => ({
     ...item,
-    quadrant: kbStore?.getMailByRawId(item.id)?.quadrant ?? "unprocessed",
+    quadrant: (kbStore?.getMailByRawId(item.id)?.quadrant ?? "unprocessed") as MailQuadrant,
     aiSummary:
       kbStore?.getMailByRawId(item.id)?.summary ??
       summaryById.get(item.id) ??
@@ -3026,12 +3771,12 @@ async function enrichTriageWithAiSummaries(
         locale
       ),
   }));
-  const groupedQuadrants = {
-    unprocessed: [] as typeof allItems,
-    urgent_important: [] as typeof allItems,
-    not_urgent_important: [] as typeof allItems,
-    urgent_not_important: [] as typeof allItems,
-    not_urgent_not_important: [] as typeof allItems,
+  const groupedQuadrants: Record<MailQuadrant, typeof allItems> = {
+    unprocessed: [],
+    urgent_important: [],
+    not_urgent_important: [],
+    urgent_not_important: [],
+    not_urgent_not_important: [],
   };
   for (const item of allItems) {
     groupedQuadrants[item.quadrant].push(item);
@@ -3400,11 +4145,11 @@ async function upsertMicrosoftSourceForSession(
       id: sourceResult.source.id,
       name: sourceResult.source.name,
       emailHint: sourceResult.source.emailHint,
-      timeZone: getNotificationPreferencesBySession(
+      timeZone: (await getHydratedNotificationPreferencesBySession(
         sessionToken,
         sourceResult.source.id,
         true
-      ).digestTimeZone,
+      )).digestTimeZone,
       enabled: sourceResult.source.enabled,
       microsoftAccountId: sourceResult.source.microsoftAccountId,
       mailboxUserId: sourceResult.source.mailboxUserId,
@@ -3432,6 +4177,90 @@ async function upsertMicrosoftSourceForSession(
   };
 }
 
+async function upsertGoogleSourceForSession(
+  request: FastifyRequest,
+  sessionToken: string,
+  email: string,
+  preferredLabel?: string
+): Promise<{
+  source: MailSourceProfileView;
+  activeSourceId: string;
+  ready: boolean;
+  routingStatus: MailSourceRoutingStatus;
+}> {
+  const account = getGoogleAccountView(sessionToken, email);
+  if (!account) {
+    throw new Error("Google account session not found");
+  }
+
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId || userId.startsWith("legacy:")) {
+    throw new UnauthorizedSessionError();
+  }
+
+  await persistGoogleAccountForUser({
+    logger: server.log,
+    userId,
+    sessionToken,
+    email: account.email,
+  });
+  const sourceResult = await mailSourceService.upsertGoogleSourceForUser({
+    userId,
+    email: account.email,
+    label: preferredLabel,
+  });
+
+  const mailboxCheck = await verifyGoogleMailboxAccess(sessionToken, account.email, userId);
+  const routingStatus: MailSourceRoutingStatus = {
+    verifiedAt: new Date().toISOString(),
+    routingVerified: mailboxCheck.ok,
+    failFast: !mailboxCheck.ok,
+    message: mailboxCheck.ok
+      ? "Gmail mailbox login verified."
+      : mailboxCheck.error ?? "Gmail mailbox verification failed.",
+    mailbox: {
+      required: true,
+      status: mailboxCheck.ok ? "verified" : "failed",
+      verified: mailboxCheck.ok,
+      message: mailboxCheck.ok
+        ? "Gmail API profile and inbox access verified."
+        : mailboxCheck.error ?? "Unable to verify Gmail mailbox access.",
+    },
+    connectedAccount: {
+      required: false,
+      status: "skipped",
+      verified: true,
+      message: "Gmail direct OAuth does not use Composio connectedAccountId.",
+    },
+  };
+  sourceRoutingStatusBySession.set(sourceScopedSessionKey(sessionToken, sourceResult.source.id), routingStatus);
+  enforceMapLimit(sourceRoutingStatusBySession, maxMailSourceRoutingSessionEntries);
+  await mailSourceService.saveRoutingStatus(userId, sourceResult.source.id, routingStatus);
+  await hydrateMailSourcesForSession(sessionToken);
+
+  auditTenantEvent(request, {
+    userId,
+    sourceId: sourceResult.source.id,
+    sessionToken,
+    action: "google_gmail.connect",
+    resourceType: "mail_source",
+    resourceId: sourceResult.source.id,
+    metadata: {
+      email: account.email,
+      mailboxUserIdHint: mailboxCheck.mailboxUserIdHint ?? account.mailboxUserIdHint,
+      ready: routingStatus.routingVerified && !routingStatus.failFast,
+    },
+  });
+
+  const snapshot = getMailSourcesSnapshotBySession(sessionToken);
+  return {
+    source: snapshot.sources.find((item) => item.id === sourceResult.source.id) ?? sourceResult.source,
+    activeSourceId: snapshot.activeSourceId ?? sourceResult.source.id,
+    ready: routingStatus.routingVerified && !routingStatus.failFast,
+    routingStatus,
+  };
+}
+
 function buildMailSourceContext(sessionToken: string | null, sourceId: string): MailSourceContext {
   if (!sessionToken) {
     return { sourceId };
@@ -3451,6 +4280,7 @@ function buildMailSourceContext(sessionToken: string | null, sourceId: string): 
     ...(userId ? { userId } : {}),
     sourceId,
     sessionToken,
+    ...(profile?.provider ? { provider: profile.provider } : {}),
     ...(profile?.connectionType ? { connectionType: profile.connectionType } : {}),
     ...(cleanOptionalText(profile?.microsoftAccountId)
       ? { microsoftAccountId: cleanOptionalText(profile?.microsoftAccountId) }
@@ -3512,6 +4342,39 @@ async function hydrateMailSourcesForSession(sessionToken: string): Promise<void>
   }
   enforceMapLimit(mailSourcesBySession, maxMailSourceSessionEntries);
   enforceMapLimit(sourceRoutingStatusBySession, maxMailSourceRoutingSessionEntries);
+}
+
+async function hydrateSessionAccessStateIfNeeded(
+  sessionToken: string,
+  options?: {
+    hydrateMailSources?: boolean;
+  }
+) {
+  const now = Date.now();
+  if (await isAuthSessionRevokedInRedis(sessionToken)) {
+    const sessionTtlMs = await resolveSessionTtlMsForToken(sessionToken, now);
+    clearSessionState(sessionToken);
+    await removePersistedAuthSession(sessionToken, { ttlMs: sessionTtlMs });
+    throw new UnauthorizedSessionError();
+  }
+
+  await hydrateAuthSessionFromRedisIfNeeded(sessionToken, now);
+
+  if (!options?.hydrateMailSources) {
+    return;
+  }
+
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId || userId.startsWith("legacy:")) {
+    return;
+  }
+
+  const existingStore = mailSourcesBySession.get(sessionToken);
+  if (existingStore && existingStore.size > 0) {
+    return;
+  }
+
+  await hydrateMailSourcesForSession(sessionToken);
 }
 
 function buildTenantContextForRequest(
@@ -3666,6 +4529,69 @@ async function verifySourceRoutingForSession(
     sourceRoutingStatusBySession.set(sourceScopedSessionKey(sessionToken, sourceId), routingStatus);
     enforceMapLimit(sourceRoutingStatusBySession, maxMailSourceRoutingSessionEntries);
     const userId = getUserIdForSessionToken(sessionToken);
+    if (userId && !userId.startsWith("legacy:")) {
+      await mailSourceService.saveRoutingStatus(userId, sourceId, routingStatus);
+      await hydrateMailSourcesForSession(sessionToken);
+    }
+    return routingStatus;
+  }
+
+  if (source.connectionType === "gmail_oauth") {
+    const mailboxUserId = cleanOptionalText(source.mailboxUserId);
+    const userId = getUserIdForSessionToken(sessionToken) ?? undefined;
+    if (!mailboxUserId) {
+      const missingStatus: MailSourceRoutingStatus = {
+        verifiedAt: new Date().toISOString(),
+        routingVerified: false,
+        failFast: true,
+        message: "Gmail mailbox binding is missing for this source.",
+        mailbox: {
+          required: true,
+          status: "failed",
+          verified: false,
+          message: "Gmail mailbox binding is missing for this source.",
+        },
+        connectedAccount: {
+          required: false,
+          status: "skipped",
+          verified: true,
+          message: "Gmail direct OAuth does not use Composio connectedAccountId.",
+        },
+      };
+      sourceRoutingStatusBySession.set(sourceScopedSessionKey(sessionToken, sourceId), missingStatus);
+      enforceMapLimit(sourceRoutingStatusBySession, maxMailSourceRoutingSessionEntries);
+      if (userId && !userId.startsWith("legacy:")) {
+        await mailSourceService.saveRoutingStatus(userId, sourceId, missingStatus);
+        await hydrateMailSourcesForSession(sessionToken);
+      }
+      return missingStatus;
+    }
+
+    const verification = await verifyGoogleMailboxAccess(sessionToken, mailboxUserId, userId);
+    const routingStatus: MailSourceRoutingStatus = {
+      verifiedAt: new Date().toISOString(),
+      routingVerified: verification.ok,
+      failFast: !verification.ok,
+      message: verification.ok
+        ? "Direct Gmail mailbox access verified."
+        : verification.error ?? "Gmail mailbox verification failed.",
+      mailbox: {
+        required: true,
+        status: verification.ok ? "verified" : "failed",
+        verified: verification.ok,
+        message: verification.ok
+          ? "Gmail profile and inbox probes succeeded."
+          : verification.error ?? "Gmail mailbox verification failed.",
+      },
+      connectedAccount: {
+        required: false,
+        status: "skipped",
+        verified: true,
+        message: "Gmail direct OAuth does not use Composio connectedAccountId.",
+      },
+    };
+    sourceRoutingStatusBySession.set(sourceScopedSessionKey(sessionToken, sourceId), routingStatus);
+    enforceMapLimit(sourceRoutingStatusBySession, maxMailSourceRoutingSessionEntries);
     if (userId && !userId.startsWith("legacy:")) {
       await mailSourceService.saveRoutingStatus(userId, sourceId, routingStatus);
       await hydrateMailSourcesForSession(sessionToken);
@@ -3905,6 +4831,34 @@ function getNotificationPreferencesBySession(
   notificationPrefsBySession.set(scopeKey, created);
   enforceMapLimit(notificationPrefsBySession, maxNotificationSessionEntries);
   return created;
+}
+
+async function getHydratedNotificationPreferencesBySession(
+  sessionToken: string,
+  sourceId: string,
+  createIfMissing: boolean,
+  fallbackTimeZone?: string
+): Promise<SessionNotificationPreferences> {
+  const current = getNotificationPreferencesBySession(sessionToken, sourceId, createIfMissing, fallbackTimeZone);
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId || userId.startsWith("legacy:")) {
+    return current;
+  }
+
+  const saved = await getSavedNotificationPreferences(userId, sourceId, fallbackTimeZone ?? current.digestTimeZone);
+  if (!saved) {
+    return current;
+  }
+
+  const hydrated: SessionNotificationPreferences = {
+    ...current,
+    ...saved,
+    digestTimeZone: normalizeIanaTimeZoneOrFallback(saved.digestTimeZone || current.digestTimeZone),
+    updatedAt: saved.updatedAt || current.updatedAt,
+  };
+  notificationPrefsBySession.set(sourceScopedSessionKey(sessionToken, sourceId), hydrated);
+  enforceMapLimit(notificationPrefsBySession, maxNotificationSessionEntries);
+  return hydrated;
 }
 
 function getNotificationStateBySession(
@@ -4193,12 +5147,28 @@ type NotificationPollResult = {
     | null
     | {
         triggeredAt: string;
-        dateKey: string;
-        timeZone: string;
-        digest: {
-          date: string;
-          total: number;
-          unread: number;
+      dateKey: string;
+      timeZone: string;
+      summaryTitle: string;
+      summaryLines: string[];
+      urgentHighlights: Array<{
+        messageId: string;
+        subject: string;
+        fromName: string;
+        reason: string;
+      }>;
+      scheduleHighlights: Array<{
+        messageId: string;
+        subject: string;
+        type: string;
+        dueDateLabel: string;
+      }>;
+      recommendedActions: string[];
+      quietCount: number;
+      digest: {
+        date: string;
+        total: number;
+        unread: number;
           urgentImportant: number;
           highImportance: number;
           upcomingCount: number;
@@ -4232,6 +5202,268 @@ function applySeenUrgentUpdates(state: SessionNotificationState, ids: string[], 
   purgeNotificationState(nowMs);
 }
 
+async function alignTriageWithKnowledgeBase(
+  sessionToken: string,
+  sourceId: string,
+  triage: Awaited<ReturnType<typeof triageInbox>>
+): Promise<Awaited<ReturnType<typeof triageInbox>>> {
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId || userId.startsWith("legacy:")) {
+    return triage;
+  }
+
+  try {
+    const kbStore = await getMailKnowledgeBaseStore(userId, sourceId);
+    const allItems = triage.allItems.map((item) => {
+      const stored = kbStore.getMailByRawId(item.id);
+      if (!stored) {
+        return {
+          ...item,
+          quadrant: "unprocessed" as MailQuadrant,
+        };
+      }
+
+      return {
+        ...item,
+        quadrant: stored.quadrant as MailQuadrant,
+      };
+    });
+
+    const quadrants: Awaited<ReturnType<typeof triageInbox>>["quadrants"] = {
+      unprocessed: [],
+      urgent_important: [],
+      not_urgent_important: [],
+      urgent_not_important: [],
+      not_urgent_not_important: [],
+    };
+
+    for (const item of allItems) {
+      quadrants[item.quadrant].push(item);
+    }
+
+    return {
+      ...triage,
+      counts: {
+        unprocessed: quadrants.unprocessed.length,
+        urgent_important: quadrants.urgent_important.length,
+        not_urgent_important: quadrants.not_urgent_important.length,
+        urgent_not_important: quadrants.urgent_not_important.length,
+        not_urgent_not_important: quadrants.not_urgent_not_important.length,
+      },
+      quadrants,
+      allItems,
+    };
+  } catch (error) {
+    server.log.warn(
+      {
+        sourceId,
+        message: error instanceof Error ? error.message : String(error),
+      },
+      "Failed to align notification triage with knowledge base"
+    );
+    return triage;
+  }
+}
+
+function isFreshUrgentNotificationCandidate(receivedDateTime: string, nowMs: number): boolean {
+  const receivedAt = Date.parse(receivedDateTime);
+  if (Number.isNaN(receivedAt)) {
+    return true;
+  }
+
+  return nowMs - receivedAt <= notificationUrgentFreshWindowMs;
+}
+
+function realtimeUrgentFallbackCandidates(
+  alignedTriage: Awaited<ReturnType<typeof triageInbox>>,
+  rawTriage: Awaited<ReturnType<typeof triageInbox>>,
+  nowMs: number
+) {
+  const alignedById = new Map(alignedTriage.allItems.map((item) => [item.id, item]));
+  const alignedUrgentIds = new Set(alignedTriage.quadrants.urgent_important.map((item) => item.id));
+
+  return rawTriage.quadrants.urgent_important
+    .filter((item) => {
+      if (alignedUrgentIds.has(item.id)) {
+        return false;
+      }
+
+      const alignedItem = alignedById.get(item.id);
+      return alignedItem?.quadrant === "unprocessed" && isFreshUrgentNotificationCandidate(item.receivedDateTime, nowMs);
+    })
+    .map((item) => ({
+      ...item,
+      reasons: [
+        ...(item.reasons ?? []),
+        "知识库尚未完成处理，先按实时规则临时提醒",
+      ],
+    }));
+}
+
+function findPersonalizationMatch(items: string[], haystacks: Array<string | undefined>): string | null {
+  const normalizedHaystacks = haystacks
+    .map((value) => value?.trim().toLowerCase() ?? "")
+    .filter((value) => value.length > 0);
+
+  for (const item of items) {
+    const normalizedItem = item.trim().toLowerCase();
+    if (!normalizedItem) {
+      continue;
+    }
+    if (normalizedHaystacks.some((haystack) => haystack.includes(normalizedItem))) {
+      return item;
+    }
+  }
+
+  return null;
+}
+
+function buildDailyDigestNotificationSummary(input: {
+  digestResult: Awaited<ReturnType<typeof buildMailInsights>>;
+  urgentCandidates: Array<{
+    id: string;
+    subject: string;
+    fromName: string;
+    reasons?: string[];
+  }>;
+  personalizationProfile: MailPersonalizationRuntimeProfile | null;
+}) {
+  const { digestResult, urgentCandidates, personalizationProfile } = input;
+  const digest = digestResult.digest;
+  const quietCount = Math.max(0, digest.total - digest.urgentImportant - digest.upcomingCount);
+  const vipHighlight = personalizationProfile
+    ? urgentCandidates.find((item) =>
+        findPersonalizationMatch(personalizationProfile.vipSenders, [item.fromName, item.subject])
+      )
+    : null;
+  const hiddenTopicHighlight = personalizationProfile
+    ? digestResult.upcoming.find((item) =>
+        findPersonalizationMatch(personalizationProfile.hiddenImportantTopics, [
+          item.subject,
+          item.evidence,
+          (item.reasons ?? []).join(" "),
+        ])
+      )
+    : null;
+  const hiddenSignalHighlight = personalizationProfile
+    ? digestResult.signalsWithoutDate.find((item) =>
+        findPersonalizationMatch(personalizationProfile.hiddenImportantTopics, [
+          item.subject,
+          item.evidence,
+        ])
+      )
+    : null;
+  const withinPersonalWindowCount =
+    personalizationProfile?.deadlineAlertWindowHours
+      ? digestResult.upcoming.filter((item) => {
+          const dueAt = Date.parse(item.dueAt);
+          if (Number.isNaN(dueAt)) {
+            return false;
+          }
+          return (dueAt - Date.now()) / 3600000 <= personalizationProfile.deadlineAlertWindowHours;
+        }).length
+      : 0;
+  const titleFocus =
+    vipHighlight
+      ? `${vipHighlight.fromName || "优先联系人"} 的邮件值得先看`
+      : hiddenTopicHighlight || hiddenSignalHighlight
+        ? `你关注的主题“${hiddenTopicHighlight?.subject || hiddenSignalHighlight?.subject || "重点事项"}”出现了新动态`
+        : digest.urgentImportant > 0
+      ? `${digest.urgentImportant} 封紧急重要邮件需要优先处理`
+      : digest.upcomingCount > 0
+        ? `${digest.upcomingCount} 个近期事项需要确认`
+        : "今天没有明显高压事项";
+  const summaryLines = [
+    `已扫描 ${digest.total} 封邮件，其中未读 ${digest.unread} 封，高优先级 ${digest.highImportance} 封。`,
+    digest.urgentImportant > 0
+      ? `紧急重要象限有 ${digest.urgentImportant} 封邮件，建议先处理这些事项。`
+      : "当前没有新的紧急重要邮件，可以按普通节奏处理。",
+    digest.upcomingCount > 0
+      ? `识别到 ${digest.upcomingCount} 个近期会议、考试或 DDL，其中明日 DDL ${digest.tomorrowDdlCount} 个。`
+      : "没有识别到近期会议、考试或 DDL。",
+    quietCount > 0 ? `其余约 ${quietCount} 封邮件可以稍后浏览或批量处理。` : "今天的邮件队列比较集中，没有明显噪音堆积。",
+  ];
+
+  if (personalizationProfile?.vipSenders.length && vipHighlight) {
+    summaryLines.splice(2, 0, `你设为优先联系人的来信已出现：${vipHighlight.fromName || vipHighlight.subject}。`);
+  }
+  if (personalizationProfile?.hiddenImportantTopics.length && (hiddenTopicHighlight || hiddenSignalHighlight)) {
+    summaryLines.push(
+      `命中了你特别关注的主题：${hiddenTopicHighlight?.subject || hiddenSignalHighlight?.subject || "某条重点邮件"}。`
+    );
+  }
+  if (personalizationProfile?.deadlineAlertWindowHours) {
+    summaryLines.push(
+      withinPersonalWindowCount > 0
+        ? `按你设置的 ${personalizationProfile.deadlineAlertWindowHours} 小时提醒窗口，已有 ${withinPersonalWindowCount} 个事项进入强提醒范围。`
+        : `按你设置的 ${personalizationProfile.deadlineAlertWindowHours} 小时提醒窗口，当前还没有事项进入强提醒范围。`
+    );
+  }
+
+  const urgentHighlights = urgentCandidates.slice(0, 3).map((item) => ({
+    messageId: item.id,
+    subject: item.subject || "无主题邮件",
+    fromName: item.fromName || "未知发件人",
+    reason: item.reasons?.[0] || "系统判断为紧急重要",
+  }));
+
+  const scheduleHighlights: Array<{
+    messageId: string;
+    subject: string;
+    type: string;
+    dueDateLabel: string;
+  }> = [];
+  const scheduleSeen = new Set<string>();
+  for (const item of [...digestResult.tomorrowDdl, ...digestResult.upcoming]) {
+    const key = `${item.messageId}:${item.type}:${item.dueDateLabel}`;
+    if (scheduleSeen.has(key)) {
+      continue;
+    }
+    scheduleSeen.add(key);
+    scheduleHighlights.push({
+      messageId: item.messageId,
+      subject: item.subject || item.type,
+      type: item.type,
+      dueDateLabel: item.dueDateLabel,
+    });
+    if (scheduleHighlights.length >= 5) {
+      break;
+    }
+  }
+
+  const recommendedActions: string[] = [];
+  if (digest.urgentImportant > 0) {
+    recommendedActions.push("先打开紧急重要邮件，确认是否需要回复或写入日历。");
+  }
+  if (digest.tomorrowDdlCount > 0) {
+    recommendedActions.push("复核明日 DDL，确保提醒和日历事件已经生成。");
+  }
+  if (digest.upcomingCount > digest.tomorrowDdlCount) {
+    recommendedActions.push("检查近期会议、考试和事件，补齐缺失的准备动作。");
+  }
+  if (digest.unread > 0 && digest.urgentImportant === 0) {
+    recommendedActions.push("快速浏览未读邮件，把不重要邮件批量降噪。");
+  }
+  if (personalizationProfile?.noiseSources.length && quietCount > 0) {
+    recommendedActions.push("把你标记为噪音来源的邮件集中浏览，避免打断当前主线。");
+  }
+  if (personalizationProfile?.softRejectMode === "draft_reject") {
+    recommendedActions.push("如果发现不想接的请求，可以优先让 Agent 准备一版委婉回复草稿。");
+  }
+  if (recommendedActions.length === 0) {
+    recommendedActions.push("今天没有明确待办压力，可以只做一次轻量复盘。");
+  }
+
+  return {
+    summaryTitle: `今日邮件摘要：${titleFocus}`,
+    summaryLines,
+    urgentHighlights,
+    scheduleHighlights,
+    recommendedActions,
+    quietCount,
+  };
+}
+
 async function buildNotificationPollResult(
   sessionToken: string,
   input: NotificationPollInput
@@ -4242,13 +5474,27 @@ async function buildNotificationPollResult(
   }
 
   const nowMs = Date.now();
-  const preferences = getNotificationPreferencesBySession(sessionToken, input.sourceId, true, input.tz);
+  const preferences = await getHydratedNotificationPreferencesBySession(sessionToken, input.sourceId, true, input.tz);
   const state = getNotificationStateBySession(sessionToken, input.sourceId, true);
   const priorityRules = getPriorityRulesSnapshotBySession(sessionToken, input.sourceId);
   const sourceContext = buildMailSourceContext(sessionToken, input.sourceId);
+  const userId = getUserIdForSessionToken(sessionToken);
+  const personalizationProfile =
+    userId && !userId.startsWith("legacy:")
+      ? await getResolvedMailPersonalizationRuntimeProfile(userId, input.sourceId)
+      : null;
 
-  const triage = await triageInbox(input.limit, priorityRules, sourceContext);
-  const urgentCandidates = triage.quadrants.urgent_important.slice(0, 20);
+  const rawTriage = await triageInbox(input.limit, priorityRules, sourceContext);
+  const triage = await alignTriageWithKnowledgeBase(
+    sessionToken,
+    input.sourceId,
+    rawTriage
+  );
+  const transientUrgentCandidates = realtimeUrgentFallbackCandidates(triage, rawTriage, nowMs);
+  const urgentCandidates = [
+    ...transientUrgentCandidates,
+    ...triage.quadrants.urgent_important,
+  ].slice(0, 20);
   const newUrgentItems: Array<{
     messageId: string;
     subject: string;
@@ -4262,7 +5508,11 @@ async function buildNotificationPollResult(
 
   for (const item of urgentCandidates) {
     const seenAt = state.seenUrgentMessageIds.get(item.id);
-    if (!seenAt && preferences.urgentPushEnabled) {
+    if (
+      !seenAt &&
+      preferences.urgentPushEnabled &&
+      isFreshUrgentNotificationCandidate(item.receivedDateTime, nowMs)
+    ) {
       newUrgentItems.push({
         messageId: item.id,
         subject: item.subject,
@@ -4270,7 +5520,7 @@ async function buildNotificationPollResult(
         fromAddress: item.fromAddress,
         receivedDateTime: item.receivedDateTime,
         webLink: item.webLink,
-        reasons: item.reasons.slice(0, 3),
+        reasons: (item.reasons ?? []).slice(0, 3),
       });
     }
 
@@ -4286,6 +5536,22 @@ async function buildNotificationPollResult(
         triggeredAt: string;
         dateKey: string;
         timeZone: string;
+        summaryTitle: string;
+        summaryLines: string[];
+        urgentHighlights: Array<{
+          messageId: string;
+          subject: string;
+          fromName: string;
+          reason: string;
+        }>;
+        scheduleHighlights: Array<{
+          messageId: string;
+          subject: string;
+          type: string;
+          dueDateLabel: string;
+        }>;
+        recommendedActions: string[];
+        quietCount: number;
         digest: {
           date: string;
           total: number;
@@ -4316,6 +5582,11 @@ async function buildNotificationPollResult(
       priorityRules,
       sourceContext
     );
+    const digestSummary = buildDailyDigestNotificationSummary({
+      digestResult,
+      urgentCandidates,
+      personalizationProfile,
+    });
     const digestSentAt = new Date(nowMs).toISOString();
     nextLastDigestDateKey = trigger.dateKey;
     nextLastDigestSentAt = digestSentAt;
@@ -4323,6 +5594,7 @@ async function buildNotificationPollResult(
       triggeredAt: digestSentAt,
       dateKey: trigger.dateKey,
       timeZone: preferences.digestTimeZone,
+      ...digestSummary,
       digest: digestResult.digest,
       tomorrowDdl: digestResult.tomorrowDdl.slice(0, 5).map((item) => ({
         messageId: item.messageId,
@@ -4357,7 +5629,7 @@ async function buildNotificationPollResult(
       counts: triage.counts,
     },
     urgent: {
-      totalUrgentImportant: triage.counts.urgent_important,
+      totalUrgentImportant: triage.counts.urgent_important + transientUrgentCandidates.length,
       newItems: newUrgentItems,
     },
     dailyDigest,
@@ -4639,7 +5911,11 @@ async function runMailProcessingPipeline(input: MailProcessingPipelineInput) {
 
   if (triage.total === 0) {
     try {
-      const triageResult = await triageInbox(limit, priorityRules, tenant);
+      const triageResult = await alignTriageWithKnowledgeBase(
+        sessionToken,
+        tenant.sourceId,
+        await triageInbox(limit, priorityRules, tenant)
+      );
       triage = {
         total: triageResult.total,
         counts: triageResult.counts,
@@ -4912,7 +6188,7 @@ function buildDurableTenantContext(
   userId: string,
   source: {
     id: string;
-    connectionType?: "composio" | "microsoft";
+    connectionType?: MailSourceConnectionType;
     microsoftAccountId?: string;
     mailboxUserId?: string;
   }
@@ -5510,7 +6786,7 @@ async function pollAutomaticMailProcessingInBackground(): Promise<void> {
       const execution = await runAutomaticMailProcessingForSessionSource({
         sessionToken,
         sourceId: source.id,
-        timeZone: getNotificationPreferencesBySession(sessionToken, source.id, true).digestTimeZone,
+        timeZone: (await getHydratedNotificationPreferencesBySession(sessionToken, source.id, true)).digestTimeZone,
       });
       if (execution.status === "processed" && shouldEmitAutomaticProcessingResult(execution.result)) {
         server.log.info(
@@ -5625,6 +6901,8 @@ server.addHook("onRequest", async (request, reply) => {
     pathname === "/api/live" ||
     pathname === "/api/ready" ||
     pathname === "/api/health" ||
+    pathname === "/api/mail/connections/gmail/direct/start" ||
+    pathname === "/api/mail/connections/gmail/direct/callback" ||
     pathname === "/api/mail/connections/outlook/direct/start" ||
     pathname === "/api/mail/connections/outlook/direct/callback" ||
     pathname === "/api/mail/connections/outlook/direct/webhook"
@@ -5660,8 +6938,27 @@ server.addHook("preHandler", async (request, reply) => {
   }
 
   try {
-    await hydrateMailSourcesForSession(sessionToken);
+    await hydrateSessionAccessStateIfNeeded(sessionToken, {
+      hydrateMailSources: true,
+    });
   } catch (error) {
+    if (error instanceof UnauthorizedSessionError) {
+      return reply.status(401).send({
+        ok: false,
+        error: "Unauthorized",
+      });
+    }
+    if (error instanceof AuthSessionStoreUnavailableError) {
+      server.log.warn(
+        {
+          operation: error.operation,
+          detail: error.detail instanceof Error ? error.detail.message : String(error.detail),
+          pathname,
+        },
+        "Failed to hydrate auth session access state"
+      );
+      return reply.status(503).send(authSessionStoreUnavailableResponse());
+    }
     const message = error instanceof Error ? error.message : String(error);
     server.log.warn({ message, pathname }, "Failed to hydrate tenant mail sources");
     return reply.status(503).send({
@@ -5714,7 +7011,6 @@ const sourceIdSchema = z
   .min(3)
   .max(80)
   .regex(/^[a-z0-9_-]+$/i, "Invalid source id");
-const sourceProviderSchema = z.enum(["outlook"]);
 const sourceIdOptionalSchema = sourceIdSchema.optional();
 const sourceOnlyQuerySchema = z.object({
   sourceId: sourceIdOptionalSchema,
@@ -5863,6 +7159,72 @@ const priorityRuleDeleteSchema = z.object({
   id: z.string().min(8).max(80),
 });
 
+const personalizationRejectModeSchema = z.enum(["downgrade_only", "draft_reject"]);
+
+const personalizationProfileUpsertSchema = z.object({
+  sourceId: sourceIdOptionalSchema,
+  completed: z.boolean().optional(),
+  urgentSignals: z.string().max(3000).optional(),
+  hiddenImportantTopics: z.string().max(3000).optional(),
+  deadlineAlertWindowHours: z.number().int().min(1).max(24 * 14).optional(),
+  vipSenders: z.string().max(3000).optional(),
+  softRejectMode: personalizationRejectModeSchema.optional(),
+  softRejectNotes: z.string().max(3000).optional(),
+  noiseSources: z.string().max(3000).optional(),
+  notes: z.string().max(3000).optional(),
+});
+
+const personalizationTargetTypeSchema = z.enum(["mail", "event", "person"]);
+const personalizationQuadrantSchema = z.enum([
+  "unprocessed",
+  "urgent_important",
+  "not_urgent_important",
+  "urgent_not_important",
+  "not_urgent_not_important",
+]);
+const personalizationFeedbackEventTypeSchema = z.enum([
+  "detail_view",
+  "related_mail_open",
+  "external_mail_open",
+  "knowledge_card_saved",
+  "calendar_sync",
+  "manual_override",
+]);
+const personalizationFeedbackContextSchema = z.object({
+  rawMessageId: z.string().trim().min(1).max(4096).optional(),
+  mailId: z.string().trim().min(1).max(4096).optional(),
+  fromAddress: z.string().trim().min(1).max(320).optional(),
+  fromName: z.string().trim().min(1).max(300).optional(),
+  subject: z.string().trim().min(1).max(400).optional(),
+  personId: z.string().trim().min(1).max(4096).optional(),
+  personName: z.string().trim().min(1).max(300).optional(),
+  personEmail: z.string().trim().min(1).max(320).optional(),
+  eventId: z.string().trim().min(1).max(4096).optional(),
+  eventName: z.string().trim().min(1).max(300).optional(),
+  currentQuadrant: personalizationQuadrantSchema.optional(),
+  tags: z.array(z.string().trim().min(1).max(80)).max(8).optional(),
+});
+const personalizationFeedbackBatchSchema = z.object({
+  sourceId: sourceIdOptionalSchema,
+  events: z.array(
+    z.object({
+      targetType: personalizationTargetTypeSchema,
+      targetId: z.string().trim().min(1).max(4096),
+      eventType: personalizationFeedbackEventTypeSchema,
+      dwellMs: z.number().int().min(0).max(24 * 60 * 60 * 1000).optional(),
+      quadrant: personalizationQuadrantSchema.optional(),
+      context: personalizationFeedbackContextSchema.optional(),
+    })
+  ).min(1).max(24),
+});
+const personalizationOverrideUpsertSchema = z.object({
+  sourceId: sourceIdOptionalSchema,
+  targetType: personalizationTargetTypeSchema,
+  targetId: z.string().trim().min(1).max(4096),
+  quadrant: personalizationQuadrantSchema.nullable(),
+  context: personalizationFeedbackContextSchema.optional(),
+});
+
 const notificationPreferencesUpdateSchema = z.object({
   sourceId: sourceIdOptionalSchema,
   urgentPushEnabled: z.boolean().optional(),
@@ -5943,7 +7305,7 @@ const sourceLabelSchema = z.string().trim().min(1).max(80);
 const mailSourceCreateSchema = z.object({
   label: sourceLabelSchema,
   emailHint: z.string().trim().max(120).optional(),
-  connectionType: z.enum(["composio", "microsoft"]).default("composio"),
+  connectionType: mailSourceConnectionTypeSchema.default("composio"),
   mailboxUserId: z
     .string()
     .trim()
@@ -5963,7 +7325,18 @@ const mailSourceCreateSchema = z.object({
     })
     .optional(),
   microsoftAccountId: z.string().trim().min(1).max(160).optional(),
-  provider: sourceProviderSchema.default("outlook"),
+  provider: mailSourceProviderSchema.default("outlook"),
+});
+
+const imapConnectionCreateSchema = z.object({
+  provider: mailSourceProviderSchema.exclude(["outlook"]),
+  label: sourceLabelSchema.optional(),
+  email: z.string().trim().email().max(180),
+  username: z.string().trim().min(1).max(180).optional(),
+  appPassword: z.string().trim().min(1).max(512),
+  imapHost: z.string().trim().min(3).max(255).optional(),
+  imapPort: z.coerce.number().int().min(1).max(65535).optional(),
+  imapSecure: z.boolean().optional(),
 });
 
 const mailSourceUpdateSchema = z.object({
@@ -6033,7 +7406,23 @@ const outlookDirectStartQuerySchema = z.object({
   attemptId: z.string().trim().min(8).max(120).optional(),
 });
 
+const gmailDirectStartQuerySchema = z.object({
+  appOrigin: z.string().trim().min(1).max(200).optional(),
+  attemptId: z.string().trim().min(8).max(120).optional(),
+});
+
+const directAuthStatusQuerySchema = z.object({
+  attemptId: z.string().trim().min(8).max(120),
+});
+
 const outlookDirectCallbackQuerySchema = z.object({
+  code: z.string().trim().min(1).optional(),
+  state: z.string().trim().min(1).optional(),
+  error: z.string().trim().min(1).optional(),
+  error_description: z.string().trim().min(1).optional(),
+});
+
+const gmailDirectCallbackQuerySchema = z.object({
   code: z.string().trim().min(1).optional(),
   state: z.string().trim().min(1).optional(),
   error: z.string().trim().min(1).optional(),
@@ -6440,9 +7829,21 @@ async function readinessProbe() {
     const llmConfigured =
       env.llmProviderBaseUrl.length > 0 && env.llmProviderApiKey.length > 0 && env.llmProviderModel.length > 0;
     const microsoftConfigured = isMicrosoftDirectAuthConfigured() && env.appEncryptionKey.length > 0;
+    const googleConfigured =
+      isGoogleDirectAuthConfigured() &&
+      env.appEncryptionKey.length > 0 &&
+      (env.mailSourceMemoryFallbackEnabled || prisma.ok);
     const redisConfigured = !env.redisAuthSessionsEnabled || redisAuthSessionStore.enabled;
+    const privacyReadiness = mailPrivacyReadiness();
+    const mailPrivacy = {
+      ok: privacyReadiness.ready,
+      enabled: privacyReadiness.enabled,
+      keyVersion: env.mailPrivacyKeyVersion,
+      ...(privacyReadiness.code ? { code: privacyReadiness.code } : {}),
+      ...(privacyReadiness.error ? { error: privacyReadiness.error } : {}),
+    };
     const webhookUrl = durableWebhookUrlForOutlook();
-    const ready = prisma.ok && llmConfigured && microsoftConfigured && redisConfigured;
+    const ready = prisma.ok && llmConfigured && microsoftConfigured && redisConfigured && privacyReadiness.ready;
 
     return {
       statusCode: ready ? 200 : 503,
@@ -6454,7 +7855,9 @@ async function readinessProbe() {
           mode: env.agentRuntime,
           prisma,
           llm: { ok: llmConfigured, model: env.llmProviderModel },
+          mailPrivacy,
           microsoft: { ok: microsoftConfigured },
+          google: { ok: googleConfigured },
           outlookSync: {
             ok: true,
             mode: webhookUrl ? "hybrid" : "poll",
@@ -6541,7 +7944,9 @@ server.get("/api/auth/session", async (request, reply) => {
   if (token) {
     await hydrateAuthSessionFromRedisIfNeeded(token, now);
     if (await isAuthSessionRevokedInRedis(token)) {
+      const sessionTtlMs = await resolveSessionTtlMsForToken(token, now);
       clearSessionState(token);
+      await removePersistedAuthSession(token, { ttlMs: sessionTtlMs });
       reply.header("Set-Cookie", clearSessionCookie(shouldUseSecureCookie(request)));
       return {
         ok: true,
@@ -6573,7 +7978,7 @@ server.get("/api/auth/session", async (request, reply) => {
   if (authenticated && token && sessionUserId && !user && prismaAuthStore) {
     const sessionTtlMs = await resolveSessionTtlMsForToken(token, now);
     clearSessionState(token);
-    await removeAuthSessionFromRedis(token, { ttlMs: sessionTtlMs });
+    await removePersistedAuthSession(token, { ttlMs: sessionTtlMs });
     reply.header("Set-Cookie", clearSessionCookie(shouldUseSecureCookie(request)));
     authenticated = false;
   }
@@ -6595,7 +8000,9 @@ server.get("/api/auth/me", async (request, reply) => {
   if (token) {
     await hydrateAuthSessionFromRedisIfNeeded(token, now);
     if (await isAuthSessionRevokedInRedis(token)) {
+      const sessionTtlMs = await resolveSessionTtlMsForToken(token, now);
       clearSessionState(token);
+      await removePersistedAuthSession(token, { ttlMs: sessionTtlMs });
       reply.header("Set-Cookie", clearSessionCookie(shouldUseSecureCookie(request)));
       reply.status(204);
       return reply.send();
@@ -6615,7 +8022,7 @@ server.get("/api/auth/me", async (request, reply) => {
     }
     const sessionTtlMs = await resolveSessionTtlMsForToken(token, now);
     clearSessionState(token);
-    await removeAuthSessionFromRedis(token, { ttlMs: sessionTtlMs });
+    await removePersistedAuthSession(token, { ttlMs: sessionTtlMs });
     reply.header("Set-Cookie", clearSessionCookie(shouldUseSecureCookie(request)));
     reply.status(204);
     return reply.send();
@@ -6646,7 +8053,7 @@ server.get("/api/auth/me", async (request, reply) => {
     }
     const sessionTtlMs = await resolveSessionTtlMsForToken(token, now);
     clearSessionState(token);
-    await removeAuthSessionFromRedis(token, { ttlMs: sessionTtlMs });
+    await removePersistedAuthSession(token, { ttlMs: sessionTtlMs });
     reply.header("Set-Cookie", clearSessionCookie(shouldUseSecureCookie(request)));
     reply.status(204);
     return reply.send();
@@ -6669,7 +8076,9 @@ server.post("/api/auth/preferences", async (request, reply) => {
     };
   }
   if (await isAuthSessionRevokedInRedis(token)) {
+    const sessionTtlMs = await resolveSessionTtlMsForToken(token, now);
     clearSessionState(token);
+    await removePersistedAuthSession(token, { ttlMs: sessionTtlMs });
     reply.header("Set-Cookie", clearSessionCookie(shouldUseSecureCookie(request)));
     reply.status(401);
     return {
@@ -6683,7 +8092,7 @@ server.post("/api/auth/preferences", async (request, reply) => {
   if (!sessionUserId) {
     const sessionTtlMs = await resolveSessionTtlMsForToken(token, now);
     clearSessionState(token);
-    await removeAuthSessionFromRedis(token, { ttlMs: sessionTtlMs });
+    await removePersistedAuthSession(token, { ttlMs: sessionTtlMs });
     reply.header("Set-Cookie", clearSessionCookie(shouldUseSecureCookie(request)));
     reply.status(401);
     return {
@@ -6745,7 +8154,7 @@ server.post("/api/auth/preferences", async (request, reply) => {
   if (!user) {
     const sessionTtlMs = await resolveSessionTtlMsForToken(token, now);
     clearSessionState(token);
-    await removeAuthSessionFromRedis(token, { ttlMs: sessionTtlMs });
+    await removePersistedAuthSession(token, { ttlMs: sessionTtlMs });
     reply.header("Set-Cookie", clearSessionCookie(shouldUseSecureCookie(request)));
     reply.status(401);
     return {
@@ -6778,7 +8187,7 @@ server.post("/api/auth/preferences", async (request, reply) => {
   }
 
   setLruEntry(authSessionUserViewByToken, token, toAuthUserView(updatedUser));
-  persistAuthSessionToRedis(token);
+  persistAuthSession(token, now);
   return {
     ok: true,
     user: toAuthUserView(updatedUser),
@@ -7183,7 +8592,7 @@ server.post("/api/auth/logout", async (request, reply) => {
     const sessionTtlMs = await resolveSessionTtlMsForToken(token, now);
     clearSessionState(token);
     try {
-      await removeAuthSessionFromRedis(token, { strict: true, ttlMs: sessionTtlMs });
+      await removePersistedAuthSession(token, { strict: true, ttlMs: sessionTtlMs });
     } catch {
       reply.header("Set-Cookie", clearSessionCookie(secureCookie));
       reply.status(503);
@@ -7299,6 +8708,189 @@ server.get("/api/mail/sources", async (request, reply) => {
   };
 });
 
+server.get("/api/mail/providers", async () => ({
+  ok: true,
+  result: {
+    providers: getMailProviderCatalog(),
+  },
+}));
+
+server.post("/api/mail/connections/imap", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  const now = Date.now();
+  if (
+    isBatchRouteRateLimited(
+      scopedRouteKey("mail_imap_connect", sessionToken),
+      request.ip,
+      now,
+      mailSourcesWriteRateLimitPerMin
+    )
+  ) {
+    reply.header("Retry-After", "60");
+    reply.status(429);
+    return {
+      ok: false,
+      error: "Too many IMAP connection requests",
+    };
+  }
+
+  if (!sessionToken) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+    };
+  }
+
+  const parsed = imapConnectionCreateSchema.safeParse(request.body);
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid payload",
+      details: parsed.error.issues,
+    };
+  }
+
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId || userId.startsWith("legacy:")) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+      errorCode: "UNAUTHORIZED",
+    };
+  }
+
+  const defaults = resolveImapDefaults(parsed.data.provider);
+  const host = cleanOptionalText(parsed.data.imapHost) ?? defaults?.host;
+  const port = parsed.data.imapPort ?? defaults?.port ?? 993;
+  const secureRequested = parsed.data.imapSecure ?? defaults?.secure ?? true;
+  const username = cleanOptionalText(parsed.data.username) ?? parsed.data.email.trim();
+  const descriptor = getMailProviderDescriptor(parsed.data.provider);
+
+  if (!host) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "IMAP host is required for this provider",
+      errorCode: "IMAP_HOST_REQUIRED",
+    };
+  }
+
+  if (!secureRequested) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "TLS is required for IMAP connections",
+      errorCode: "IMAP_TLS_REQUIRED",
+    };
+  }
+
+  const secure = true;
+
+  try {
+    await verifyImapConnection({
+      host,
+      port,
+      secure,
+      username,
+      password: parsed.data.appPassword,
+    });
+
+    const result = await mailSourceService.createForUser(userId, {
+      label:
+        cleanOptionalText(parsed.data.label) ??
+        `${descriptor?.label ?? "IMAP"} ${parsed.data.email.trim()}`,
+      provider: parsed.data.provider,
+      connectionType: "imap_password",
+      emailHint: parsed.data.email.trim(),
+      mailboxUserId: username,
+      trustedImapConnection: true,
+    });
+
+    try {
+      await saveImapCredential(request.log, {
+        userId,
+        sourceId: result.source.id,
+        username,
+        host,
+        port,
+        secure,
+        password: parsed.data.appPassword,
+      });
+    } catch (error) {
+      await mailSourceService.deleteForUser(userId, result.source.id).catch(() => undefined);
+      throw error;
+    }
+
+    const routingStatus: MailSourceRoutingStatus = {
+      verifiedAt: new Date().toISOString(),
+      routingVerified: true,
+      failFast: false,
+      message: "IMAP mailbox login verified.",
+      mailbox: {
+        required: true,
+        status: "verified",
+        verified: true,
+        message: "IMAP INBOX opened successfully.",
+      },
+      connectedAccount: {
+        required: false,
+        status: "skipped",
+        verified: true,
+        message: "IMAP providers do not use a connectedAccountId.",
+      },
+    };
+    await mailSourceService.saveRoutingStatus(userId, result.source.id, routingStatus);
+    await mailSourceService.selectForUser(userId, result.source.id);
+    await hydrateMailSourcesForSession(sessionToken);
+
+    auditTenantEvent(request, {
+      userId,
+      sourceId: result.source.id,
+      sessionToken,
+      action: "mail_source.imap_connect",
+      resourceType: "mail_source",
+      resourceId: result.source.id,
+      metadata: {
+        provider: result.source.provider,
+        connectionType: result.source.connectionType,
+        host,
+        port,
+        secure,
+      },
+    });
+
+    const snapshot = getMailSourcesSnapshotBySession(sessionToken);
+    return {
+      ok: true,
+      result: {
+        source: snapshot.sources.find((source) => source.id === result.source.id) ?? {
+          ...result.source,
+          ready: true,
+          routingStatus,
+        },
+        activeSourceId: snapshot.activeSourceId ?? result.source.id,
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const isConnectionError =
+      message === "IMAP_CREDENTIAL_NOT_FOUND" ||
+      message.includes("AUTHENTICATIONFAILED") ||
+      message.includes("Invalid credentials") ||
+      message.includes("Command failed") ||
+      message.includes("LOGIN");
+    reply.status(isConnectionError ? 401 : 500);
+    return {
+      ok: false,
+      error: isConnectionError ? "IMAP connection verification failed" : message,
+      errorCode: isConnectionError ? "IMAP_CONNECTION_FAILED" : "IMAP_CONNECT_ERROR",
+    };
+  }
+});
+
 server.post("/api/mail/sources", async (request, reply) => {
   const sessionToken = getSessionTokenFromRequest(request);
   const now = Date.now();
@@ -7364,11 +8956,11 @@ server.post("/api/mail/sources", async (request, reply) => {
           id: result.source.id,
           name: result.source.name,
           emailHint: result.source.emailHint,
-          timeZone: getNotificationPreferencesBySession(
+          timeZone: (await getHydratedNotificationPreferencesBySession(
             sessionToken,
             result.source.id,
             true
-          ).digestTimeZone,
+          )).digestTimeZone,
           enabled: result.source.enabled,
           microsoftAccountId: result.source.microsoftAccountId,
           mailboxUserId: result.source.mailboxUserId,
@@ -7400,6 +8992,10 @@ server.post("/api/mail/sources", async (request, reply) => {
     reply.status(
       message === "MAIL_SOURCE_CONNECTION_REQUIRED"
         ? 400
+        : message === "MAIL_SOURCE_PROVIDER_CONNECTION_UNSUPPORTED" ||
+            message === "MAIL_SOURCE_CONNECTION_TYPE_NOT_IMPLEMENTED" ||
+            message === "IMAP_CONNECTION_VERIFICATION_REQUIRED"
+          ? 400
         : message === "COMPOSIO_ACCOUNT_OWNERSHIP_REQUIRED"
           ? 412
           : message === "MICROSOFT_ACCOUNT_NOT_FOUND"
@@ -7474,11 +9070,11 @@ server.post("/api/mail/sources/update", async (request, reply) => {
               id: result.source.id,
               name: result.source.name,
               emailHint: result.source.emailHint,
-              timeZone: getNotificationPreferencesBySession(
+              timeZone: (await getHydratedNotificationPreferencesBySession(
                 sessionToken,
                 result.source.id,
                 true
-              ).digestTimeZone,
+              )).digestTimeZone,
               enabled: result.source.enabled,
               microsoftAccountId: result.source.microsoftAccountId,
               mailboxUserId: result.source.mailboxUserId,
@@ -7888,6 +9484,18 @@ server.get("/api/mail/connections/outlook/direct/start", async (request, reply) 
     )
   ) {
     reply.header("Retry-After", "60");
+    if (sessionToken) {
+      await rememberDirectAuthAttempt(sessionToken, "outlook", attemptId, {
+        state: "failed",
+        message: "请稍等一分钟后再重新尝试连接 Outlook。",
+        detail: "MICROSOFT_OAUTH_RATE_LIMITED",
+        payload: {
+          attemptId,
+          error: "MICROSOFT_OAUTH_RATE_LIMITED",
+          retryAfterSec: 60,
+        },
+      });
+    }
     return htmlReply({
       ok: false,
       title: "请求过于频繁",
@@ -7915,6 +9523,15 @@ server.get("/api/mail/connections/outlook/direct/start", async (request, reply) 
   }
 
   if (!isMicrosoftDirectAuthConfigured()) {
+    await rememberDirectAuthAttempt(sessionToken, "outlook", attemptId, {
+      state: "failed",
+      message: "Microsoft OAuth 尚未配置",
+      detail: "后端缺少 MICROSOFT_CLIENT_ID 或重定向配置，当前无法直接连接 Outlook。",
+      payload: {
+        attemptId,
+        error: "MICROSOFT_OAUTH_NOT_CONFIGURED",
+      },
+    });
     return htmlReply({
       ok: false,
       title: "缺少微软配置",
@@ -7928,6 +9545,15 @@ server.get("/api/mail/connections/outlook/direct/start", async (request, reply) 
   }
 
   if (!(await touchAuthSessionForRequest(sessionToken, request, reply))) {
+    await rememberDirectAuthAttempt(sessionToken, "outlook", attemptId, {
+      state: "failed",
+      message: "当前登录会话已失效，请先回到主页面重新登录。",
+      detail: "UNAUTHORIZED",
+      payload: {
+        attemptId,
+        error: "UNAUTHORIZED",
+      },
+    });
     return htmlReply({
       ok: false,
       title: "会话已过期",
@@ -7941,6 +9567,13 @@ server.get("/api/mail/connections/outlook/direct/start", async (request, reply) 
   }
 
   try {
+    await rememberDirectAuthAttempt(sessionToken, "outlook", attemptId, {
+      state: "pending",
+      message: "Microsoft 登录已发起，等待授权回调。",
+      payload: {
+        attemptId,
+      },
+    });
     const start = beginMicrosoftDirectAuth({
       sessionToken,
       appOrigin,
@@ -7950,6 +9583,16 @@ server.get("/api/mail/connections/outlook/direct/start", async (request, reply) 
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     server.log.warn({ message }, "Microsoft direct auth start failed");
+    await rememberDirectAuthAttempt(sessionToken, "outlook", attemptId, {
+      state: "failed",
+      message,
+      detail: message,
+      payload: {
+        attemptId,
+        error: "MICROSOFT_OAUTH_START_FAILED",
+        detail: message,
+      },
+    });
     return htmlReply({
       ok: false,
       title: "微软登录初始化失败",
@@ -7958,6 +9601,569 @@ server.get("/api/mail/connections/outlook/direct/start", async (request, reply) 
       payload: {
         attemptId,
         error: "MICROSOFT_OAUTH_START_FAILED",
+        detail: message,
+      },
+    });
+  }
+});
+
+server.get("/api/mail/connections/outlook/direct/status", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  const now = Date.now();
+  if (
+    isBatchRouteRateLimited(
+      scopedRouteKey("mail_outlook_direct_status", sessionToken),
+      request.ip,
+      now,
+      mailConnectionRateLimitPerMin
+    )
+  ) {
+    reply.header("Retry-After", "60");
+    reply.status(429);
+    return {
+      ok: false,
+      error: "Too many Outlook auth status requests",
+    };
+  }
+
+  if (!sessionToken) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+    };
+  }
+
+  if (!(await touchAuthSessionForRequest(sessionToken, request, reply))) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+    };
+  }
+
+  const parsed = directAuthStatusQuerySchema.safeParse(request.query ?? {});
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid attemptId",
+      details: parsed.error.issues,
+    };
+  }
+
+  const attempt = await getDirectAuthAttempt(sessionToken, "outlook", parsed.data.attemptId);
+  return {
+    ok: true,
+    result: {
+      provider: "outlook",
+      attemptId: parsed.data.attemptId,
+      state: attempt?.state ?? "unknown",
+      updatedAt: attempt ? new Date(attempt.updatedAt).toISOString() : null,
+      message: attempt?.message ?? null,
+      detail: attempt?.detail ?? null,
+      payload: attempt?.payload ?? null,
+    },
+  };
+});
+
+server.get("/api/mail/connections/gmail/direct/start", async (request, reply) => {
+  const parsed = gmailDirectStartQuerySchema.safeParse(request.query ?? {});
+  const appOrigin = resolveAppOriginForRequest(
+    request,
+    parsed.success ? parsed.data.appOrigin : undefined
+  );
+  const attemptId = parsed.success && parsed.data.attemptId ? parsed.data.attemptId : randomUUID();
+  const htmlReply = (input: {
+    ok: boolean;
+    title: string;
+    heading: string;
+    message: string;
+    payload: Record<string, unknown>;
+  }) =>
+    reply
+      .type("text/html; charset=utf-8")
+      .send(
+        renderGoogleAuthPopupPage({
+          ...input,
+          appOrigin,
+        })
+      );
+
+  const sessionToken = getSessionTokenFromRequest(request);
+  const now = Date.now();
+  if (
+    isBatchRouteRateLimited(
+      scopedRouteKey("mail_gmail_direct_start", sessionToken),
+      request.ip,
+      now,
+      mailConnectionRateLimitPerMin
+    )
+  ) {
+    reply.header("Retry-After", "60");
+    if (sessionToken) {
+      await rememberDirectAuthAttempt(sessionToken, "gmail", attemptId, {
+        state: "failed",
+        message: "请稍等一分钟后再重新尝试连接 Gmail。",
+        detail: "GOOGLE_OAUTH_RATE_LIMITED",
+        payload: {
+          attemptId,
+          error: "GOOGLE_OAUTH_RATE_LIMITED",
+          retryAfterSec: 60,
+        },
+      });
+    }
+    return htmlReply({
+      ok: false,
+      title: "请求过于频繁",
+      heading: "Gmail 登录请求过于频繁",
+      message: "请稍等一分钟后再重新尝试连接 Gmail。",
+      payload: {
+        attemptId,
+        error: "GOOGLE_OAUTH_RATE_LIMITED",
+        retryAfterSec: 60,
+      },
+    });
+  }
+
+  if (!sessionToken) {
+    return htmlReply({
+      ok: false,
+      title: "会话已过期",
+      heading: "无法继续 Gmail 登录",
+      message: "当前登录会话已失效，请先回到主页面重新登录。",
+      payload: {
+        attemptId,
+        error: "UNAUTHORIZED",
+      },
+    });
+  }
+
+  if (!isGoogleDirectAuthConfigured()) {
+    await rememberDirectAuthAttempt(sessionToken, "gmail", attemptId, {
+      state: "failed",
+      message: "Google OAuth 尚未配置",
+      detail: "后端缺少 GOOGLE_CLIENT_ID 或重定向配置，当前无法直接连接 Gmail。",
+      payload: {
+        attemptId,
+        error: "GOOGLE_OAUTH_NOT_CONFIGURED",
+      },
+    });
+    return htmlReply({
+      ok: false,
+      title: "缺少 Google 配置",
+      heading: "Google OAuth 尚未配置",
+      message: "后端缺少 GOOGLE_CLIENT_ID 或重定向配置，当前无法直接连接 Gmail。",
+      payload: {
+        attemptId,
+        error: "GOOGLE_OAUTH_NOT_CONFIGURED",
+      },
+    });
+  }
+
+  if (env.appEncryptionKey.length === 0) {
+    await rememberDirectAuthAttempt(sessionToken, "gmail", attemptId, {
+      state: "failed",
+      message: "后端缺少 APP_ENCRYPTION_KEY，当前无法安全保存 Gmail 令牌。",
+      detail: "GOOGLE_OAUTH_STORAGE_NOT_CONFIGURED",
+      payload: {
+        attemptId,
+        error: "GOOGLE_OAUTH_STORAGE_NOT_CONFIGURED",
+      },
+    });
+    return htmlReply({
+      ok: false,
+      title: "缺少本地加密配置",
+      heading: "Google OAuth 尚未完全配置",
+      message: "后端缺少 APP_ENCRYPTION_KEY，当前无法安全保存 Gmail 令牌。",
+      payload: {
+        attemptId,
+        error: "GOOGLE_OAUTH_STORAGE_NOT_CONFIGURED",
+      },
+    });
+  }
+
+  try {
+    const prisma = await getPrismaClient(server.log);
+    if (!prisma && !env.mailSourceMemoryFallbackEnabled) {
+      await rememberDirectAuthAttempt(sessionToken, "gmail", attemptId, {
+        state: "failed",
+        message: "当前既没有可用数据库，也没有启用本地回退存储，无法保存 Gmail 令牌。",
+        detail: "GOOGLE_OAUTH_STORE_UNAVAILABLE",
+        payload: {
+          attemptId,
+          error: "GOOGLE_OAUTH_STORE_UNAVAILABLE",
+        },
+      });
+      return htmlReply({
+        ok: false,
+        title: "缺少 Gmail 存储能力",
+        heading: "Google OAuth 尚未完全配置",
+        message: "当前既没有可用数据库，也没有启用本地回退存储，无法保存 Gmail 令牌。",
+        payload: {
+          attemptId,
+          error: "GOOGLE_OAUTH_STORE_UNAVAILABLE",
+        },
+      });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    server.log.warn({ message }, "Google direct auth store readiness check failed");
+    await rememberDirectAuthAttempt(sessionToken, "gmail", attemptId, {
+      state: "failed",
+      message: "后端暂时无法初始化 Gmail 账号存储，请稍后重试。",
+      detail: message,
+      payload: {
+        attemptId,
+        error: "GOOGLE_OAUTH_STORE_UNAVAILABLE",
+        detail: message,
+      },
+    });
+    return htmlReply({
+      ok: false,
+      title: "Gmail 存储初始化失败",
+      heading: "Google OAuth 尚未完全配置",
+      message: "后端暂时无法初始化 Gmail 账号存储，请稍后重试。",
+      payload: {
+        attemptId,
+        error: "GOOGLE_OAUTH_STORE_UNAVAILABLE",
+        detail: message,
+      },
+    });
+  }
+
+  if (!(await touchAuthSessionForRequest(sessionToken, request, reply))) {
+    await rememberDirectAuthAttempt(sessionToken, "gmail", attemptId, {
+      state: "failed",
+      message: "当前登录会话已失效，请先回到主页面重新登录。",
+      detail: "UNAUTHORIZED",
+      payload: {
+        attemptId,
+        error: "UNAUTHORIZED",
+      },
+    });
+    return htmlReply({
+      ok: false,
+      title: "会话已过期",
+      heading: "无法继续 Gmail 登录",
+      message: "当前登录会话已失效，请先回到主页面重新登录。",
+      payload: {
+        attemptId,
+        error: "UNAUTHORIZED",
+      },
+    });
+  }
+
+  try {
+    await rememberDirectAuthAttempt(sessionToken, "gmail", attemptId, {
+      state: "pending",
+      message: "Gmail 登录已发起，等待授权回调。",
+      payload: {
+        attemptId,
+      },
+    });
+    const start = beginGoogleDirectAuth({
+      sessionToken,
+      appOrigin,
+      attemptId,
+    });
+    return reply.redirect(start.authorizeUrl);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    server.log.warn({ message }, "Google direct auth start failed");
+    await rememberDirectAuthAttempt(sessionToken, "gmail", attemptId, {
+      state: "failed",
+      message,
+      detail: message,
+      payload: {
+        attemptId,
+        error: "GOOGLE_OAUTH_START_FAILED",
+        detail: message,
+      },
+    });
+    return htmlReply({
+      ok: false,
+      title: "Gmail 登录初始化失败",
+      heading: "无法启动 Google 登录",
+      message,
+      payload: {
+        attemptId,
+        error: "GOOGLE_OAUTH_START_FAILED",
+        detail: message,
+      },
+    });
+  }
+});
+
+server.get("/api/mail/connections/gmail/direct/status", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  const now = Date.now();
+  if (
+    isBatchRouteRateLimited(
+      scopedRouteKey("mail_gmail_direct_status", sessionToken),
+      request.ip,
+      now,
+      mailConnectionRateLimitPerMin
+    )
+  ) {
+    reply.header("Retry-After", "60");
+    reply.status(429);
+    return {
+      ok: false,
+      error: "Too many Gmail auth status requests",
+    };
+  }
+
+  if (!sessionToken) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+    };
+  }
+
+  if (!(await touchAuthSessionForRequest(sessionToken, request, reply))) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+    };
+  }
+
+  const parsed = directAuthStatusQuerySchema.safeParse(request.query ?? {});
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid attemptId",
+      details: parsed.error.issues,
+    };
+  }
+
+  const attempt = await getDirectAuthAttempt(sessionToken, "gmail", parsed.data.attemptId);
+  return {
+    ok: true,
+    result: {
+      provider: "gmail",
+      attemptId: parsed.data.attemptId,
+      state: attempt?.state ?? "unknown",
+      updatedAt: attempt ? new Date(attempt.updatedAt).toISOString() : null,
+      message: attempt?.message ?? null,
+      detail: attempt?.detail ?? null,
+      payload: attempt?.payload ?? null,
+    },
+  };
+});
+
+server.get("/api/mail/connections/gmail/direct/callback", async (request, reply) => {
+  const parsed = gmailDirectCallbackQuerySchema.safeParse(request.query ?? {});
+  const fallbackOrigin = env.corsOrigins[0] ?? "http://127.0.0.1:5173";
+  const htmlReply = (input: {
+    ok: boolean;
+    appOrigin?: string;
+    title: string;
+    heading: string;
+    message: string;
+    payload: Record<string, unknown>;
+  }) =>
+    reply
+      .type("text/html; charset=utf-8")
+      .send(
+        renderGoogleAuthPopupPage({
+          ...input,
+          appOrigin: input.appOrigin ?? fallbackOrigin,
+        })
+      );
+
+  if (!parsed.success) {
+    return htmlReply({
+      ok: false,
+      title: "Gmail 登录失败",
+      heading: "回调参数无效",
+      message: "Google 返回的回调参数不完整，请重新尝试登录。",
+      payload: {
+        error: "GOOGLE_OAUTH_INVALID_CALLBACK",
+      },
+    });
+  }
+
+  if (parsed.data.error) {
+    const failedState = parsed.data.state ? consumeGoogleDirectAuthState(parsed.data.state) : null;
+    if (failedState) {
+      await rememberDirectAuthAttempt(failedState.sessionToken, "gmail", failedState.attemptId, {
+        state: "failed",
+        message: parsed.data.error_description ?? parsed.data.error,
+        detail: parsed.data.error_description ?? null,
+        payload: {
+          attemptId: failedState.attemptId,
+          error: parsed.data.error,
+          detail: parsed.data.error_description ?? null,
+        },
+      });
+    }
+    return htmlReply({
+      ok: false,
+      ...(failedState ? { appOrigin: failedState.appOrigin } : {}),
+      title: "Gmail 登录未完成",
+      heading: "Google 登录未完成",
+      message: parsed.data.error_description ?? parsed.data.error,
+      payload: {
+        ...(failedState ? { attemptId: failedState.attemptId } : {}),
+        error: parsed.data.error,
+        detail: parsed.data.error_description ?? null,
+      },
+    });
+  }
+
+  if (!parsed.data.code || !parsed.data.state) {
+    const failedState = parsed.data.state ? consumeGoogleDirectAuthState(parsed.data.state) : null;
+    if (failedState) {
+      await rememberDirectAuthAttempt(failedState.sessionToken, "gmail", failedState.attemptId, {
+        state: "failed",
+        message: "没有收到可用的授权码，请重新尝试登录。",
+        detail: "GOOGLE_OAUTH_CODE_MISSING",
+        payload: {
+          attemptId: failedState.attemptId,
+          error: "GOOGLE_OAUTH_CODE_MISSING",
+        },
+      });
+    }
+    return htmlReply({
+      ok: false,
+      ...(failedState ? { appOrigin: failedState.appOrigin } : {}),
+      title: "Gmail 登录失败",
+      heading: "回调参数缺失",
+      message: "没有收到可用的授权码，请重新尝试登录。",
+      payload: {
+        ...(failedState ? { attemptId: failedState.attemptId } : {}),
+        error: "GOOGLE_OAUTH_CODE_MISSING",
+      },
+    });
+  }
+
+  let completedAuth:
+    | Awaited<ReturnType<typeof completeGoogleDirectAuth>>
+    | null = null;
+
+  try {
+    const completed = await completeGoogleDirectAuth({
+      state: parsed.data.state,
+      code: parsed.data.code,
+      ensureSessionActive: (sessionToken) => touchAuthSessionForRequest(sessionToken, request),
+    });
+    completedAuth = completed;
+    if (!(await touchAuthSessionForRequest(completed.sessionToken, request))) {
+      await rememberDirectAuthAttempt(completed.sessionToken, "gmail", completed.attemptId, {
+        state: "failed",
+        message: "Google 已完成授权，但当前站点登录会话已过期，请回到主页面重新登录。",
+        detail: "UNAUTHORIZED",
+        payload: {
+          attemptId: completed.attemptId,
+          error: "UNAUTHORIZED",
+        },
+      });
+      return htmlReply({
+        ok: false,
+        appOrigin: completed.appOrigin,
+        title: "会话已过期",
+        heading: "登录成功，但会话已失效",
+        message: "Google 已完成授权，但当前站点登录会话已过期，请回到主页面重新登录。",
+        payload: {
+          attemptId: completed.attemptId,
+          error: "UNAUTHORIZED",
+        },
+      });
+    }
+
+    const sourceResult = await upsertGoogleSourceForSession(
+      request,
+      completed.sessionToken,
+      completed.account.email
+    );
+    const successPayload = {
+      status: "connected",
+      attemptId: completed.attemptId,
+      sourceId: sourceResult.source.id,
+      activeSourceId: sourceResult.activeSourceId,
+      ready: sourceResult.ready,
+      source: sourceResult.source,
+      account: completed.account,
+      mailboxUserIdHint: completed.account.mailboxUserIdHint,
+      message: sourceResult.ready
+        ? "Google Gmail 已连接并可以直接读取邮件。"
+        : sourceResult.routingStatus.message,
+    } satisfies Record<string, unknown>;
+    await rememberDirectAuthAttempt(completed.sessionToken, "gmail", completed.attemptId, {
+      state: "succeeded",
+      message: successPayload.message as string,
+      payload: successPayload,
+    });
+    return htmlReply({
+      ok: true,
+      appOrigin: completed.appOrigin,
+      title: "Gmail 已连接",
+      heading: "Google Gmail 已连接",
+      message: sourceResult.ready
+        ? "授权已完成，Gmail 数据源已创建并激活。"
+        : "授权已完成，但 Gmail 数据源仍需进一步验证。",
+      payload: successPayload,
+    });
+  } catch (error) {
+    if (error instanceof GoogleDirectAuthSessionInactiveError) {
+      await rememberDirectAuthAttempt(error.sessionToken, "gmail", error.attemptId, {
+        state: "failed",
+        message: "Google 已完成授权，但当前站点登录会话已过期，请回到主页面重新登录。",
+        detail: "UNAUTHORIZED",
+        payload: {
+          attemptId: error.attemptId,
+          error: "UNAUTHORIZED",
+        },
+      });
+      return htmlReply({
+        ok: false,
+        appOrigin: error.appOrigin,
+        title: "会话已过期",
+        heading: "登录成功，但会话已失效",
+        message: "Google 已完成授权，但当前站点登录会话已过期，请回到主页面重新登录。",
+        payload: {
+          attemptId: error.attemptId,
+          error: "UNAUTHORIZED",
+        },
+      });
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    const failedState = completedAuth
+      ? {
+          sessionToken: completedAuth.sessionToken,
+          appOrigin: completedAuth.appOrigin,
+          attemptId: completedAuth.attemptId,
+        }
+      : parsed.data.state
+        ? consumeGoogleDirectAuthState(parsed.data.state)
+        : null;
+    server.log.warn({ message }, "Google direct auth callback failed");
+    if (failedState) {
+      await rememberDirectAuthAttempt(failedState.sessionToken, "gmail", failedState.attemptId, {
+        state: "failed",
+        message,
+        detail: message,
+        payload: {
+          attemptId: failedState.attemptId,
+          error: "GOOGLE_OAUTH_CALLBACK_FAILED",
+          detail: message,
+        },
+      });
+    }
+    return htmlReply({
+      ok: false,
+      ...(failedState ? { appOrigin: failedState.appOrigin } : {}),
+      title: "Gmail 登录失败",
+      heading: "无法完成 Google 授权",
+      message,
+      payload: {
+        ...(failedState ? { attemptId: failedState.attemptId } : {}),
+        error: "GOOGLE_OAUTH_CALLBACK_FAILED",
         detail: message,
       },
     });
@@ -7998,6 +10204,18 @@ server.get("/api/mail/connections/outlook/direct/callback", async (request, repl
 
   if (parsed.data.error) {
     const failedState = parsed.data.state ? consumeMicrosoftDirectAuthState(parsed.data.state) : null;
+    if (failedState) {
+      await rememberDirectAuthAttempt(failedState.sessionToken, "outlook", failedState.attemptId, {
+        state: "failed",
+        message: parsed.data.error_description ?? parsed.data.error,
+        detail: parsed.data.error_description ?? null,
+        payload: {
+          attemptId: failedState.attemptId,
+          error: parsed.data.error,
+          detail: parsed.data.error_description ?? null,
+        },
+      });
+    }
     return htmlReply({
       ok: false,
       ...(failedState ? { appOrigin: failedState.appOrigin } : {}),
@@ -8013,16 +10231,34 @@ server.get("/api/mail/connections/outlook/direct/callback", async (request, repl
   }
 
   if (!parsed.data.code || !parsed.data.state) {
+    const failedState = parsed.data.state ? consumeMicrosoftDirectAuthState(parsed.data.state) : null;
+    if (failedState) {
+      await rememberDirectAuthAttempt(failedState.sessionToken, "outlook", failedState.attemptId, {
+        state: "failed",
+        message: "没有收到可用的授权码，请重新尝试登录。",
+        detail: "MICROSOFT_OAUTH_CODE_MISSING",
+        payload: {
+          attemptId: failedState.attemptId,
+          error: "MICROSOFT_OAUTH_CODE_MISSING",
+        },
+      });
+    }
     return htmlReply({
       ok: false,
+      ...(failedState ? { appOrigin: failedState.appOrigin } : {}),
       title: "微软登录失败",
       heading: "回调参数缺失",
       message: "没有收到可用的授权码，请重新尝试登录。",
       payload: {
+        ...(failedState ? { attemptId: failedState.attemptId } : {}),
         error: "MICROSOFT_OAUTH_CODE_MISSING",
       },
     });
   }
+
+  let completedAuth:
+    | Awaited<ReturnType<typeof completeMicrosoftDirectAuth>>
+    | null = null;
 
   try {
     const completed = await completeMicrosoftDirectAuth({
@@ -8030,7 +10266,17 @@ server.get("/api/mail/connections/outlook/direct/callback", async (request, repl
       code: parsed.data.code,
       ensureSessionActive: (sessionToken) => touchAuthSessionForRequest(sessionToken, request),
     });
+    completedAuth = completed;
     if (!(await touchAuthSessionForRequest(completed.sessionToken, request))) {
+      await rememberDirectAuthAttempt(completed.sessionToken, "outlook", completed.attemptId, {
+        state: "failed",
+        message: "Microsoft 已完成授权，但当前站点登录会话已过期，请回到主页面重新登录。",
+        detail: "UNAUTHORIZED",
+        payload: {
+          attemptId: completed.attemptId,
+          error: "UNAUTHORIZED",
+        },
+      });
       return htmlReply({
         ok: false,
         appOrigin: completed.appOrigin,
@@ -8064,6 +10310,24 @@ server.get("/api/mail/connections/outlook/direct/callback", async (request, repl
         },
       });
     }
+    const successPayload = {
+      status: "connected",
+      attemptId: completed.attemptId,
+      sourceId: sourceResult.source.id,
+      activeSourceId: sourceResult.activeSourceId,
+      ready: sourceResult.ready,
+      source: sourceResult.source,
+      account: completed.account,
+      mailboxUserIdHint: completed.account.mailboxUserIdHint,
+      message: sourceResult.ready
+        ? "Microsoft Outlook 已连接并可以直接读取邮件。"
+        : sourceResult.routingStatus.message,
+    } satisfies Record<string, unknown>;
+    await rememberDirectAuthAttempt(completed.sessionToken, "outlook", completed.attemptId, {
+      state: "succeeded",
+      message: successPayload.message as string,
+      payload: successPayload,
+    });
     return htmlReply({
       ok: true,
       appOrigin: completed.appOrigin,
@@ -8072,22 +10336,19 @@ server.get("/api/mail/connections/outlook/direct/callback", async (request, repl
       message: sourceResult.ready
         ? "授权已完成，邮箱数据源已创建并激活。"
         : "授权已完成，但邮箱源仍需进一步验证。",
-      payload: {
-        status: "connected",
-        attemptId: completed.attemptId,
-        sourceId: sourceResult.source.id,
-        activeSourceId: sourceResult.activeSourceId,
-        ready: sourceResult.ready,
-        source: sourceResult.source,
-        account: completed.account,
-        mailboxUserIdHint: completed.account.mailboxUserIdHint,
-        message: sourceResult.ready
-          ? "Microsoft Outlook 已连接并可以直接读取邮件。"
-          : sourceResult.routingStatus.message,
-      },
+      payload: successPayload,
     });
   } catch (error) {
     if (error instanceof MicrosoftDirectAuthSessionInactiveError) {
+      await rememberDirectAuthAttempt(error.sessionToken, "outlook", error.attemptId, {
+        state: "failed",
+        message: "Microsoft 已完成授权，但当前站点登录会话已过期，请回到主页面重新登录。",
+        detail: "UNAUTHORIZED",
+        payload: {
+          attemptId: error.attemptId,
+          error: "UNAUTHORIZED",
+        },
+      });
       return htmlReply({
         ok: false,
         appOrigin: error.appOrigin,
@@ -8102,13 +10363,36 @@ server.get("/api/mail/connections/outlook/direct/callback", async (request, repl
     }
 
     const message = error instanceof Error ? error.message : String(error);
+    const failedState = completedAuth
+      ? {
+          sessionToken: completedAuth.sessionToken,
+          appOrigin: completedAuth.appOrigin,
+          attemptId: completedAuth.attemptId,
+        }
+      : parsed.data.state
+        ? consumeMicrosoftDirectAuthState(parsed.data.state)
+        : null;
     server.log.warn({ message }, "Microsoft direct auth callback failed");
+    if (failedState) {
+      await rememberDirectAuthAttempt(failedState.sessionToken, "outlook", failedState.attemptId, {
+        state: "failed",
+        message,
+        detail: message,
+        payload: {
+          attemptId: failedState.attemptId,
+          error: "MICROSOFT_OAUTH_CALLBACK_FAILED",
+          detail: message,
+        },
+      });
+    }
     return htmlReply({
       ok: false,
+      ...(failedState ? { appOrigin: failedState.appOrigin } : {}),
       title: "微软登录失败",
       heading: "无法完成 Microsoft 授权",
       message,
       payload: {
+        ...(failedState ? { attemptId: failedState.attemptId } : {}),
         error: "MICROSOFT_OAUTH_CALLBACK_FAILED",
         detail: message,
       },
@@ -9157,6 +11441,392 @@ server.post("/api/mail/priority-rules/delete", async (request, reply) => {
   };
 });
 
+server.get("/api/mail/personalization-profile", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  const queryParsed = sourceOnlyQuerySchema.safeParse(request.query);
+  if (!queryParsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid query parameters",
+      details: queryParsed.error.issues,
+    };
+  }
+
+  const now = Date.now();
+  if (
+    isBatchRouteRateLimited(
+      scopedRouteKey("personalization_profile_read", sessionToken),
+      request.ip,
+      now,
+      priorityRulesReadRateLimitPerMin
+    )
+  ) {
+    reply.header("Retry-After", "60");
+    reply.status(429);
+    return {
+      ok: false,
+      error: "Too many personalization profile requests",
+    };
+  }
+
+  if (!sessionToken) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+    };
+  }
+
+  const sourceId = requireResolvedSourceId(reply, sessionToken, queryParsed.data.sourceId);
+  if (!sourceId) {
+    return {
+      ok: false,
+      error: "Mail source not found or disabled",
+    };
+  }
+
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId || userId.startsWith("legacy:")) {
+    reply.status(403);
+    return {
+      ok: false,
+      error: "Personalization profile requires an account-backed session",
+    };
+  }
+
+  const profile = await getMailPersonalizationProfile(userId, sourceId);
+  return {
+    ok: true,
+    result: {
+      sourceId,
+      profile,
+    },
+  };
+});
+
+server.post("/api/mail/personalization-profile", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  const now = Date.now();
+  if (
+    isBatchRouteRateLimited(
+      scopedRouteKey("personalization_profile_write", sessionToken),
+      request.ip,
+      now,
+      priorityRulesWriteRateLimitPerMin
+    )
+  ) {
+    reply.header("Retry-After", "60");
+    reply.status(429);
+    return {
+      ok: false,
+      error: "Too many personalization profile write requests",
+    };
+  }
+
+  if (!sessionToken) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+    };
+  }
+
+  const parsed = personalizationProfileUpsertSchema.safeParse(request.body);
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid payload",
+      details: parsed.error.issues,
+    };
+  }
+
+  const sourceId = requireResolvedSourceId(reply, sessionToken, parsed.data.sourceId);
+  if (!sourceId) {
+    return {
+      ok: false,
+      error: "Mail source not found or disabled",
+    };
+  }
+
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId || userId.startsWith("legacy:")) {
+    reply.status(403);
+    return {
+      ok: false,
+      error: "Personalization profile requires an account-backed session",
+    };
+  }
+
+  const profile = await saveMailPersonalizationProfile(userId, sourceId, {
+    completed: parsed.data.completed,
+    urgentSignals: parsed.data.urgentSignals,
+    hiddenImportantTopics: parsed.data.hiddenImportantTopics,
+    deadlineAlertWindowHours: parsed.data.deadlineAlertWindowHours,
+    vipSenders: parsed.data.vipSenders,
+    softRejectMode: parsed.data.softRejectMode,
+    softRejectNotes: parsed.data.softRejectNotes,
+    noiseSources: parsed.data.noiseSources,
+    notes: parsed.data.notes,
+  });
+  await rebuildMailPersonalizationLearningState(userId, sourceId, server.log);
+  auditTenantEvent(request, {
+    userId,
+    sourceId,
+    sessionToken,
+    action: "personalization_profile.update",
+    resourceType: "personalization_profile",
+    resourceId: profile.profileId,
+    metadata: {
+      completed: profile.completed,
+      urgentSignalsCount: profile.profile.urgentSignals.length,
+      hiddenTopicsCount: profile.profile.hiddenImportantTopics.length,
+      vipSenderCount: profile.profile.vipSenders.length,
+      noiseSourceCount: profile.profile.noiseSources.length,
+      deadlineAlertWindowHours: profile.profile.deadlineAlertWindowHours,
+      softRejectMode: profile.profile.softRejectMode,
+    },
+  });
+
+  return {
+    ok: true,
+    result: {
+      sourceId,
+      profile,
+    },
+  };
+});
+
+server.get("/api/mail/personalization-learning", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  const queryParsed = sourceOnlyQuerySchema.safeParse(request.query);
+  if (!queryParsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid query parameters",
+      details: queryParsed.error.issues,
+    };
+  }
+
+  const now = Date.now();
+  if (
+    isBatchRouteRateLimited(
+      scopedRouteKey("personalization_learning_read", sessionToken),
+      request.ip,
+      now,
+      personalizationLearningReadRateLimitPerMin
+    )
+  ) {
+    reply.header("Retry-After", "60");
+    reply.status(429);
+    return {
+      ok: false,
+      error: "Too many personalization learning requests",
+    };
+  }
+
+  if (!sessionToken) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+    };
+  }
+
+  const sourceId = requireResolvedSourceId(reply, sessionToken, queryParsed.data.sourceId);
+  if (!sourceId) {
+    return {
+      ok: false,
+      error: "Mail source not found or disabled",
+    };
+  }
+
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId || userId.startsWith("legacy:")) {
+    reply.status(403);
+    return {
+      ok: false,
+      error: "Personalization learning requires an account-backed session",
+    };
+  }
+
+  const state = await getCachedMailPersonalizationLearningState(userId, sourceId);
+  return {
+    ok: true,
+    result: {
+      sourceId,
+      state,
+    },
+  };
+});
+
+server.post("/api/mail/personalization-feedback", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  const now = Date.now();
+  if (
+    isBatchRouteRateLimited(
+      scopedRouteKey("personalization_feedback_write", sessionToken),
+      request.ip,
+      now,
+      personalizationLearningWriteRateLimitPerMin
+    )
+  ) {
+    reply.header("Retry-After", "60");
+    reply.status(429);
+    return {
+      ok: false,
+      error: "Too many personalization feedback requests",
+    };
+  }
+
+  if (!sessionToken) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+    };
+  }
+
+  const parsed = personalizationFeedbackBatchSchema.safeParse(request.body);
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid payload",
+      details: parsed.error.issues,
+    };
+  }
+
+  const sourceId = requireResolvedSourceId(reply, sessionToken, parsed.data.sourceId);
+  if (!sourceId) {
+    return {
+      ok: false,
+      error: "Mail source not found or disabled",
+    };
+  }
+
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId || userId.startsWith("legacy:")) {
+    reply.status(403);
+    return {
+      ok: false,
+      error: "Personalization feedback requires an account-backed session",
+    };
+  }
+
+  const state = await recordMailPersonalizationFeedback(userId, sourceId, parsed.data.events, server.log);
+  auditTenantEvent(request, {
+    userId,
+    sourceId,
+    sessionToken,
+    action: "personalization_feedback.record",
+    resourceType: "personalization_feedback",
+    resourceId: sourceId,
+    metadata: {
+      eventCount: parsed.data.events.length,
+      targetTypes: Array.from(new Set(parsed.data.events.map((item) => item.targetType))),
+      eventTypes: Array.from(new Set(parsed.data.events.map((item) => item.eventType))),
+    },
+  });
+
+  return {
+    ok: true,
+    result: {
+      sourceId,
+      state,
+    },
+  };
+});
+
+server.post("/api/mail/personalization-overrides", async (request, reply) => {
+  const sessionToken = getSessionTokenFromRequest(request);
+  const now = Date.now();
+  if (
+    isBatchRouteRateLimited(
+      scopedRouteKey("personalization_override_write", sessionToken),
+      request.ip,
+      now,
+      personalizationLearningWriteRateLimitPerMin
+    )
+  ) {
+    reply.header("Retry-After", "60");
+    reply.status(429);
+    return {
+      ok: false,
+      error: "Too many personalization override requests",
+    };
+  }
+
+  if (!sessionToken) {
+    reply.status(401);
+    return {
+      ok: false,
+      error: "Unauthorized",
+    };
+  }
+
+  const parsed = personalizationOverrideUpsertSchema.safeParse(request.body);
+  if (!parsed.success) {
+    reply.status(400);
+    return {
+      ok: false,
+      error: "Invalid payload",
+      details: parsed.error.issues,
+    };
+  }
+
+  const sourceId = requireResolvedSourceId(reply, sessionToken, parsed.data.sourceId);
+  if (!sourceId) {
+    return {
+      ok: false,
+      error: "Mail source not found or disabled",
+    };
+  }
+
+  const userId = getUserIdForSessionToken(sessionToken);
+  if (!userId || userId.startsWith("legacy:")) {
+    reply.status(403);
+    return {
+      ok: false,
+      error: "Personalization override requires an account-backed session",
+    };
+  }
+
+  const state = await saveMailPersonalizationOverride(
+    userId,
+    sourceId,
+    {
+      targetType: parsed.data.targetType,
+      targetId: parsed.data.targetId,
+      quadrant: parsed.data.quadrant,
+      context: parsed.data.context,
+    },
+    server.log
+  );
+  auditTenantEvent(request, {
+    userId,
+    sourceId,
+    sessionToken,
+    action: parsed.data.quadrant ? "personalization_override.upsert" : "personalization_override.clear",
+    resourceType: `personalization_${parsed.data.targetType}`,
+    resourceId: parsed.data.targetId,
+    metadata: {
+      targetType: parsed.data.targetType,
+      quadrant: parsed.data.quadrant,
+    },
+  });
+
+  return {
+    ok: true,
+    result: {
+      sourceId,
+      state,
+    },
+  };
+});
+
 server.get("/api/mail/notifications/preferences", async (request, reply) => {
   const sessionToken = getSessionTokenFromRequest(request);
   const queryParsed = sourceOnlyQuerySchema.safeParse(request.query);
@@ -9202,7 +11872,7 @@ server.get("/api/mail/notifications/preferences", async (request, reply) => {
     };
   }
 
-  const preferences = getNotificationPreferencesBySession(sessionToken, sourceId, true);
+  const preferences = await getHydratedNotificationPreferencesBySession(sessionToken, sourceId, true);
   const state = getNotificationStateBySession(sessionToken, sourceId, true);
 
   return {
@@ -9280,7 +11950,7 @@ server.post("/api/mail/notifications/preferences", async (request, reply) => {
     };
   }
 
-  const current = getNotificationPreferencesBySession(
+  const current = await getHydratedNotificationPreferencesBySession(
     sessionToken,
     sourceId,
     true,
@@ -9298,9 +11968,14 @@ server.post("/api/mail/notifications/preferences", async (request, reply) => {
     updatedAt: new Date().toISOString(),
   };
 
-  notificationPrefsBySession.set(sourceScopedSessionKey(sessionToken, sourceId), next);
-  enforceMapLimit(notificationPrefsBySession, maxNotificationSessionEntries);
   const userId = getUserIdForSessionToken(sessionToken);
+  const persisted =
+    userId && !userId.startsWith("legacy:")
+      ? await saveNotificationPreferences(userId, sourceId, next)
+      : next;
+
+  notificationPrefsBySession.set(sourceScopedSessionKey(sessionToken, sourceId), persisted);
+  enforceMapLimit(notificationPrefsBySession, maxNotificationSessionEntries);
   if (userId) {
     auditTenantEvent(request, {
       userId,
@@ -9310,11 +11985,11 @@ server.post("/api/mail/notifications/preferences", async (request, reply) => {
       resourceType: "mail_source",
       resourceId: sourceId,
       metadata: {
-        urgentPushEnabled: next.urgentPushEnabled,
-        dailyDigestEnabled: next.dailyDigestEnabled,
-        digestHour: next.digestHour,
-        digestMinute: next.digestMinute,
-        digestTimeZone: next.digestTimeZone,
+        urgentPushEnabled: persisted.urgentPushEnabled,
+        dailyDigestEnabled: persisted.dailyDigestEnabled,
+        digestHour: persisted.digestHour,
+        digestMinute: persisted.digestMinute,
+        digestTimeZone: persisted.digestTimeZone,
       },
     });
   }
@@ -9324,7 +11999,7 @@ server.post("/api/mail/notifications/preferences", async (request, reply) => {
     ok: true,
     result: {
       sourceId,
-      preferences: next,
+      preferences: persisted,
       state: {
         seenUrgentCount: state.seenUrgentMessageIds.size,
         lastDigestDateKey: state.lastDigestDateKey,
@@ -11092,6 +13767,7 @@ async function persistMailKbJobSnapshot(prisma: any, jobId: string, tenant: Tena
   for (const item of items) {
     const email = (item.fromAddress || "unknown@local.invalid").trim().toLowerCase();
     const receivedAt = safeKbDate(item.receivedDateTime, now);
+    const importanceScore = item.score?.importance ?? 5;
     const current = senderGroups.get(email) ?? {
       email,
       name: item.fromName || email,
@@ -11100,7 +13776,7 @@ async function persistMailKbJobSnapshot(prisma: any, jobId: string, tenant: Tena
       lastSeenAt: receivedAt,
     };
     current.count += 1;
-    current.importanceTotal += normalizeKbScore(item.score.importance);
+    current.importanceTotal += normalizeKbScore(importanceScore);
     if (receivedAt > current.lastSeenAt) {
       current.lastSeenAt = receivedAt;
     }
@@ -11159,8 +13835,9 @@ async function persistMailKbJobSnapshot(prisma: any, jobId: string, tenant: Tena
     const mailId = stableKbId("mail", tenant.userId, tenant.sourceId, item.id);
     const processedAt = safeKbDate(item.receivedDateTime, now);
     const summaryText = truncateKbText(item.bodyPreview || item.subject || "(no preview)", 1200);
-    const importanceScore = normalizeKbScore(item.score.importance);
-    const urgencyScore = normalizeKbScore(item.score.urgency);
+    const importanceScore = normalizeKbScore(item.score?.importance ?? 5);
+    const urgencyScore = normalizeKbScore(item.score?.urgency ?? 5);
+    const reasoning = (item.reasons ?? []).join("; ");
 
     await prisma.mailSummary.upsert({
       where: {
@@ -11203,13 +13880,13 @@ async function persistMailKbJobSnapshot(prisma: any, jobId: string, tenant: Tena
         importanceScore,
         urgencyScore,
         quadrant: item.quadrant,
-        reasoning: item.reasons.join("; "),
+        reasoning,
       },
       update: {
         importanceScore,
         urgencyScore,
         quadrant: item.quadrant,
-        reasoning: item.reasons.join("; "),
+        reasoning,
       },
     });
 
@@ -11473,7 +14150,35 @@ server.get("/api/mail-kb/stats", async (request, reply) => {
   }
 
   const store = await getMailKnowledgeBaseStore(resolved.tenant.userId, resolved.tenant.sourceId);
-  const stats = store.getStats();
+  const snapshot = await applyPersonalizationToKnowledgeBaseSnapshot(
+    resolved.tenant.userId,
+    resolved.tenant.sourceId,
+    store.getAllMails(),
+    store.getAllEvents(),
+    store.getAllPersons()
+  );
+  const dates = snapshot.mails.map((mail) => new Date(mail.receivedAt).getTime()).filter((value) => Number.isFinite(value));
+  const quadrantDistribution: Record<MailQuadrant, number> = {
+    unprocessed: 0,
+    urgent_important: 0,
+    not_urgent_important: 0,
+    urgent_not_important: 0,
+    not_urgent_not_important: 0,
+  };
+  for (const mail of snapshot.mails) {
+    quadrantDistribution[mail.quadrant] += 1;
+  }
+  const stats = {
+    totalMails: snapshot.mails.length,
+    totalEvents: snapshot.events.length,
+    totalPersons: snapshot.persons.length,
+    processedAt: new Date().toISOString(),
+    dateRange: {
+      start: dates.length > 0 ? new Date(Math.min(...dates)).toISOString() : "",
+      end: dates.length > 0 ? new Date(Math.max(...dates)).toISOString() : "",
+    },
+    quadrantDistribution,
+  };
   const baselineStatus = store.readBaselineStatus();
 
   return { ok: true, stats, baselineStatus, result: { stats, baselineStatus } };
@@ -11488,7 +14193,14 @@ server.get("/api/mail-kb/mails", async (request, reply) => {
   const limit = resolved.query.pageSize ?? resolved.query.limit ?? 50;
   const offset = resolved.query.offset ?? 0;
   const store = await getMailKnowledgeBaseStore(resolved.tenant.userId, resolved.tenant.sourceId);
-  const allMails = store.getAllMails();
+  const snapshot = await applyPersonalizationToKnowledgeBaseSnapshot(
+    resolved.tenant.userId,
+    resolved.tenant.sourceId,
+    store.getAllMails(),
+    store.getAllEvents(),
+    store.getAllPersons()
+  );
+  const allMails = snapshot.mails;
   const total = allMails.length;
   const mails = allMails.slice(offset, offset + limit);
 
@@ -11548,6 +14260,41 @@ server.post("/api/mail-kb/knowledge-card", async (request, reply) => {
   );
 
   try {
+    await recordMailPersonalizationFeedback(
+      tenant.userId,
+      tenant.sourceId,
+      [
+        {
+          targetType: "mail",
+          targetId: record.rawId || record.mailId,
+          eventType: "knowledge_card_saved",
+          quadrant: record.quadrant,
+          context: {
+            rawMessageId: record.rawId,
+            mailId: record.mailId,
+            subject: record.subject,
+            personId: record.personId,
+            eventId: record.eventId ?? undefined,
+            currentQuadrant: record.quadrant,
+            tags,
+          },
+        },
+      ],
+      server.log
+    );
+  } catch (error) {
+    server.log.warn(
+      {
+        userId: tenant.userId,
+        sourceId: tenant.sourceId,
+        mailId: record.mailId,
+        message: error instanceof Error ? error.message : String(error),
+      },
+      "Knowledge card personalization feedback update failed"
+    );
+  }
+
+  try {
     const baselineStatus = store.readBaselineStatus();
     await exportMailKnowledgeBaseDocuments({
       userId: tenant.userId,
@@ -11570,11 +14317,15 @@ server.post("/api/mail-kb/knowledge-card", async (request, reply) => {
     );
   }
 
+  const personalizedRecord = (
+    await applyPersonalizationToKnowledgeBaseSnapshot(tenant.userId, tenant.sourceId, [record], [], [])
+  ).mails[0] ?? record;
+
   return {
     ok: true,
     result: {
       sourceId: tenant.sourceId,
-      mail: record,
+      mail: personalizedRecord,
     },
   };
 });
@@ -11586,7 +14337,14 @@ server.get("/api/mail-kb/events", async (request, reply) => {
   }
 
   const store = await getMailKnowledgeBaseStore(resolved.tenant.userId, resolved.tenant.sourceId);
-  const events = store.getAllEvents();
+  const snapshot = await applyPersonalizationToKnowledgeBaseSnapshot(
+    resolved.tenant.userId,
+    resolved.tenant.sourceId,
+    store.getAllMails(),
+    store.getAllEvents(),
+    store.getAllPersons()
+  );
+  const events = snapshot.events;
 
   return { ok: true, events, result: { events } };
 });
@@ -11598,7 +14356,14 @@ server.get("/api/mail-kb/persons", async (request, reply) => {
   }
 
   const store = await getMailKnowledgeBaseStore(resolved.tenant.userId, resolved.tenant.sourceId);
-  const persons = store.getAllPersons();
+  const snapshot = await applyPersonalizationToKnowledgeBaseSnapshot(
+    resolved.tenant.userId,
+    resolved.tenant.sourceId,
+    store.getAllMails(),
+    store.getAllEvents(),
+    store.getAllPersons()
+  );
+  const persons = snapshot.persons;
 
   return { ok: true, persons, result: { persons } };
 });
@@ -12172,6 +14937,26 @@ function writeAgentSseError(
   raw.end();
 }
 
+function agentHttpStatusForError(error: unknown): number {
+  if (isMailPrivacyError(error)) {
+    return 503;
+  }
+  if (error instanceof GatewayHttpError) {
+    return error.status;
+  }
+  return 502;
+}
+
+function agentCodeForError(error: unknown, timedOut: boolean): string {
+  if (timedOut) {
+    return "AGENT_TIMEOUT";
+  }
+  if (isMailPrivacyError(error)) {
+    return error.code;
+  }
+  return "AGENT_ERROR";
+}
+
 server.post("/api/agent/chat", async (request, reply) => {
   const parsed = agentChatSchema.safeParse(request.body);
 
@@ -12267,7 +15052,7 @@ server.post("/api/agent/chat", async (request, reply) => {
     writeEvent({
       type: "error",
       error: message,
-      code: timedOut ? "AGENT_TIMEOUT" : "AGENT_ERROR",
+      code: agentCodeForError(error, timedOut),
     });
   } finally {
     completed = true;
@@ -12340,6 +15125,7 @@ server.post("/api/agent/query", async (request, reply) => {
       return {
         ok: false,
         error: `Agent request timed out after ${env.AGENT_TIMEOUT_MS}ms`,
+        code: "AGENT_TIMEOUT",
       };
     }
 
@@ -12351,10 +15137,11 @@ server.post("/api/agent/query", async (request, reply) => {
       },
       "Agent query failed"
     );
-    reply.status(502);
+    reply.status(agentHttpStatusForError(error));
     return {
       ok: false,
       error: error instanceof Error ? error.message : "Agent query failed",
+      code: agentCodeForError(error, false),
     };
   } finally {
     clearTimeout(timeout);
@@ -12383,13 +15170,24 @@ server.post("/api/agent/query-openclaw-legacy", async (request, reply) => {
   }
 
   try {
+    const legacyThreadId = parsed.data.threadId?.trim()
+      ? `legacy_query:${tenant.sourceId}:${createHash("sha256").update(parsed.data.threadId).digest("hex").slice(0, 32)}`
+      : `legacy_query:${tenant.sourceId}:${randomUUID()}`;
+    const privacyScope = await loadAgentPrivacyScope(server.log, tenant, legacyThreadId, "legacy_query");
     const result = await queryAgent({
-      message: parsed.data.message,
+      message: privacyScope ? privacyScope.pseudonymizeText(parsed.data.message) : parsed.data.message,
       user: `${tenant.tenantId}:${tenant.sourceId}`,
       sessionKey: `${tenant.sessionToken}${sourceScopeSeparator}${tenant.sourceId}`,
       timeoutMs: env.AGENT_TIMEOUT_MS,
     });
-    return { ok: true, result };
+    await saveAgentPrivacyScope(server.log, privacyScope);
+    const restoredResult =
+      !privacyScope
+        ? result
+        : typeof result === "string"
+          ? privacyScope.restoreText(result)
+          : privacyScope.restoreStructuredPayload(result);
+    return { ok: true, result: restoredResult };
   } catch (error) {
     if (error instanceof GatewayHttpError) {
       server.log.warn(gatewayErrorLogContext(error), "Gateway agent query failed");
@@ -12407,7 +15205,12 @@ server.post("/api/agent/query-openclaw-legacy", async (request, reply) => {
       };
     }
 
-    throw error;
+    reply.status(agentHttpStatusForError(error));
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Legacy agent query failed",
+      code: agentCodeForError(error, false),
+    };
   }
 });
 
@@ -12419,6 +15222,10 @@ server.setErrorHandler((error, _request, reply) => {
   server.log.error(error);
   if (error instanceof AuthStoreUnavailableError) {
     reply.status(503).send(authStoreUnavailableResponse());
+    return;
+  }
+  if (error instanceof AuthSessionStoreUnavailableError) {
+    reply.status(503).send(authSessionStoreUnavailableResponse());
     return;
   }
 

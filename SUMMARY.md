@@ -219,6 +219,38 @@
 - Produced recommended insertion points and noted the main architectural risks for later job/result resurfacing.
 - Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
 
+### 2026-04-21T13:10:56+08:00
+
+- Scope: Independent audit of `apps/bff/src/server.ts` auth session persistence/recovery changes.
+- Task type: `Non-code`
+- Main changes:
+- Reviewed Redis tombstone handling, Prisma fallback, `/api/mail` and `/api/agent` preHandler auth checks, and `setErrorHandler` mapping.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes)
+- Final fixes after audit:
+- Not applicable.
+
+### 2026-04-21T08:36:38+08:00
+
+- Scope: Fix dock tooltip layering and redesign the copilot/agent window so the composer stays visible on first load.
+- Task type: `Code`
+- Main changes:
+- Reworked `apps/webui/src/components/layout/AppDock.tsx` so dock tooltips are rendered at the dock shell level instead of inside the horizontal item strip, preventing the black dock panel from clipping/covering the tooltip while keeping the dock size unchanged.
+- Preserved ReactBits-style magnification and view switching, and kept dock validation aligned with the migrated dock smoke coverage.
+- Refactored `apps/webui/src/components/agent/AgentWorkspaceWindow.tsx` into a single-column agent workspace: removed the `Capabilities` rail, compressed mailbox/source controls into a compact top band, surfaced live activity/history-backfill status without a tall side panel, and kept the chat transcript plus composer inside the visible workspace.
+- Added a regression smoke in `apps/webui/e2e/smoke.spec.ts` to assert the embedded agent composer remains within the workspace bounds on initial load, and removed a now-dead `/api/agent/skills` stub after the UI intentionally stopped rendering the capabilities panel.
+- Validation completed:
+- `npm --workspace apps/webui run check`
+- `npm --workspace apps/webui run build`
+- `CI=1 BFF_URL=http://127.0.0.1:4173 npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts --workers=1 --grep "renders the standalone agent workspace chrome in agent window mode|keeps the embedded agent composer within the workspace on first load|keeps dock tooltips visible within the dock frame|switches primary workspace views from the migrated dock"` (`4 passed`)
+- `curl -I http://127.0.0.1:4173/` (`200 OK`)
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Lightweight independent read-only review at `.harness/audit/2026-04-21-dock-agent-window-audit.md` reported `Critical=0` and `High=0`; it found one `Medium` dock overflow/clipping risk and one `Low` dead smoke stub, both fixed in the same task.
+- Follow-up re-review attempt at `.harness/audit/2026-04-21-dock-agent-window-audit-round2.md` was blocked by Codex usage quota; exception is acceptable here because the user explicitly requested `无需审计`, the original review had no `Critical/High`, and the identified `Medium/Low` issues were already fixed before final delivery. Owner: main implementer. ETA if re-check is needed: next available quota window.
+- Final fixes after audit:
+- Moved the visible tooltip out of the dock’s internal strip and into the dock shell layer so it no longer depends on the scroller’s overflow behavior.
+- Deleted the obsolete `/api/agent/skills` smoke stub to match the intentional removal of the visible capabilities panel.
+
 ### 2026-04-19T00:32:37+08:00
 
 - Scope: Independent post-fix audit of `apps/webui/src/components/dashboard/CalendarView.tsx` and `apps/webui/e2e/smoke.spec.ts`.
@@ -226,6 +258,17 @@
 - Main changes:
 - Reviewed date grouping, dedupe, spillover selection, React state/key usage, accessibility, and smoke-test coverage for the new month-view calendar.
 - Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+
+### 2026-04-21T14:14:59+08:00
+
+- Scope: Audit of Gmail SMTP registration verification and frontend request-header hardening changes in `apps/bff/.env.example`, `apps/bff/package.json`, `apps/bff/scripts/auth-registration-live-smoke.ts`, `apps/webui/src/utils/api.ts`, and `apps/webui/src/contexts/AuthContext.tsx`.
+- Task type: `Non-code`
+- Main changes:
+- Reviewed the five requested files directly against the reported local validation results.
+- Sub-agent audit findings (include evidence location, or `Audit: N/A (no code changes)`):
+- Audit: N/A (no code changes)
+- Final fixes after audit:
+- Not applicable.
 - Audit: N/A (no code changes)
 
 ### 2026-04-17T21:05:00+08:00 - Backend knowledge-base audit
@@ -5219,3 +5262,755 @@ cp .env.example .env
 - Follow-up external clean re-review attempts were blocked by the local Codex CLI state-runtime/migration issue (`/Users/fairchan/.codex/state_5.sqlite` missing resolved migration 21), including temp-bundle and temp-git review runs that never produced a completed final artifact.
 - Final audit status: round-1 independent findings were fully fixed and revalidated; no unresolved `Critical` / `High` / `Medium` findings remain from the completed audit round. Clean round-2 external re-review artifact is blocked by local Codex tooling instability. Blocker owner: local Codex CLI/runtime. ETA: unknown. User approval for delivering without that extra clean artifact: not yet granted.
 - Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-19-webui-surface-sweep-audit.md`
+
+## 2026-04-19T21:54:18+08:00
+
+- Scope: Continued the active WebUI Calm Bento follow-up across `apps/webui/src/components/dashboard/MailKBSummaryModal.tsx`, `apps/webui/src/components/dashboard/TutorialView.tsx`, `apps/webui/src/components/dashboard/knowledgebase/ArtifactsLibraryPanel.tsx`, `apps/webui/src/components/dashboard/StatsView.tsx`, `apps/webui/src/components/layout/BottomNav.tsx`, `apps/webui/src/components/layout/SidebarDrawer.tsx`, `apps/webui/src/components/shared/LoadingState.tsx`, and `apps/webui/src/components/shared/LoadingSkeleton.tsx`.
+- Task type: `Code`
+- Findings:
+- Rebuilt the tutorial entry, KB local-documents panel, and KB processing modal onto the shared Calm surface/button/pill system, and filled the newly added UI copy out to `zh` / `ja` / `en` so those flows no longer regress into mixed-language chrome.
+- Unified the remaining global shell pieces touched in this slice: mobile bottom navigation, sidebar drawer, shared loading skeletons, and the last neutral stats progress bar now all use the same token language instead of legacy `zinc/white` styling.
+- Fixed the review-surfaced mobile drawer regression risk by making the `SidebarDrawer` root `CalmSurface` a `flex flex-col` container, so the inner `flex-1` scroll region stretches correctly again after the visual refactor.
+- Validation passed:
+- `npm --workspace apps/webui run check`
+- `npm --workspace apps/webui run build`
+- `curl -I http://127.0.0.1:4173/`
+- `git diff --check` on the touched WebUI files
+- Independent audit:
+- Round 1 external review via `codex exec review --uncommitted --ephemeral -m gpt-5.4-mini` with an isolated `CODEX_HOME` failed before review due `401 Unauthorized`, and the target artifact remained empty.
+- Round 2 external review via `codex exec review --uncommitted --ephemeral -m gpt-5.4-mini` under the default environment streamed one concrete layout-risk finding in `SidebarDrawer.tsx`; that fix was applied and then revalidated with WebUI `check` and `build`.
+- Round 3 diff-only external review via `codex exec -C /tmp --skip-git-repo-check --ephemeral -m gpt-5.4-mini` inspected the patch but stalled before emitting a final artifact; no additional concrete findings surfaced in the streamed output before interruption.
+- Final audit status: the one externally surfaced finding from this audit sequence was fixed and revalidated; no unresolved `Critical` or `High` findings are known from the completed streamed review evidence. A clean final external artifact remains blocked by local Codex CLI/runtime instability (`state_5.sqlite` migration discrepancy plus hanging review sessions). Blocker owner: local Codex CLI/runtime. ETA: unknown. User approval for delivering without a clean final external artifact: not yet granted.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-19-active-webui-calm-shell-followup-audit-notes.md`
+
+## 2026-04-20T00:00:27+08:00
+
+- Scope: Redesigned the active WebUI toward a lower-motion, lower-load Calm shell across the shared UI primitives, app dock, theme toggle, loading states, navigation chrome, urgent toast, and KB/tutorial modal surfaces.
+- Task type: `Code`
+- Findings:
+- Removed the WebUI `motion` dependency from `apps/webui/package.json` and `package-lock.json`, and replaced the motion-backed background, dock magnification, animated list wrappers, border beams, ping/pulse pills, View Transition theme toggle, and skeleton shimmer with static or near-static CSS.
+- Removed the remote Google Fonts import, switched the token font stack to local/system fonts, made surfaces more opaque, reduced global blur/shadow costs, disabled the old `rise-in` animation, and kept only short essential CSS transitions.
+- Retained smoke-test-compatible semantics while slimming UI: urgent toasts again render as semantic `section` items, the KB document panel keeps the `本地总结文档` heading, and the desktop dock now marks the `knowledgebase` alias as active through the Stats/Knowledge item.
+- Fixed audit-surfaced accessibility/state issues in `MailKBSummaryModal`: added `aria-labelledby`, Escape close handling, focus trapping/restoration, and a `refresh: false` close path so opening KB results does not refresh an unmounted tutorial view.
+- Fixed the tutorial mailbox readiness badge so it uses `activeSource.ready` rather than only checking that a source exists.
+- Validation passed:
+- `npm --workspace apps/webui run check`
+- `npm --workspace apps/webui run build`
+- `npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts --workers=1 --grep "shows lower-left urgent toast|falls back to automatic processing|renders the Eisenhower matrix"` (`4 passed`)
+- `npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts --workers=1` (`26 passed`)
+- `curl -I http://127.0.0.1:4173/`
+- `git diff --check`
+- `rg -n '"motion"|motion/react|animate-pulse|animate-ping' apps/webui/src apps/webui/package.json package-lock.json` returned no matches
+- Independent audit:
+- Round 1 external review via `codex exec review --uncommitted --ephemeral -m gpt-5.4-mini` found three `P3` issues: Dock alias active state, tutorial mailbox-ready badge semantics, and post-navigation tutorial refresh work. All were fixed.
+- Round 2 external review via `codex exec --skip-git-repo-check --ephemeral -m gpt-5.4-mini` found one `Medium` modal accessibility/focus issue and repeated the `Low` Dock alias issue. Both were fixed.
+- Final audit status: all findings returned by the two completed independent audit rounds were fixed; no unresolved `Critical`, `High`, `Medium`, or `Low` findings remain from those rounds.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-19-webui-low-motion-redesign-audit.md`
+
+## 2026-04-20T17:55:40+08:00
+
+- Scope: Continued the industrialization plan by cleaning repository boundaries, removing tracked runtime/generated/legacy structures, tightening production deployment gates, and hardening mail HTML rendering.
+- Task type: `Code`
+- Findings:
+- Added `.gitignore` and `scripts/check-repo-boundary.mjs` rules so runtime mailbox data, root `mail-kb`, imported reference WebUI snapshots, retired `website-login-main`, build outputs, coverage, Playwright artifacts, TypeScript caches, and `.DS_Store` files cannot remain tracked.
+- Removed tracked runtime/private data from version control while preserving the local `apps/bff/data` files, and deleted stale generated or retired structures including `apps/*/Dockerfile`, `apps/webui/playwright-report`, `apps/webui/test-results`, `*.tsbuildinfo`, root `mail-kb`, `reference/remote-webui-2026-04-19`, and `website-login-main`.
+- Tightened BFF production configuration so production fails closed unless persistence, Redis auth sessions, Prisma auth, encryption, Microsoft OAuth, and real mail-source persistence are enabled.
+- Updated Kubernetes manifests to align with the BFF `8787` port, `/live` and `/api/ready` probes, production environment keys, required secret placeholders, and a `ClusterIP` WebUI service behind ingress.
+- Centralized WebUI mail-body sanitization with DOMPurify, escaped plain text safely, preserved common email formatting, and hardened rendered mail links with safe protocols plus `noreferrer noopener`.
+- Validation passed:
+- `npm --workspace apps/bff run check`
+- `npm --workspace apps/webui run check`
+- `npm run check:repo-boundary` (`REPO_BOUNDARY_OK`)
+- `npm run harness:semantic` (`HARNESS_SEMANTIC_OK checked=147 warnings=11`, existing backend safeParse warnings)
+- `npm run build` (passes; Vite still warns that the main WebUI chunk is larger than 500 kB)
+- `git diff --check`
+- `git diff --cached --check`
+- Independent audit:
+- Primary sub-agent review attempt failed before review due the platform usage limit, so I used an independent external SiliconFlow `Pro/zai-org/GLM-5.1` audit over code/config diffs and deletion categories only, with no mailbox contents or secrets sent.
+- External audit verdict was `PASS` with no `Critical` or `High` findings. It raised Medium/Low notes about K8s probe verification, `<b>` tag parity, coverage guardrails, and sanitizer cleanup.
+- Fixed the actionable Medium/Low notes by verifying BFF probe routes, adding `<b>` to allowed mail HTML tags, and adding coverage directories to the repo-boundary hard gate. Remaining sanitizer cleanup notes are documented as non-security follow-ups.
+- Final audit status: no unresolved `Critical` or `High` findings remain; audit-driven fixes were revalidated.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-20-industrialization-cleanup-audit.md`
+
+## 2026-04-20T18:15:35+08:00
+
+- Scope: Reviewed the latest remote `origin/master` mail privacy delivery commits without merging into the dirty local workspace.
+- Task type: `Code`
+- Findings:
+- Remote `origin/master` is three commits ahead of local HEAD: `a192622 feat: harden mail llm transit privacy`, `68d6f25 fix: tune live mail privacy masking smoke`, and `2c39ee4 fix: strip sender recipient emails before llm`.
+- The privacy feature is broadly wired into the BFF-to-LLM boundary for Mastra/OpenClaw agent queries, mail tools, mailbox KB summarization, stored-email summaries, single-mail analysis, and webhook-triggered analysis.
+- Independent sub-agent review and local reproduction found two Medium privacy gaps: Microsoft Graph recipient paths such as `toRecipients[].emailAddress.address` and `ccRecipients[].emailAddress.address` are still pseudonymized as email-shaped aliases instead of stripped to `[recipient-email]`, and free-text email addresses are not stripped because `stripMailAddresses()` is currently a no-op.
+- Found one Low privacy hygiene issue: Mastra system instructions still send raw `userId` and `sourceId` to the LLM as part of the current scope string.
+- Verified positive behavior: `from.emailAddress.address` is replaced by `[sender-email]`; missing `MAIL_PRIVACY_HMAC_KEY` with privacy enabled fails before scope creation; persisted agent privacy state is encrypted, TTL-bound, and checked against `userId`/`sourceId` before reuse.
+- Documentation mismatch: the user-provided guide references `deploy/docs/MAIL_PRIVACY_DELIVERY.md`, but that file is not present in the fetched `origin/master`; only `deploy/docs/DEPLOYMENT.md` exists.
+- Validation / evidence:
+- `git fetch origin`
+- `git log HEAD..origin/master`
+- `git show --stat` for the three remote privacy commits
+- Detached review worktree at `/tmp/mail-agent-privacy-review`
+- Minimal masking reproduction with `tsx` confirmed recipient Graph addresses remain email-shaped aliases
+- Independent sub-agent review (`Lovelace`) returned the same two Medium privacy findings and one Low identifier-hygiene finding.
+- Audit: independent sub-agent review completed; no local code implementation was performed in this task, so no post-fix audit was required.
+
+## 2026-04-20T18:48:15+08:00
+
+- Scope: Safely synced the remote mail privacy feature from `origin/master` into the current workspace, fixed the remaining address-stripping/privacy gaps, strengthened smoke coverage, and added the missing delivery guide.
+- Task type: `Code`
+- Findings:
+- Pulled the relevant remote BFF privacy files into the local workspace without merging the whole dirty branch, including the privacy core, agent wrappers, Prisma model/migration, summary/analyzer integrations, and the live smoke script.
+- Merged `apps/bff/src/config.ts` by preserving the stricter local production guardrails while adding `MAIL_PRIVACY_ENABLED`, `MAIL_PRIVACY_HMAC_KEY`, and `MAIL_PRIVACY_KEY_VERSION` config support.
+- Fixed the recipient stripping gap in `apps/bff/src/mail-privacy.ts` so Graph-shaped recipient paths such as `toRecipients[].emailAddress.address`, `ccRecipients[]`, `bccRecipients[]`, and reply-to style recipient paths now become `[recipient-email]` rather than email-shaped aliases.
+- Implemented free-text email stripping in `apps/bff/src/mail-privacy.ts`, replacing email addresses in previews/prompts/quoted headers with `[email]` before pseudonymization.
+- Removed raw `userId` / `sourceId` exposure from the Mastra system prompt and replaced it with a generic tenant-scoped mailbox hint.
+- Expanded `apps/bff/scripts/mail-privacy-live-smoke.ts` so it now asserts flat-field stripping, Graph-shaped field stripping, free-text stripping, masked payload leakage, and model-output leakage.
+- Added the missing deployment documentation at `deploy/docs/MAIL_PRIVACY_DELIVERY.md`.
+- Validation passed:
+- synthetic local privacy assertion script covering flat fields, Graph fields, and free-text stripping
+- synthetic fail-closed assertion with missing `MAIL_PRIVACY_HMAC_KEY` (`MAIL_PRIVACY_NOT_READY`)
+- `DATABASE_URL=postgresql://user:pass@localhost:5432/mail_agent npx prisma validate --schema apps/bff/prisma/schema.prisma`
+- `npm --workspace apps/bff run check`
+- `npm --workspace apps/bff run build`
+- `npm run check:repo-boundary`
+- Independent audit:
+- Round 1 independent sub-agent audit by `Lovelace` returned clean with no findings after reviewing the synced privacy integration plus the local fixes.
+- Residual test gap noted by the reviewer: `npm --workspace apps/bff run smoke:mail-privacy-live` was not executed in this task because it performs a real external LLM call.
+- Final audit status: clean after Round 1; no unresolved `Critical`, `High`, `Medium`, or `Low` findings remain.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-20-mail-privacy-integration-audit.md`
+
+## 2026-04-20T20:03:40+08:00
+
+- Scope: Brought the local test deployment online for manual verification.
+- Task type: `Non-code`
+- Findings:
+- Verified the current repo WebUI preview is already listening on `http://127.0.0.1:4173/`.
+- Confirmed `http://127.0.0.1:5173/` belongs to a different local project and is not the mail agent test entry.
+- Restarted the BFF so `http://127.0.0.1:8787` now serves the latest built privacy-integrated backend instead of the older long-running process.
+- Validation passed:
+- `curl -sS http://127.0.0.1:8787/health`
+- `curl -I http://127.0.0.1:4173/`
+- `lsof -nP -iTCP:8787 -sTCP:LISTEN`
+- Audit: `N/A (no code changes)`
+
+## 2026-04-20T20:20:14+08:00
+
+- Scope: Independent audit of the frontend safe-response parsing and Vite preview proxy parity fix.
+- Task type: `Non-code`
+- Findings:
+- Validation passed: `npm --workspace apps/webui run check`
+- Audit: `N/A (no code changes)`
+
+## 2026-04-20T20:22:22+08:00
+
+- Scope: Fixed the admin-login crash caused by empty/non-JSON auth error responses in the local WebUI preview path and redeployed the local test services.
+- Task type: `Code`
+- Findings:
+- Added `apps/webui/src/utils/http.ts` so frontend callers now read response bodies safely before attempting JSON access, extract usable error text from JSON or plain text payloads, and fall back to a human-readable server-unavailable message when the body is empty.
+- Updated the shared fetch wrappers in `apps/webui/src/App.tsx`, `apps/webui/src/contexts/AuthContext.tsx`, `apps/webui/src/contexts/MailContext.tsx`, and `apps/webui/src/utils/api.ts` to use the safe parser instead of calling `response.json()` blindly.
+- Added explicit `preview.proxy` parity in `apps/webui/vite.config.ts` so the local `vite preview` service on `4173` proxies `/api`, `/live`, `/ready`, and `/health` to the BFF the same way as the dev server.
+- Rebuilt the WebUI, rebuilt the BFF, and relaunched both services in detached `screen` sessions for local testing.
+- Validation passed:
+- `npm --workspace apps/webui run check`
+- `npm --workspace apps/webui run build`
+- `npm --workspace apps/bff run build`
+- `npm run harness:semantic` (`HARNESS_SEMANTIC_OK`, existing backend warnings only)
+- `git diff --check -- apps/webui/src/utils/http.ts apps/webui/src/App.tsx apps/webui/src/contexts/AuthContext.tsx apps/webui/src/contexts/MailContext.tsx apps/webui/src/utils/api.ts apps/webui/vite.config.ts`
+- `curl -sS http://127.0.0.1:8787/health`
+- `curl -i -sS -X POST http://127.0.0.1:4173/api/auth/login ... admin@true-sight.local / MeryAdmin2026!`
+- `curl -i -sS -X POST http://127.0.0.1:4173/api/auth/login ... admin@true-sight.local / wrong`
+- Synthetic parser smoke for empty `500` response body returned `Server temporarily unavailable. Please try again.`
+- Independent audit:
+- Round 1 independent sub-agent audit by `Bernoulli` returned clean with no findings after reviewing the touched WebUI files and the new failure mode handling.
+- Final audit status: clean after Round 1; no unresolved `Critical`, `High`, `Medium`, or `Low` findings remain.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-20-auth-login-response-hardening-audit.md`
+
+## 2026-04-20T21:23:17+08:00
+
+- Scope: Added multi-mail onboarding/runtime architecture for Gmail, iCloud Mail, NetEase 163, QQ Mail, Aliyun Mail, and custom IMAP while keeping Outlook on Microsoft Graph.
+- Task type: `Code`
+- Findings:
+- Added provider descriptors plus runtime support for `gmail`, `icloud`, `netease163`, `qq`, `aliyun`, and `custom_imap` across shared types, BFF source management, and WebUI settings.
+- Added encrypted IMAP credential persistence in `MailSourceCredential`, IMAP inbox/detail adapters, `GET /api/mail/providers`, and `POST /api/mail/connections/imap`.
+- Integrated IMAP-backed sources into the existing source-aware inbox/detail/triage/knowledge-base/agent retrieval flow without changing the Outlook Graph path.
+- After audit Round 1, fixed two High issues:
+  - mail-body cache is now scoped by `sourceId + messageId`, detail fetches include explicit `sourceId`, and cache is cleared on source switch so IMAP uid collisions cannot leak bodies across sources.
+  - IMAP onboarding is now TLS-only; the insecure checkbox was removed from the WebUI and the BFF rejects plaintext IMAP with `IMAP_TLS_REQUIRED`.
+- Also hardened source deletion to remove stored IMAP credentials and bound credential ownership to `(sourceId,userId)` in Prisma schema/migration.
+- Validation passed:
+- `npm --workspace packages/shared-types run typecheck`
+- `npm --workspace apps/bff run check`
+- `npm --workspace apps/webui run check`
+- `DATABASE_URL=postgresql://user:pass@localhost:5432/mail_agent npx prisma validate --schema apps/bff/prisma/schema.prisma`
+- `npm --workspace apps/bff run build`
+- `npm --workspace apps/webui run build`
+- `git diff --check -- apps/webui/src/contexts/MailContext.tsx apps/webui/src/components/dashboard/MailDetailModal.tsx apps/webui/src/components/dashboard/MailDetailPage.tsx apps/webui/src/components/dashboard/SettingsView.tsx apps/bff/src/server.ts apps/bff/prisma/schema.prisma apps/bff/prisma/migrations/202604201445_multi_mail_imap_credentials/migration.sql deploy/docs/MULTI_MAIL_PROVIDERS.md`
+- authenticated `GET http://127.0.0.1:8787/api/mail/providers`
+- authenticated `POST http://127.0.0.1:8787/api/mail/connections/imap` with `imapSecure=false` returned `IMAP_TLS_REQUIRED`
+- Additional repo-wide note:
+- `npm run check:standard` is still red in pre-existing WebUI Playwright smoke paths that assume older navigation/content contracts outside this slice; this did not block the touched multi-mail files from passing their direct checks/builds.
+- Independent audit:
+- Round 1 independent sub-agent audit by `Locke` found 2 High and 2 Medium issues; all High findings were fixed before delivery.
+- Round 2 independent sub-agent re-audit by `Locke` confirmed the previous High findings are fixed and reported no remaining `Critical` or `High` issues.
+- Deferred Medium:
+- `apps/bff/src/imap-mail.ts:174` still parses message source for list-style IMAP reads; rationale: performance optimization rather than correctness/security blocker for first rollout; owner: Codex / fairchan workspace; target date: `2026-04-23`.
+- Final audit status: clean for `Critical`/`High`; one documented `Medium` deferred with rationale/owner/date.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-20-multi-mail-provider-architecture-audit.md`
+
+## 2026-04-20T23:57:01+08:00
+
+- Scope: Completed Gmail direct OAuth onboarding on top of the multi-mail architecture, including BFF popup routes, Gmail API reads, tenant-bound token persistence, WebUI connect entry points, and local database migration.
+- Task type: `Code`
+- Findings:
+- Added encrypted `GoogleAccount` persistence, Gmail direct auth state/token handling, `gmail_oauth` source upsert flow, Gmail routing verification, and Gmail-aware inbox/detail reads.
+- Added `GET /api/mail/connections/gmail/direct/start` and `/api/mail/connections/gmail/direct/callback`, exposed Gmail in WebUI settings/sidebar connect flows, and updated provider/docs copy so Gmail direct is the primary path while IMAP remains fallback.
+- Applied local migration `202604201930_google_accounts` so the current machine can persist Gmail OAuth accounts immediately after configuration.
+- After audit rounds, fixed all reported issues:
+  - Gmail direct now fails early if `APP_ENCRYPTION_KEY` or account-store readiness is missing instead of failing only after Google authorization returns.
+  - Gmail in-memory auth/token state is cleared on session teardown.
+  - Provider catalog no longer advertises unsupported Gmail `imap_oauth2`.
+  - Gmail popup error handling now tolerates missing `attemptId`, and backend failure branches propagate `attemptId` when available.
+- Validation passed:
+- `npm --workspace apps/bff run check`
+- `npm --workspace apps/webui run check`
+- `npm --workspace apps/bff run build`
+- `npm --workspace apps/webui run build`
+- `npm run harness:semantic`
+- `npx prisma validate --schema apps/bff/prisma/schema.prisma`
+- `npm run db:migrate:deploy`
+- `curl -s http://127.0.0.1:8787/health`
+- authenticated `POST http://127.0.0.1:8787/api/auth/login`
+- authenticated `GET http://127.0.0.1:8787/api/mail/providers`
+- authenticated `GET /api/mail/connections/gmail/direct/start?...` returned the expected Gmail popup payload with `GOOGLE_OAUTH_NOT_CONFIGURED` when Google client env is absent
+- Additional repo-wide note:
+- `npm run check:standard` remains red in one pre-existing WebUI Playwright smoke case (`ignores stale manual processing results after switching mailbox sources`) outside this Gmail slice; direct Gmail files and runtime checks passed cleanly.
+- Independent audit:
+- Round 1 independent sub-agent audit by `Lovelace` found 2 Medium and 2 Low issues; all were fixed before delivery.
+- Round 2 independent sub-agent re-audit by `Lovelace` confirmed the previous Medium issues were fixed and reduced the remainder to 1 Low.
+- Round 3 independent sub-agent final re-audit by `Lovelace` confirmed no remaining `Critical`, `High`, `Medium`, or `Low` findings in scope.
+- Final audit status: clean after Round 3; no unresolved `Critical`, `High`, `Medium`, or `Low` findings remain.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-20-gmail-direct-oauth-audit.md`
+
+## 2026-04-21T08:42:06+08:00
+
+- Scope: Independent frontend audit limited to the OAuth popup and unified multi-mail connect UI in `MailContext.tsx`, `Sidebar.tsx`, `SettingsView.tsx`, and `mailConnectionFeedback.ts`.
+- Task type: `Non-code`
+- Findings:
+- Reviewed popup completion logic with focus on `postMessage` validation, popup-close recovery via backend status polling, and listener/timer cleanup paths.
+- Reviewed the unified sidebar connect modal for Outlook/Gmail/IMAP coverage, default provider behavior, and visible error/default-state handling.
+- Produced severity-ranked findings only; no source changes were made in this task.
+- Audit: N/A (no code changes)
+
+## 2026-04-21T08:42:52+08:00
+
+- Scope: Independent backend audit limited to `apps/bff/src/server.ts` for the new Outlook/Gmail direct OAuth `attempt` state storage and `status` routes.
+- Task type: `Non-code`
+- Findings:
+- Reviewed success, provider-error, missing-parameter, and session-expiry branches across direct OAuth start/callback/status handlers.
+- Reviewed in-memory attempt-state scoping, TTL/cleanup behavior, route authentication, and same-session race characteristics.
+- Produced severity-ranked findings only; no source changes were made in this task.
+- Audit: N/A (no code changes)
+
+## 2026-04-21T09:14:36+08:00
+
+- Scope: Hardened Outlook/Gmail direct OAuth popup recovery and completed the unified sidebar "connect mail" flow so all current mailbox connection methods live behind one entry point with clearer success/failure handling.
+- Task type: `Code`
+- Findings:
+- Tightened frontend popup settlement in `apps/webui/src/contexts/MailContext.tsx`:
+  - `postMessage` now only settles when it comes from the same popup window, from an allowed auth origin, and with an exact `attemptId` match.
+  - popup-close recovery now polls longer and no longer treats `unknown` as an immediate terminal state.
+- Completed the shared error/reporting layer and unified connect entry:
+  - `apps/webui/src/utils/mailConnectionFeedback.ts` now normalizes Outlook/Gmail/IMAP connection failures into readable UI messages.
+  - `apps/webui/src/components/layout/Sidebar.tsx` now exposes Outlook, Gmail, and IMAP providers from one modal instead of bouncing the user into separate flows.
+  - `apps/webui/src/components/dashboard/SettingsView.tsx` reuses the same formatted OAuth/IMAP feedback.
+- Hardened BFF direct-auth attempt handling in `apps/bff/src/server.ts`:
+  - added durable `DirectAuthAttempt` persistence backed by Prisma for `outlook` / `gmail` popup recovery state,
+  - made `/api/mail/connections/{outlook,gmail}/direct/status` perform real session validation,
+  - and backfilled terminal attempt writes in start rate-limit and callback-side session-expiry/failure branches.
+- Added Prisma model + migration for shared direct-auth attempt state:
+  - `apps/bff/prisma/schema.prisma`
+  - `apps/bff/prisma/migrations/202604210930_direct_auth_attempts/migration.sql`
+- Validation passed:
+- `cd apps/bff && npx prisma generate --schema prisma/schema.prisma`
+- `npm run db:migrate:deploy`
+- `npm --workspace apps/bff run check`
+- `npm --workspace apps/webui run check`
+- `npm --workspace apps/bff run build`
+- `npm --workspace apps/webui run build`
+- `npm run harness:semantic`
+- `git diff --check -- apps/bff/src/server.ts apps/webui/src/contexts/MailContext.tsx apps/bff/prisma/schema.prisma apps/bff/prisma/migrations/202604210930_direct_auth_attempts/migration.sql apps/webui/src/components/layout/Sidebar.tsx apps/webui/src/components/dashboard/SettingsView.tsx apps/webui/src/utils/mailConnectionFeedback.ts`
+- `curl -s http://127.0.0.1:8787/health`
+- authenticated `POST http://127.0.0.1:8787/api/auth/login`
+- authenticated `GET http://127.0.0.1:8787/api/mail/providers`
+- authenticated `GET /api/mail/connections/outlook/direct/start?...` returned the expected Microsoft authorize redirect
+- authenticated `GET /api/mail/connections/outlook/direct/status?attemptId=...` returned `pending`
+- Additional operational note:
+- On this local machine, `REDIS_AUTH_SESSIONS_ENABLED=false`, so a full BFF restart still invalidates in-memory browser sessions and can yield `401 Unauthorized` after restart. That is an auth-session durability limitation outside this popup/connect slice, not a remaining Critical/High issue in the audited work.
+- Independent audit:
+- Round 1 independent sub-agent audit by `Goodall` found 2 High and 2 Medium issues; all High issues were fixed before delivery.
+- Round 2 independent sub-agent re-audit by `Goodall` confirmed no remaining `Critical` or `High` issues in scope.
+- Final audit status: clean for `Critical` / `High`.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-oauth-popup-recovery-multi-mail-connect-audit.md`
+
+## 2026-04-21T12:59:13+08:00
+
+- Scope: Read-only audit of `apps/bff/src/server.ts` auth session persistence/recovery paths, including `persistAuthSessionToDatabase`, `persistAuthSessionToRedis`, `persistAuthSession`, `removePersistedAuthSession`, `hydrateAuthSessionFromRedisIfNeeded`, `hydrateSessionAccessStateIfNeeded`, `clearSessionState`, the `/api/mail` and `/api/agent` preHandler, and `/api/auth/preferences`.
+- Task type: `Non-code`
+- Audit: N/A (no code changes)
+- Result: found two High-severity auth revocation risks in the new Redis/Prisma persistence chain, both tied to fail-open behavior when Redis tombstone write/read is unavailable.
+
+## 2026-04-21T13:14:01+08:00
+
+- Scope: Finished the auth-session durability pass in `apps/bff/src/server.ts` so browser sessions can survive BFF restarts through Prisma persistence, revoke safely, and recover tenant mail-source state on `/api/mail` + `/api/agent` requests.
+- Task type: `Code`
+- Findings:
+- Added explicit `AuthSessionStoreUnavailableError` fail-closed handling plus a dedicated `SESSION_STORE_UNAVAILABLE` response when Redis revocation/hydration checks fail.
+- Added `loadPersistedAuthSessionFromDatabase(...)` so Redis-hydrated sessions are cross-checked against Prisma before being trusted, and Prisma-only recovery uses one shared path.
+- Hardened `removePersistedAuthSession(...)` so Prisma cleanup still runs after Redis tombstone failures, including the `strict: true` logout path.
+- Kept per-token persistence ordering in place and preserved request-path hydration for auth + mail sources.
+- Validation passed:
+- `npm --workspace apps/bff run check`
+- `npm --workspace apps/bff run build`
+- `npm run harness:semantic`
+- `git diff --check -- apps/bff/src/server.ts`
+- `curl -sS http://127.0.0.1:8787/health`
+- authenticated `POST http://127.0.0.1:8787/api/auth/login`
+- authenticated `GET http://127.0.0.1:8787/api/auth/session`
+- authenticated `POST http://127.0.0.1:8787/api/auth/logout`
+- authenticated `GET http://127.0.0.1:8787/api/auth/session` returned `authenticated:false`
+- in-session restart proof: authenticated session survived a BFF restart and then cleared correctly on logout
+- Independent audit:
+- Final audit status: no unresolved `Critical` or `High` findings.
+- One `Medium` issue is deferred: a narrow Redis-before-Prisma crash window can temporarily treat a freshly issued Redis session as stale on first recovery if the process dies before Prisma upsert.
+- Defer rationale: local deployment currently runs with `REDIS_AUTH_SESSIONS_ENABLED=false`; fixing the remaining window cleanly needs a dedicated cross-store activation/versioning design to avoid reopening the revocation hole.
+- Owner: Codex
+- Target date: `2026-04-23`
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-auth-session-persistence-audit.md`
+
+## 2026-04-21T13:15:26+08:00
+
+- Scope: Read-only re-audit of the latest `apps/bff/src/server.ts` auth session persistence/recovery closure, with focus on `persistAuthSessionToDatabase`, `removeAuthSessionFromDatabase`, `loadPersistedAuthSessionFromDatabase`, `persistAuthSessionToRedis`, `removePersistedAuthSession`, `hydrateAuthSessionFromRedisIfNeeded`, `isAuthSessionRevokedInRedis`, `hydrateSessionAccessStateIfNeeded`, the `/api/mail` and `/api/agent` preHandler, `/api/auth/logout`, and `setErrorHandler`.
+- Task type: `Non-code`
+- Audit: N/A (no code changes)
+- Result: final independent re-audit confirmed no unresolved `Critical` or `High` findings; one narrow `Medium` crash-window issue remains deferred in `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-auth-session-persistence-audit.md`.
+
+## 2026-04-21T14:15:43+08:00
+
+- Scope: Completed the Gmail-backed registration verification flow for `mery.secretary@gmail.com`, including local SMTP activation, reusable live smoke coverage, and frontend empty-body request hardening discovered during logout validation.
+- Task type: `Code`
+- Findings:
+- Activated Gmail SMTP delivery in ignored local BFF env without recording the app password in tracked project notes.
+- Added `apps/bff/scripts/auth-registration-live-smoke.ts` and `smoke:auth-registration-live` so the full register -> receive code -> verify -> session -> logout -> login loop can be rechecked with one command.
+- Added SMTP sender fields to `apps/bff/.env.example`.
+- Updated frontend API wrappers so they only add `Content-Type: application/json` when a request actually has a body, preventing empty-body POSTs like logout from tripping Fastify's JSON parser.
+- Validation passed:
+- `npm --workspace apps/bff run check`
+- `npm --workspace apps/bff run smoke:auth-registration-live`
+- `npm --workspace apps/webui run check`
+- `npm --workspace apps/webui run build`
+- rebuilt and restarted local WebUI preview at `http://127.0.0.1:4173/`
+- `git diff --check -- apps/bff/.env.example apps/bff/package.json apps/bff/scripts/auth-registration-live-smoke.ts apps/webui/src/utils/api.ts apps/webui/src/contexts/AuthContext.tsx`
+- Independent audit:
+- Final audit status: no unresolved `Critical`, `High`, `Medium`, or `Low` findings.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-registration-gmail-verification-audit.md`
+
+## 2026-04-21T14:25:21+08:00
+
+- Scope: Explained the required Google Cloud OAuth setup for Gmail mailbox connection after WebUI reported missing Google OAuth client configuration.
+- Task type: `Non-code`
+- Audit: N/A (no code changes)
+- Result: Provided the exact Google Cloud values the user needs to create and return: web OAuth client ID, client secret, and authorized redirect URI for the local BFF Gmail callback.
+
+## 2026-04-21T14:55:24+08:00
+
+- Scope: Independent audit of the local Gmail OAuth configuration path in `apps/bff/src/config.ts`, `apps/bff/src/google-gmail.ts`, and `apps/bff/src/server.ts` around `/api/mail/connections/gmail/direct/start` and `/api/mail/connections/gmail/direct/status`.
+- Task type: `Non-code`
+- Audit: N/A (no code changes)
+- Result: Reviewed the non-secret code paths against the provided validation evidence; no Critical or High issues were found in the start/status wiring.
+
+## 2026-04-21T14:55:43+08:00
+
+- Scope: Applied and validated the local Google OAuth client configuration for Gmail direct mailbox connection.
+- Task type: `Code`
+- Findings:
+- Added the Google OAuth client ID, secret, redirect URI, and Gmail readonly scope to the ignored local `apps/bff/.env`; the secret is intentionally omitted from tracked notes.
+- Restarted BFF with the new configuration.
+- Confirmed `/health` now reports `google.ok=true`.
+- Confirmed authenticated Gmail direct OAuth start returns a `302` redirect to `accounts.google.com`, includes `client_id`, `redirect_uri`, and Gmail readonly scope, and records the direct-auth attempt as `pending`.
+- Probed the generated Google auth URL and found no immediate `invalid_client` or `redirect_uri_mismatch`; Google showed sign-in content.
+- Validation passed:
+- `npm --workspace apps/bff run check`
+- BFF health check with `google.ok=true`
+- authenticated Gmail direct start/status smoke
+- Google auth URL immediate-error probe
+- Independent audit:
+- Final audit status: no unresolved `Critical`, `High`, `Medium`, or `Low` findings.
+- Remaining manual proof: browser sign-in/consent is still needed to prove callback token exchange and Gmail source creation.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-google-oauth-config-audit.md`
+
+## 2026-04-21T15:33:28+08:00
+
+- Scope: Independent audit of `apps/bff/src/email.ts` and `apps/bff/scripts/auth-registration-live-smoke.ts` for the Gmail SMTP DNS fallback and live-smoke uniqueness hardening.
+- Task type: `Non-code`
+- Audit: N/A (no code changes)
+- Result: Reviewed only the requested files against the supplied validation evidence; no Critical or High issues found.
+
+## 2026-04-21T15:36:15+08:00
+
+- Scope: Re-audit of `apps/bff/src/email.ts` and `apps/bff/scripts/auth-registration-live-smoke.ts` after the prior Low finding was fixed.
+- Task type: `Non-code`
+- Audit: N/A (no code changes)
+- Result: Re-checked the requested files against the supplied validation evidence; no Critical, High, Medium, or Low issues remain.
+
+## 2026-04-21T15:37:08+08:00
+
+- Scope: Fixed the WebUI registration failure where sending the verification email could fail after a long wait.
+- Task type: `Code`
+- Root cause:
+- The failed registration log showed `getaddrinfo ENOTFOUND smtp.gmail.com`, a transient DNS resolution failure for the Gmail SMTP host.
+- Findings:
+- Gmail SMTP credentials and the register/verify/login code path were valid; direct live smoke passed.
+- Added host-scoped SMTP transporter caching and Gmail fallback SMTP host support in `apps/bff/src/email.ts`.
+- Hardened `apps/bff/scripts/auth-registration-live-smoke.ts` so generated Gmail aliases use timestamp plus random bytes and the script asserts session state transitions.
+- Validation passed:
+- DNS lookup resolves both `smtp.gmail.com` and `gmail-smtp-msa.l.google.com`.
+- `npm --workspace apps/bff run check`
+- `npm --workspace apps/bff run build`
+- `npm --workspace apps/bff run smoke:auth-registration-live`
+- `SMTP_HOST=gmail-smtp-msa.l.google.com npm --workspace apps/bff run smoke:auth-registration-live`
+- rebuilt and restarted BFF at `http://127.0.0.1:8787`
+- WebUI proxy `POST http://127.0.0.1:4173/api/auth/register` returned `202` with `delivery: "sent"`
+- final BFF health check green
+- `git diff --check -- apps/bff/src/email.ts apps/bff/scripts/auth-registration-live-smoke.ts`
+- Independent audit:
+- Round 1 found no Critical/High and one Low smoke assertion gap.
+- The Low gap was fixed.
+- Round 2 confirmed no remaining `Critical`, `High`, `Medium`, or `Low` findings.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-registration-smtp-dns-fallback-audit.md`
+
+## 2026-04-21T15:43:16+08:00
+
+- Scope: Fixed the agent mail-processing failure caused by missing mail privacy HMAC configuration while verifying the SiliconFlow API path.
+- Task type: `Code`
+- Root cause:
+- `MAIL_PRIVACY_ENABLED` defaults to `true`, but the ignored local `apps/bff/.env` did not contain `MAIL_PRIVACY_HMAC_KEY`; `MailPrivacyScope` correctly failed closed with `MAIL_PRIVACY_HMAC_KEY is required for mail privacy`.
+- SiliconFlow itself was configured and reachable through the existing `SILICONFLOW_*` fallback path; live health reported `runtime.llm.ok=true` with model `Pro/zai-org/GLM-5.1`.
+- Changes:
+- Added a generated local `MAIL_PRIVACY_HMAC_KEY`, `MAIL_PRIVACY_ENABLED=true`, and `MAIL_PRIVACY_KEY_VERSION=v1` to ignored `apps/bff/.env` without printing the secret value.
+- Added `runtime.mailPrivacy` readiness reporting to BFF health/readiness and included privacy readiness in the Mastra runtime ready gate.
+- Hardened `apps/bff/scripts/mail-privacy-live-smoke.ts` so the regular live smoke uses the real configured HMAC key, asserts free-text email stripping, exits non-zero on failed checks, and only allows fallback HMAC when `MAIL_PRIVACY_SMOKE_ALLOW_FALLBACK_KEY=true`.
+- Restarted BFF in the detached `mail-agent-bff-local` screen session on `http://127.0.0.1:8787`.
+- Validation passed:
+- `npm --workspace apps/bff run check`
+- `npm --workspace apps/bff run build`
+- `curl -sS http://127.0.0.1:8787/health` returned `runtime.llm.ok=true` and `runtime.mailPrivacy.ok=true`
+- `npm --workspace apps/bff run smoke:mail-privacy-live` returned `ok=true`, `usedFallbackHmacKey=false`, and no leak/assertion failures
+- Authenticated low-risk `POST /api/agent/chat` against the active Gmail source returned `agent隐私配置测试通过。` with no `MAIL_PRIVACY_HMAC_KEY` error
+- `git diff --check -- apps/bff/src/server.ts apps/bff/scripts/mail-privacy-live-smoke.ts`
+- Independent audit:
+- Round 1 found no Critical/High/Medium and one Low fallback-HMAC smoke gap.
+- The Low gap was fixed.
+- Round 2 confirmed no remaining `Critical`, `High`, `Medium`, or `Low` findings.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-mail-privacy-hmac-fix-audit.md`
+
+## 2026-04-22T00:42:28+08:00
+
+- Scope: Reviewed `/Users/fairchan/Desktop/MERY产品功能体系.xlsx` and identified missing near-term additions plus future roadmap-worthy capability areas for the product plan.
+- Task type: `Non-code`
+- Findings:
+- The workbook currently contains 25 functions across inbox, AI prioritization, task/calendar, reply, knowledge, analytics, and security, but the section structure is unbalanced: 15 items are grouped under `任务提取与日程自动化`, including several features that are actually agent, knowledge, collaboration, and analytics capabilities.
+- The current sheet is strong on “what the product can do,” but still under-specifies the product’s agent layer, attachment intelligence, authorization/audit controls, multi-user governance, and longer-term platformization direction.
+- Result:
+- Proposed a clearer module-level expansion for the plan: attachment intelligence, agent execution, knowledge/memory, enterprise permission governance, and future-facing intelligent workflow capabilities.
+- Provided two suggestion sets for direct plan use: near-term additions that can be added to the existing function system now, and future additions suitable for later product versions and roadmap planning.
+- Audit: N/A (no code changes)
+
+## 2026-04-21T16:04:59+08:00
+
+- Scope: Replaced WebUI logo surfaces with the user-provided `/Users/fairchan/Downloads/LOGO0.png`.
+- Task type: `Code`
+- Changes:
+- Copied the uploaded PNG to `apps/webui/public/brand-logo.png` so Vite includes it in production builds.
+- Added `BrandLogo` as the shared logo renderer and used it in the auth screen, header, and sidebar brand mark.
+- Added favicon and Apple touch icon links for `/brand-logo.png`.
+- Fixed the audit-noted accessibility Low by making the logo image decorative when visible brand text is present, while preserving descriptive `alt` text for standalone logo usage.
+- Validation passed:
+- `rtk npm --workspace apps/webui run check`
+- `rtk git diff --check`
+- `rtk npm --workspace apps/webui run build`
+- `rtk file apps/webui/dist/brand-logo.png`
+- `rtk curl -I http://127.0.0.1:4173/brand-logo.png`
+- Independent audit:
+- Round 1 found no Critical/High issues and one Low duplicate screen-reader announcement issue.
+- The Low issue was fixed.
+- Post-fix round-2 independent audit attempt was blocked by Codex CLI account usage limit before review; not counted as audit evidence and documented at `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-webui-logo-replacement-audit-round2.md`.
+- Final audit status: no unresolved Critical or High findings; the only recorded Low finding was fixed and follow-up validation passed.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-webui-logo-replacement-audit.md`
+
+## 2026-04-21T20:01:38+08:00
+
+- Scope: Re-checked and fixed the important-mail notification flow.
+- Task type: `Code`
+- Root cause:
+- Notification UI and backend poll were using different classification surfaces: the visible mail triage was KB-aligned, while notification polling could either miss fresh KB-unprocessed urgent mail or silently continue after Gmail metadata partial failures.
+- Changes:
+- `apps/bff/src/server.ts` now keeps notification triage aligned to the KB while allowing fresh realtime heuristic urgent-important mail to alert before KB processing completes.
+- Realtime urgent fallback candidates are placed before older KB urgent items before the notification candidate cap is applied.
+- `apps/bff/src/google-gmail.ts` now treats post-retry Gmail metadata partial failure as a retryable provider failure instead of returning an incomplete successful inbox.
+- `apps/bff/.env.example` now documents 15s notification intervals as commented local-testing overrides rather than active defaults.
+- Validation passed:
+- `npm --workspace apps/bff run check`
+- `npm --workspace apps/bff run build`
+- rebuilt and restarted BFF at `http://127.0.0.1:8787`
+- `/health` returned green for Prisma, LLM, mail privacy, Microsoft, Google, and Outlook poll sync
+- authenticated Outlook notification poll returned `ok=true`, `urgent.totalUrgentImportant=12`, and `urgent.newItems.length=3`
+- authenticated Gmail notification poll returned `ok=true`, `urgent.totalUrgentImportant=3`, and `urgent.newItems.length=3`
+- SSE notification stream emitted a `notification` event with `ok=true`
+- `git diff --check -- apps/bff/src/server.ts apps/bff/src/google-gmail.ts apps/bff/.env.example`
+- Independent audit:
+- Round 1 found no Critical/High and raised two Medium plus one Low; all were fixed.
+- Round 2 found one Medium candidate-ordering risk; it was fixed.
+- Round 3 confirmed no unresolved `Critical`, `High`, `Medium`, or `Low` findings.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-important-mail-notification-audit.md`
+
+## 2026-04-21T19:47:30+08:00
+
+- Scope: Concise independent audit of latest important-mail notification changes in `apps/bff/src/server.ts`, `apps/bff/src/google-gmail.ts`, and `apps/bff/.env.example`.
+- Task type: `Non-code`
+- Audit: N/A (no code changes)
+- Result: Reviewed notification poll quadrant alignment, freshness gating, Gmail metadata fetch/retry behavior, seen/new state handling, and performance/correctness risks.
+
+## 2026-04-21T19:58:06+08:00
+
+- Scope: Round 2 audit of important-mail notification fixes in `apps/bff/src/server.ts`, `apps/bff/src/google-gmail.ts`, and `apps/bff/.env.example`.
+- Task type: `Non-code`
+- Audit: N/A (no code changes)
+- Result: Re-reviewed realtime urgent fallback ordering, Gmail partial metadata failure handling, and notification interval example defaults after the supplied validation passed.
+
+## 2026-04-21T20:01:17+08:00
+
+- Scope: Round 3 final re-audit of important-mail notification urgent candidate ordering in `apps/bff/src/server.ts`.
+- Task type: `Non-code`
+- Audit: N/A (no code changes)
+- Result: Confirmed transient realtime urgent candidates are ordered before KB-aligned urgent mail before slicing to the notification cap.
+
+## 2026-04-21T19:52:07+08:00
+
+- Scope: Continued the planned WebUI front-end work by completing the ChatGPT-style redesign of the agent/copilot window.
+- Task type: `Code`
+- Changes:
+- Rebuilt `apps/webui/src/components/agent/AgentWorkspaceWindow.tsx` as a conversation-first workspace with a compact header, mailbox status strip, centered empty state, message transcript, suggestion cards, and fixed bottom composer.
+- Removed the old capabilities rail from the agent window and kept initialization inside the visible workspace.
+- Added keyboard-friendly composer behavior, visible focus rings, non-forced transcript auto-scroll, and logo usage aligned with the shared brand component.
+- Hardened markdown link rendering by making `sanitizeExternalLink()` return normalized `parsed.href` and added a Playwright regression for markdown link attribute injection.
+- Validation passed:
+- `rtk npm --workspace apps/webui run check`
+- `rtk git diff --check -- apps/webui/src/components/agent/AgentWorkspaceWindow.tsx apps/webui/src/styles.css apps/webui/src/utils/sanitize.ts apps/webui/e2e/smoke.spec.ts`
+- `rtk npm --workspace apps/webui run build`
+- `CI=1 BFF_URL=http://127.0.0.1:4173 npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts --workers=1 --grep "agent window|embedded agent composer|markdown links"` passed 4 tests.
+- Independent audit:
+- Round 1 found no Critical/High after the sanitizer fix, plus one Medium focus-visibility issue and one Low forced-scroll issue.
+- Both findings were fixed in the same task.
+- Final read-only audit confirmed no Critical or High findings remain and found no remaining real regressions in accessibility, keyboard behavior, scroll/layout fit, or state flow.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-agent-window-chatgpt-redesign-audit.md`
+
+## 2026-04-21T21:14:42+08:00
+
+- Scope: Implemented the enterprise global right-drawer stack architecture and redesigned the knowledge-base mail list with pagination plus stacked drawer details.
+- Task type: `Code`
+- Changes:
+- Added `zustand` to the WebUI and introduced a typed global drawer store with `openDrawer`, `closeDrawer`, `closeTopDrawer`, `closeAllDrawers`, stack entries, close phases, and delayed removal for slide-out animation.
+- Added `GlobalDrawerHost` with React Portal mounting to `document.body`, top-only backdrop click handling, incremental z-index stacking, body scroll lock, ESC close, initial focus, focus restore, and Tab/Shift+Tab focus trapping.
+- Added the first drawer implementation, `MailKnowledgeDetailDrawer`, for knowledge-base mail details with a refined right-side stacked-page design.
+- Reworked `MailsListPanel` into a paginated stacked mail list that opens details via the global drawer instead of an inline right pane.
+- Extended `MailContext` and `KnowledgeBaseView` to request KB mails by `pageSize` and `offset`, track total/limit/offset metadata, and clamp stale page state when totals shrink.
+- Updated the sidebar header area so the visible brand font/image content is removed and only the collapse arrow remains on desktop; mobile keeps only the close arrow.
+- Added a Playwright regression covering KB mail pagination, page 2 navigation, drawer detail opening, and ESC close.
+- Validation passed:
+- `rtk npm --workspace apps/webui run check`
+- `rtk git diff --check -- apps/webui/package.json package-lock.json apps/webui/src/App.tsx apps/webui/src/components/layout/Sidebar.tsx apps/webui/src/contexts/MailContext.tsx apps/webui/src/components/dashboard/knowledgebase/KnowledgeBaseView.tsx apps/webui/src/components/dashboard/knowledgebase/MailsListPanel.tsx apps/webui/src/components/drawer/drawerStore.ts apps/webui/src/components/drawer/GlobalDrawerHost.tsx apps/webui/src/components/drawer/MailKnowledgeDetailDrawer.tsx apps/webui/src/components/drawer/index.ts apps/webui/src/styles.css apps/webui/e2e/smoke.spec.ts`
+- `rtk npm --workspace apps/webui run build`
+- `CI=1 BFF_URL=http://127.0.0.1:4173 npm --workspace apps/webui run test:e2e -- e2e/smoke.spec.ts --workers=1 --grep "knowledge-base mail|paginates knowledge-base mails|dock tooltips|agent window|embedded agent composer|markdown links"` passed 7 tests.
+- During build validation, npm optional native packages for Rollup, esbuild, lightningcss, and Tailwind Oxide were missing from local `node_modules`; they were restored with `npm install --no-save ...` without changing dependency declarations.
+- Independent audit:
+- Round 1 found no Critical/High, plus one Medium focus-trap/modal concern and one Low pagination clamp concern.
+- Both findings were fixed in the same task.
+- Round 2 confirmed no remaining `Critical`, `High`, `Medium`, or `Low` findings.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-global-right-drawer-stack-audit.md`
+
+## 2026-04-21T22:39:36+08:00
+
+- Scope: Independent audit only for the personalization-profile feature across BFF persistence/classifier paths and WebUI tutorial visibility.
+- Task type: `Non-code`
+- Audit: N/A (no code changes)
+- Result: Round 1 found no Critical/High findings, one Medium partial-profile-commit risk, and one Low docs-readiness copy issue. Both findings were fixed in the implementation task.
+
+## 2026-04-21T22:47:37+08:00
+
+- Scope: Independent round-2 audit only for the personalization-profile feature and the two round-1 fixes.
+- Task type: `Non-code`
+- Audit: N/A (no code changes)
+- Result: Round 2 was clean with no remaining Critical, High, Medium, or Low findings.
+
+## 2026-04-21T22:48:17+08:00
+
+- Scope: Implemented the personal recommendation/profile flow that lets users define their own urgency and importance criteria during onboarding.
+- Task type: `Code`
+- Changes:
+- Added a durable per-user/per-mail-source personalization profile store in `apps/bff/src/personalization-profile-store.ts`, saving both structured JSON and a human-readable Markdown decision document under the local BFF data directory.
+- Added authenticated BFF `GET/POST /api/mail/personalization-profile` routes with account-backed session checks, tenant audit logging, source resolution, and write rate limiting.
+- Extended shared WebUI/BFF types for `MailPersonalizationProfile`, artifacts, answers, and structured profile fields.
+- Wired the saved profile into mail classification so VIP senders, urgent words, hidden important topics, noise sources, optional-reject preferences, and deadline alert windows affect quadrant scoring and reasons.
+- Rebuilt the tutorial page into a card-style conversational setup flow that collects personal urgency language, hidden high-priority topics, DDL alert tolerance, VIP senders, soft-reject preference, noise sources, and extra notes.
+- Updated tutorial document visibility so personalization documents only appear after a real save, and readiness messaging now distinguishes personalization-only, history-only, and fully-ready states.
+- Fixed audit-noted persistence ordering by atomically writing the Markdown document before committing the JSON record, avoiding a JSON-only partial save when the readable document fails to write.
+- Validation passed:
+- `rtk npm --workspace packages/shared-types run typecheck`
+- `rtk npm --workspace apps/bff run check`
+- `rtk npm --workspace apps/bff run build`
+- `rtk npm --workspace apps/webui run check`
+- `rtk npm --workspace apps/webui run build`
+- `rtk npm run harness:semantic` passed with the existing pre-task safeParse warnings only.
+- `rtk git diff --check -- packages/shared-types/src/index.ts apps/bff/src/personalization-profile-store.ts apps/bff/src/mail.ts apps/bff/src/server.ts apps/webui/src/components/dashboard/TutorialView.tsx apps/webui/src/types/index.ts`
+- Local BFF/WebUI deployment is active at `http://127.0.0.1:8787` and `http://127.0.0.1:4173`; `/health` is green.
+- Authenticated smoke saved a sample personalization profile, verified both `.md` and `.json` documents existed, confirmed triage returned personalized reasons, then restored and trashed the temporary test artifacts.
+- Independent audit:
+- Initial full-context audit attempt hit the platform usage limit and was not counted as evidence.
+- Round 1 found no Critical/High findings, one Medium partial-profile-commit risk, and one Low docs-readiness copy issue.
+- Both findings were fixed, and relevant validation/smoke checks were rerun.
+- Round 2 confirmed no remaining `Critical`, `High`, `Medium`, or `Low` findings.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-personalization-profile-tutorial-audit.md`
+
+## 2026-04-21T23:26:05+08:00
+
+- Scope: Independent round-2 audit of the knowledge-base drawer frontend after the App drawer-scope cleanup and nested mail-context changes.
+- Task type: `Non-code`
+- Audit: N/A (no code changes)
+- Result: Reviewed `App.tsx`, drawer host/store files, KB panels, and smoke coverage. No code changes were made during this task.
+
+## 2026-04-21T23:26:37+08:00
+
+- Scope: Implemented the daily digest schedule and same-day summary push flow for tutorial onboarding and notification delivery.
+- Task type: `Code`
+- Changes:
+- Added a durable per-user/per-mail-source notification preference store in `apps/bff/src/notification-preferences-store.ts` so daily digest time survives BFF restarts and is shared by tutorial plus settings.
+- Hydrated notification preferences from local storage before notification polling, preference reads/writes, automatic processing, and Microsoft sync time-zone setup.
+- Extended daily digest notification payloads with `summaryTitle`, `summaryLines`, `urgentHighlights`, `scheduleHighlights`, `recommendedActions`, and `quietCount`.
+- Updated the tutorial flow with a new daily digest push-time card, including enable/disable, time, time zone, local-timezone shortcut, save feedback, and source-aware validation.
+- Updated the notification center and desktop notification body to show the richer digest summary instead of only raw counts.
+- Updated the relevant Playwright tutorial smoke assertion for the new onboarding copy.
+- Validation passed:
+- `rtk npm --workspace packages/shared-types run typecheck`
+- `rtk npm --workspace apps/bff run check`
+- `rtk npm --workspace apps/bff run build`
+- `rtk npm --workspace apps/webui run check`
+- `rtk npm --workspace apps/webui run build`
+- `rtk npm run harness:semantic` passed with existing warnings.
+- Targeted `rtk git diff --check` for touched files passed.
+- Authenticated API smoke saved a temporary digest time, triggered `/api/mail/notifications/poll`, confirmed the rich `dailyDigest` fields, restored the original settings, restarted BFF, and confirmed preferences persisted.
+- Targeted Playwright passed: `redirects first-time`, `saves notification preferences`, and `renders urgent notifications`.
+- `npm run check:standard` reached full Playwright with 26/29 passing. The tutorial failure introduced by this task was fixed; the remaining two failures are existing new-mail workbench smoke drift unrelated to this digest flow.
+- Independent audit:
+- Round 1 found no Critical/High/Medium issues and one Low stale-success-banner issue.
+- The Low finding was fixed by clearing `digestPrefsSavedAt` before save attempts and on failure.
+- Final status: no unresolved Critical, High, Medium, or Low findings for this task.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-daily-digest-schedule-audit.md`
+
+## 2026-04-21T23:50:51+08:00
+
+- Scope: Continued the original plan by making the daily digest content read the user’s personalization profile instead of staying generic.
+- Task type: `Code`
+- Changes:
+- Extended daily digest generation so it now reads the saved personalization runtime profile and uses it to shape summary title, summary lines, and recommended actions.
+- Added personalization-aware handling for VIP senders, hidden important topics, deadline alert window, noise-source batching, and soft-reject draft guidance in `apps/bff/src/server.ts`.
+- Fixed the runtime-profile activation gate so a profile that only changes `deadlineAlertWindowHours` still participates in digest personalization even when `completed=false`.
+- Fixed topic-aware digest matching so hidden important topics also inspect `signalsWithoutDate`, not only dated upcoming items.
+- Validation passed:
+- `rtk npm --workspace apps/bff run check`
+- `rtk npm --workspace apps/bff run build`
+- `rtk npm run harness:semantic` passed with existing warnings.
+- Authenticated smoke confirmed:
+- a temporary rich personalization profile produced daily digest output containing the 72-hour personal window line and the draft-reply recommendation;
+- a temporary profile with only `deadlineAlertWindowHours=72` and `completed=false` still produced the personal window summary line;
+- original personalization profile and notification preferences were restored after test.
+- Independent audit:
+- Round 1 found one Medium runtime-profile activation gap and one Low date-less hidden-topic gap.
+- Both findings were fixed in the same task.
+- Round 2 confirmed no remaining Critical, High, Medium, or Low findings.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-daily-digest-personalization-audit.md`
+
+## 2026-04-21T23:31:00+08:00
+
+- Scope: Rebuilt the knowledge-base frontend around the global right-drawer architecture and completed the event/person/document deep-reading flows.
+- Task type: `Code`
+- Changes:
+- Expanded the global drawer stack to support event detail, person detail, and knowledge-document detail in addition to mail detail.
+- Converted the knowledge-base event and person views from inline split-panels into index cards that open stacked right-side pages, and wired the overview matrix to the same drawer system.
+- Added App-level drawer-scope cleanup so open drawers are invalidated on auth changes, mailbox source switches, and main/agent window mode changes.
+- Added a separate knowledge-base context-mail pool for overview, events, and persons, so those surfaces are no longer limited to the current paginated mail page.
+- Localized nested mail-detail context and replaced raw person/event IDs with human-readable labels when drilling down from event/person drawers.
+- Added Playwright coverage for source-switch drawer cleanup and for event related-mail lookup beyond the first paginated mail page.
+- Validation passed:
+- `rtk npm --workspace apps/webui run check`
+- `rtk npm --workspace apps/webui run build`
+- `rtk npm --workspace apps/webui run test:e2e -- --grep "knowledge-base|document previews|Eisenhower|source changes|context mail pool"`
+- `rtk git diff --check -- apps/webui/src/App.tsx apps/webui/src/components/drawer apps/webui/src/components/dashboard/knowledgebase apps/webui/e2e/smoke.spec.ts`
+- Independent audit:
+- Round 1 found one High stale/private drawer invalidation issue and one Low locale/context issue.
+- Round 2 found no Critical/High issues and flagged one Medium page-local knowledge context regression plus one Low locale inconsistency.
+- The High, Medium, and Low findings were fixed and relevant validation was rerun.
+- A read-only Round 3 re-audit attempt was blocked by Codex usage limits before findings were produced; blocker evidence is recorded in `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-knowledge-base-drawer-frontend-audit-r3.md`.
+- Audit evidence:
+- `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-knowledge-base-drawer-frontend-audit.md`
+- `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-knowledge-base-drawer-frontend-audit-r2.md`
+- `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-21-knowledge-base-drawer-frontend-audit-r3.md`
+
+## 2026-04-22T00:14:14+08:00
+
+- Scope: Optimized all global right-drawer popups so clicking blank space outside the window closes the top drawer and plays a right-side retract animation.
+- Task type: `Code`
+- Changes:
+- Added outside-panel pointer detection in `apps/webui/src/components/drawer/GlobalDrawerHost.tsx` so any click on blank space outside the active drawer closes only the current top layer.
+- Preserved the backdrop close behavior and ensured the top drawer still exits through the shared closing state instead of disappearing immediately.
+- Added dedicated closing keyframes in `apps/webui/src/styles.css` so the backdrop fades out while the drawer panel slides back to the right on dismiss.
+- Extended the knowledge-base Playwright smoke in `apps/webui/e2e/smoke.spec.ts` to cover outside-blank click dismissal and assert the closing animation state before the drawer unmounts.
+- Continued locale cleanup inside nested knowledge drawers in `apps/webui/src/components/drawer/EventClusterDetailDrawer.tsx` and `apps/webui/src/components/drawer/PersonProfileDetailDrawer.tsx`.
+- Validation passed:
+- `rtk npm --workspace apps/webui run check`
+- `rtk git diff --check -- apps/webui/src/components/drawer/GlobalDrawerHost.tsx apps/webui/src/components/drawer/EventClusterDetailDrawer.tsx apps/webui/src/components/drawer/PersonProfileDetailDrawer.tsx apps/webui/src/styles.css apps/webui/e2e/smoke.spec.ts`
+- `rtk npm --workspace apps/webui run test:e2e -- --grep "knowledge-base|source changes|context mail pool"`
+- `rtk npm --workspace apps/webui run build`
+- Independent audit:
+- A read-only Codex audit was attempted for the changed drawer files, but the run was blocked by the current Codex usage limit before findings were produced.
+- No Critical/High/Medium/Low findings were generated because the independent audit did not start successfully.
+- Audit evidence:
+- `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-22-drawer-outside-close-animation-audit.md`
+- Final fixes after audit:
+- Implemented and validated the feature changes above, but a successful final independent audit is still blocked by the Codex usage limit noted in the audit evidence file.
+
+## 2026-04-22T01:45:21+08:00
+
+- Scope: Completed the behavior-driven personalization feedback loop for mail, event, and person priority learning.
+- Task type: `Code`
+- Changes:
+- Added shared personalization state/types for effective quadrant, feedback events, manual overrides, and learned signals.
+- Added Prisma persistence for personalization feedback events, entity overrides, and learned signals, plus a migration for the new tables.
+- Added a BFF personalization learning store that records feedback, applies manual mail/event/person overrides, generates learned profile artifacts, exports readable local documents, and resolves the final runtime profile for Agent/classification use.
+- Added authenticated BFF APIs for reading learning state, recording feedback, and setting/clearing mail/event/person quadrant overrides.
+- Wired inbox and knowledge-base reads so manual overrides and learned criteria are reflected in triage lists, knowledge mails, event clusters, person profiles, and Eisenhower distributions.
+- Added quadrant override controls to mail, event, and person detail drawers, plus mail detail modal/page surfaces.
+- Added detail-session dwell tracking with page-visibility handling, related-mail open tracking, external-mail open tracking, calendar-sync tracking, and knowledge-card feedback through the existing BFF route.
+- Fixed audit findings so reset-to-auto no longer becomes positive learning, knowledge-card save is not double-counted, delayed dwell feedback is bound to the original mailbox source, and personalization is not applied twice during inbox normalization.
+- Validation passed:
+- `rtk npm --workspace apps/bff run check`
+- `rtk npm --workspace apps/webui run check`
+- `rtk npm --workspace apps/bff run build`
+- `rtk npm --workspace apps/webui run build`
+- `rtk npm run harness:semantic` passed with existing safeParse warnings.
+- Targeted `rtk git diff --check` passed for the changed personalization files.
+- `rtk npm run db:migrate:deploy` applied the new personalization feedback-loop migration locally.
+- `rtk curl -s http://127.0.0.1:8787/health` returned `ok=true` with `prisma.ok=true`.
+- `rtk npm run check:standard` reached full Playwright with 30/32 passing; the 2 failures are the existing new-mail processing workbench smoke drift around `立即处理新邮件`, outside this task.
+- Independent audit:
+- Round 1 found no Critical issues, three High issues, one Medium issue, and no Low issues.
+- All High and Medium findings were fixed in this task.
+- Round 2 re-audit confirmed no residual Critical, High, Medium, or Low issues for the fixed findings.
+- Audit evidence: `/Users/fairchan/Desktop/mail-agent-bff/.harness/audit/2026-04-22-personalization-feedback-loop-audit.md`

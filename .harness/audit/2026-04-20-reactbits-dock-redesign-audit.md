@@ -1,0 +1,7 @@
+No Critical or High issues.
+
+- Medium: The dock’s accessible names are hardcoded in English (`Dock Guide`, `Dock Inbox`, etc.) instead of using the current locale, so non-English users lose localized screen-reader labels. The new `role="toolbar"` wrapper also claims toolbar semantics without the matching arrow-key behavior. This is a regression from the localized nav pattern used elsewhere, and the current smoke still passes because it clicks the English names directly. See [AppDock.tsx](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/components/layout/AppDock.tsx#L33) and [smoke.spec.ts](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/e2e/smoke.spec.ts#L1309).
+
+- Low: The ReactBits hover math now mixes `pageX` with viewport `getBoundingClientRect()` values and uses a fixed `baseItemSize / 2` center instead of the measured width, so magnification can drift on horizontally scrolled layouts or feel slightly off-center as items resize. The previous implementation used `clientX` and the element’s actual width. See [AppDock.tsx](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/components/layout/AppDock.tsx#L125) and [AppDock.tsx](/Users/fairchan/Desktop/mail-agent-bff/apps/webui/src/components/layout/AppDock.tsx#L251).
+
+Navigation semantics look preserved otherwise: `stats` still drives the KB view, and the `knowledgebase` alias remains active on that dock item.

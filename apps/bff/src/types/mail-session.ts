@@ -2,9 +2,12 @@
  * 邮件会话状态类型
  */
 
-import type { MailCalendarSyncInput, MailPriorityRule } from "@mail-agent/shared-types";
-
-export type MailSourceProvider = "outlook";
+import type {
+  MailCalendarSyncInput,
+  MailPriorityRule,
+  MailSourceConnectionType,
+  MailSourceProvider,
+} from "@mail-agent/shared-types";
 
 export type MailSourceRoutingCheckStatus = "skipped" | "verified" | "failed" | "unverifiable";
 
@@ -28,6 +31,7 @@ export type MailSourceProfile = {
   id: string;
   name: string;
   provider: MailSourceProvider;
+  connectionType?: MailSourceConnectionType;
   emailHint: string;
   mailboxUserId?: string;
   connectedAccountId?: string;

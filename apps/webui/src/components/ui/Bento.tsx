@@ -47,7 +47,7 @@ export function BentoPanel({ children, className, tone = "default", as = "div" }
   return (
     <Component
       className={cn(
-        "relative overflow-hidden rounded-[var(--radius-panel)] border p-4 shadow-[var(--shadow-soft)] backdrop-blur-xl",
+        "relative overflow-hidden rounded-[var(--radius-panel)] border p-4 shadow-[var(--shadow-soft)] backdrop-blur-sm",
         panelToneClasses[tone],
         className
       )}
@@ -88,12 +88,7 @@ export function StatusPill({
         (tone === "default" || tone === "muted") && "bg-[color:var(--pill-default)] text-[color:var(--pill-default-ink)]"
       )}
     >
-      {pulse ? (
-        <span className="relative flex h-1.5 w-1.5" aria-hidden="true">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-current opacity-75" />
-          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-current" />
-        </span>
-      ) : null}
+      {pulse ? <span className="inline-flex h-1.5 w-1.5 rounded-full bg-current opacity-80" aria-hidden="true" /> : null}
       {children}
     </span>
   );

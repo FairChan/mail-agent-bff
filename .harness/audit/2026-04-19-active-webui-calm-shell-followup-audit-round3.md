@@ -1,0 +1,5 @@
+- [`apps/webui/src/components/dashboard/MailKBSummaryModal.tsx`](/private/tmp/webui-audit-current/apps/webui/src/components/dashboard/MailKBSummaryModal.tsx): the new `role="dialog"` / `aria-modal="true"` wrapper never gets an accessible name (`aria-labelledby` or `aria-label`), so screen readers will announce an unlabeled modal.
+
+- [`apps/webui/src/components/dashboard/TutorialView.tsx`](/private/tmp/webui-audit-current/apps/webui/src/components/dashboard/TutorialView.tsx): the new mailbox status pill keys off `activeSource` instead of `activeSource.ready`, so a mailbox that is connected but still validating is now shown as ready and the previous state distinction is lost.
+
+- [`apps/webui/src/components/dashboard/MailKBSummaryModal.tsx`](/private/tmp/webui-audit-current/apps/webui/src/components/dashboard/MailKBSummaryModal.tsx) and [`apps/webui/src/components/dashboard/TutorialView.tsx`](/private/tmp/webui-audit-current/apps/webui/src/components/dashboard/TutorialView.tsx): the new locale copy is still incomplete, leaving English strings like `Knowledge Base Job`, `Job ID`, and `Onboarding` in zh/ja modes, so the refactor still renders mixed-language UI.

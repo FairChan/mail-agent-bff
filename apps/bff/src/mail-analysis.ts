@@ -54,6 +54,7 @@
 
 import { z } from "zod";
 import { queryAgent } from "./gateway.js";
+import type { MailPrivacyScope } from "./mail-privacy.js";
 
 // ─── Zod Schema ───────────────────────────────────────────────────────────────
 
@@ -868,6 +869,7 @@ interface AnalysisOptions {
   timezone?: string;
   sessionKey?: string;
   userId?: string;
+  privacyScope?: MailPrivacyScope | null;
 }
 
 /**
@@ -888,19 +890,48 @@ export async function analyzeMail(
 ): Promise<ParseResult | ParseFailure> {
   const locale = options.locale ?? "zh-CN";
   const timezone = options.timezone ?? inferTimezone(locale);
+  const privacyScope = options.privacyScope ?? null;
 
   let lastError: string | undefined;
   let lastRawOutput: string | undefined;
 
+  const promptMail = privacyScope
+    ? (privacyScope.maskStructuredPayload({
+        subject: mail.subject,
+        fromName: mail.fromName,
+        fromAddress: mail.fromAddress,
+        bodyPreview: mail.bodyPreview,
+        receivedDateTime: mail.receivedDateTime,
+        importance: mail.importance,
+        hasAttachments: mail.hasAttachments,
+      }) as {
+        subject: string;
+        fromName: string;
+        fromAddress: string;
+        bodyPreview: string;
+        receivedDateTime: string;
+        importance: string;
+        hasAttachments: boolean;
+      })
+    : {
+        subject: mail.subject,
+        fromName: mail.fromName,
+        fromAddress: mail.fromAddress,
+        bodyPreview: mail.bodyPreview,
+        receivedDateTime: mail.receivedDateTime,
+        importance: mail.importance,
+        hasAttachments: mail.hasAttachments,
+      };
+
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     const prompt = buildAnalysisPrompt({
-      subject: mail.subject,
-      fromName: mail.fromName,
-      fromAddress: mail.fromAddress,
-      bodyPreview: mail.bodyPreview,
-      receivedDateTime: mail.receivedDateTime,
-      importance: mail.importance,
-      hasAttachments: mail.hasAttachments,
+      subject: promptMail.subject,
+      fromName: promptMail.fromName,
+      fromAddress: promptMail.fromAddress,
+      bodyPreview: promptMail.bodyPreview,
+      receivedDateTime: promptMail.receivedDateTime,
+      importance: promptMail.importance,
+      hasAttachments: promptMail.hasAttachments,
       locale,
       timezone,
       previousOutput: attempt > 1 ? lastRawOutput : undefined,
@@ -952,7 +983,13 @@ export async function analyzeMail(
       // TypeScript narrows result to ParseFailure here
       lastError = (result as ParseFailure).error;
     } else {
-      return result;
+      if (!privacyScope) {
+        return result;
+      }
+      return {
+        ...result,
+        data: privacyScope.restoreStructuredPayload(result.data) as MailAnalysisResult,
+      };
     }
   }
 

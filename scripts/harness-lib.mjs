@@ -104,8 +104,7 @@ export function isIgnoredPath(file) {
     file.includes("node_modules/") ||
     file.includes("/dist/") ||
     file.includes("/.vite/") ||
-    file.startsWith(".harness/tmp/") ||
-    file.startsWith("website-login-main/")
+    file.startsWith(".harness/tmp/")
   );
 }
 

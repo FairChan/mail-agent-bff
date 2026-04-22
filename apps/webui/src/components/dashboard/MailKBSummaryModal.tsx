@@ -3,7 +3,9 @@
  * 邮件知识库处理进度可视化对话框
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { useApp } from "../../contexts/AppContext";
+import { CalmButton, CalmPill, CalmSectionLabel, CalmSurface } from "../ui/Calm";
 
 interface LogEntry {
   timestamp: string;
@@ -33,28 +35,8 @@ interface JobStatus {
 
 interface MailKBSummaryModalProps {
   jobId: string;
-  onClose: () => void;
+  onClose: (options?: { refresh?: boolean }) => void;
 }
-
-const PHASE_LABELS: Record<string, string> = {
-  idle: "等待开始",
-  fetch: "拉取邮件",
-  analyze: "AI 分析",
-  persist: "写入知识库",
-  export: "导出文档",
-  done: "完成",
-  error: "失败",
-};
-
-const PHASE_BADGE_CLASSES: Record<string, string> = {
-  idle: "bg-zinc-100 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-100",
-  fetch: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200",
-  analyze: "bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/40 dark:text-fuchsia-200",
-  persist: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200",
-  export: "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200",
-  done: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200",
-  error: "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-200",
-};
 
 function createEmptyJob(jobId: string): JobStatus {
   return {
@@ -170,14 +152,146 @@ function mergeJobState(current: JobStatus, incoming: JobStatus): JobStatus {
   };
 }
 
+function getPhaseTone(phase: string): "muted" | "info" | "warning" | "success" | "urgent" {
+  if (phase === "fetch" || phase === "analyze" || phase === "export") {
+    return "info";
+  }
+  if (phase === "persist") {
+    return "warning";
+  }
+  if (phase === "done") {
+    return "success";
+  }
+  if (phase === "error") {
+    return "urgent";
+  }
+  return "muted";
+}
+
 export default function MailKBSummaryModal({ jobId, onClose }: MailKBSummaryModalProps) {
+  const { locale, setCurrentView } = useApp();
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [job, setJob] = useState<JobStatus>(createEmptyJob(jobId));
   const [stats, setStats] = useState<{
     quadrantDistribution?: Record<string, number>;
   }>({});
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const sourceIdRef = useRef<string | null>(null);
+  const titleId = useId();
+  const dateLocale = locale === "zh" ? "zh-CN" : locale === "ja" ? "ja-JP" : "en-US";
+
+  const labels = {
+    eyebrow: locale === "zh" ? "Knowledge Base Job" : locale === "ja" ? "知識ベースジョブ" : "Knowledge Base Job",
+    title: locale === "zh" ? "邮件知识库处理" : locale === "ja" ? "メール知識ベース処理" : "Mail knowledge base processing",
+    close: locale === "zh" ? "关闭" : locale === "ja" ? "閉じる" : "Close",
+    continueBackground: locale === "zh" ? "后台处理" : locale === "ja" ? "バックグラウンドで継続" : "Continue in background",
+    openResults: locale === "zh" ? "查看归纳结果" : locale === "ja" ? "要約結果を見る" : "Open results",
+    progress: locale === "zh" ? "处理进度" : locale === "ja" ? "進捗" : "Progress",
+    completedAt: locale === "zh" ? "完成时间" : locale === "ja" ? "完了時刻" : "Completed at",
+    logs: locale === "zh" ? "处理日志" : locale === "ja" ? "処理ログ" : "Processing logs",
+    waitingLogs: locale === "zh" ? "等待日志输出..." : locale === "ja" ? "ログを待機中..." : "Waiting for log output...",
+    failedPrefix: locale === "zh" ? "处理失败" : locale === "ja" ? "処理失敗" : "Processing failed",
+    pendingMessage: locale === "zh" ? "正在准备任务..." : locale === "ja" ? "ジョブを準備中..." : "Preparing the job...",
+    quadrantsLabel: locale === "zh" ? "归纳结果分布" : locale === "ja" ? "要約結果の分布" : "Distribution snapshot",
+    jobId: "Job ID",
+  };
+
+  const phaseLabels = {
+    idle: locale === "zh" ? "等待开始" : locale === "ja" ? "開始待ち" : "Waiting",
+    fetch: locale === "zh" ? "拉取邮件" : locale === "ja" ? "メール取得" : "Fetching mail",
+    analyze: locale === "zh" ? "AI 分析" : locale === "ja" ? "AI 解析" : "AI analysis",
+    persist: locale === "zh" ? "写入知识库" : locale === "ja" ? "知識ベースへ保存" : "Persisting",
+    export: locale === "zh" ? "导出文档" : locale === "ja" ? "文書を書き出し" : "Exporting",
+    done: locale === "zh" ? "完成" : locale === "ja" ? "完了" : "Done",
+    error: locale === "zh" ? "失败" : locale === "ja" ? "失敗" : "Failed",
+  };
+
+  const quadrantCards = [
+    {
+      key: "unprocessed",
+      label: locale === "zh" ? "未处理" : locale === "ja" ? "未処理" : "Pending",
+      box: "bg-[color:var(--surface-muted)] border-[color:var(--border-soft)]",
+      ink: "text-[color:var(--ink)]",
+    },
+    {
+      key: "urgent_important",
+      label: locale === "zh" ? "紧急重要" : locale === "ja" ? "緊急かつ重要" : "Urgent & Important",
+      box: "bg-[color:var(--surface-urgent)] border-[color:var(--border-urgent)]",
+      ink: "text-[color:var(--pill-urgent-ink)]",
+    },
+    {
+      key: "not_urgent_important",
+      label: locale === "zh" ? "重要不紧急" : locale === "ja" ? "重要だが緊急ではない" : "Important, not urgent",
+      box: "bg-[color:var(--surface-info)] border-[color:var(--border-info)]",
+      ink: "text-[color:var(--pill-info-ink)]",
+    },
+    {
+      key: "urgent_not_important",
+      label: locale === "zh" ? "紧急不重要" : locale === "ja" ? "緊急だが重要ではない" : "Urgent, not important",
+      box: "bg-[color:var(--surface-warning)] border-[color:var(--border-warning)]",
+      ink: "text-[color:var(--pill-warning-ink)]",
+    },
+    {
+      key: "not_urgent_not_important",
+      label: locale === "zh" ? "不紧急不重要" : locale === "ja" ? "緊急でも重要でもない" : "Low priority",
+      box: "bg-[color:var(--surface-soft)] border-[color:var(--border-soft)]",
+      ink: "text-[color:var(--ink-muted)]",
+    },
+  ];
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) {
+      return;
+    }
+
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const getFocusableElements = () =>
+      Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
+      ).filter((element) => !element.hasAttribute("disabled") && element.getAttribute("aria-hidden") !== "true");
+
+    const initialFocusTarget = getFocusableElements()[0] ?? dialog;
+    initialFocusTarget.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+
+      if (event.key !== "Tab") {
+        return;
+      }
+
+      const focusableElements = getFocusableElements();
+      if (focusableElements.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+
+      const firstElement = focusableElements[0];
+      const lastElement = focusableElements[focusableElements.length - 1];
+      if (event.shiftKey && document.activeElement === firstElement) {
+        event.preventDefault();
+        lastElement.focus();
+      } else if (!event.shiftKey && document.activeElement === lastElement) {
+        event.preventDefault();
+        firstElement.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [onClose]);
 
   useEffect(() => {
     setJob(createEmptyJob(jobId));
@@ -196,7 +310,9 @@ export default function MailKBSummaryModal({ jobId, onClose }: MailKBSummaryModa
       const data = (await res.json()) as {
         ok?: boolean;
         stats?: { quadrantDistribution?: Record<string, number> };
-        result?: { stats?: { quadrantDistribution?: Record<string, number> } } | { quadrantDistribution?: Record<string, number> };
+        result?:
+          | { stats?: { quadrantDistribution?: Record<string, number> } }
+          | { quadrantDistribution?: Record<string, number> };
       };
       if (!data.ok) {
         return;
@@ -305,7 +421,10 @@ export default function MailKBSummaryModal({ jobId, onClose }: MailKBSummaryModa
 
     eventSource.addEventListener("error", (event) => {
       const messageEvent = event as MessageEvent<string>;
-      const data = typeof messageEvent.data === "string" ? parseJsonData<{ error?: string }>(messageEvent.data) : null;
+      const data =
+        typeof messageEvent.data === "string"
+          ? parseJsonData<{ error?: string }>(messageEvent.data)
+          : null;
       if (data?.error) {
         setJob((prev) => ({
           ...prev,
@@ -335,12 +454,15 @@ export default function MailKBSummaryModal({ jobId, onClose }: MailKBSummaryModa
         : 0;
 
   const phase = job.progress.phase || "idle";
-  const phaseLabel = PHASE_LABELS[phase] ?? "处理中";
-  const phaseBadgeClasses = PHASE_BADGE_CLASSES[phase] ?? PHASE_BADGE_CLASSES.idle;
+  const phaseLabel = phaseLabels[phase as keyof typeof phaseLabels] ?? (locale === "zh" ? "处理中" : locale === "ja" ? "処理中" : "Running");
+  const phaseTone = getPhaseTone(phase);
 
-  const formatTime = (timestamp: string) => {
+  const formatDateTime = (timestamp: string) => {
     try {
-      return new Date(timestamp).toLocaleTimeString("zh-CN", {
+      return new Date(timestamp).toLocaleString(dateLocale, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
@@ -361,109 +483,103 @@ export default function MailKBSummaryModal({ jobId, onClose }: MailKBSummaryModa
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-6">
-      <div className="flex max-h-[80vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-zinc-700 bg-white shadow-2xl dark:bg-zinc-900">
-        <div className="flex items-start justify-between gap-4 border-b border-zinc-200 px-6 py-4 dark:border-zinc-800">
-          <div className="min-w-0">
-            <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-              邮件知识库处理
-            </h2>
-            <p className="mt-1 break-all text-sm text-zinc-500 dark:text-zinc-400">
-              Job ID: {jobId}
-            </p>
+    <div
+      ref={dialogRef}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(12,18,27,0.48)] p-4 backdrop-blur-md"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      tabIndex={-1}
+    >
+      <CalmSurface className="max-h-[88vh] w-full max-w-4xl overflow-hidden p-0" beam>
+        <div className="border-b border-[color:var(--border-soft)] px-6 py-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <CalmSectionLabel>{labels.eyebrow}</CalmSectionLabel>
+              <h2 id={titleId} className="mt-2 text-xl font-semibold text-[color:var(--ink)]">{labels.title}</h2>
+              <p className="mt-2 break-all font-mono text-[11px] leading-5 text-[color:var(--ink-subtle)]">
+                {labels.jobId}: {jobId}
+              </p>
+            </div>
+            <CalmButton type="button" onClick={() => onClose()} variant="ghost">
+              {labels.close}
+            </CalmButton>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-9 items-center justify-center rounded-lg border border-zinc-300 px-3 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
-          >
-            关闭
-          </button>
         </div>
 
-        <div className="border-b border-zinc-200 bg-zinc-50 px-6 py-4 dark:border-zinc-800 dark:bg-zinc-950/70">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={`rounded-full px-3 py-1 text-sm font-medium ${phaseBadgeClasses}`}>
+        <div className="border-b border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-6 py-5">
+          <div className="flex flex-wrap items-center gap-3">
+            <CalmPill tone={phaseTone} pulse={job.status === "running"}>
               {phaseLabel}
-            </span>
-            <span className="text-sm text-zinc-600 dark:text-zinc-300">
-              {job.progress.message || "正在准备任务..."}
+            </CalmPill>
+            <span className="text-sm text-[color:var(--ink-muted)]">
+              {job.progress.message || labels.pendingMessage}
             </span>
           </div>
 
-          <div className="mt-3 h-3 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
-            <div
-              className="h-full bg-gradient-to-r from-blue-500 via-fuchsia-500 to-emerald-500 transition-all duration-300"
-              style={{ width: `${progressPercent}%` }}
-            />
-          </div>
-
-          <div className="mt-2 flex justify-between text-xs text-zinc-500 dark:text-zinc-400">
-            <span>
-              {job.progress.processed} / {job.progress.total || "?"}
-            </span>
-            <span>{progressPercent}%</span>
+          <div className="mt-4">
+            <div className="mb-2 flex items-center justify-between text-xs text-[color:var(--ink-subtle)]">
+              <span>{labels.progress}</span>
+              <span className="font-mono">
+                {job.progress.processed} / {job.progress.total || "?"} · {progressPercent}%
+              </span>
+            </div>
+            <div className="h-3 overflow-hidden rounded-full bg-[color:var(--surface-muted)]">
+              <div
+                className="h-full bg-[linear-gradient(90deg,rgba(86,154,255,0.95),rgba(92,200,165,0.88),rgba(243,171,73,0.88))] transition-all duration-300"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
           </div>
         </div>
 
         {job.status === "completed" && stats.quadrantDistribution ? (
-          <div className="grid grid-cols-2 gap-3 border-b border-zinc-200 bg-emerald-50 px-6 py-4 dark:border-zinc-800 dark:bg-emerald-950/20 sm:grid-cols-5">
-            <div className="rounded-lg bg-violet-100 px-3 py-2 text-center dark:bg-violet-900/30">
-              <div className="text-lg font-bold text-violet-600 dark:text-violet-200">
-                {stats.quadrantDistribution.unprocessed || 0}
-              </div>
-              <div className="text-xs text-violet-500 dark:text-violet-300">未处理</div>
-            </div>
-            <div className="rounded-lg bg-red-100 px-3 py-2 text-center dark:bg-red-900/30">
-              <div className="text-lg font-bold text-red-600 dark:text-red-200">
-                {stats.quadrantDistribution.urgent_important || 0}
-              </div>
-              <div className="text-xs text-red-500 dark:text-red-300">紧急重要</div>
-            </div>
-            <div className="rounded-lg bg-blue-100 px-3 py-2 text-center dark:bg-blue-900/30">
-              <div className="text-lg font-bold text-blue-600 dark:text-blue-200">
-                {stats.quadrantDistribution.not_urgent_important || 0}
-              </div>
-              <div className="text-xs text-blue-500 dark:text-blue-300">重要不紧急</div>
-            </div>
-            <div className="rounded-lg bg-amber-100 px-3 py-2 text-center dark:bg-amber-900/30">
-              <div className="text-lg font-bold text-amber-600 dark:text-amber-200">
-                {stats.quadrantDistribution.urgent_not_important || 0}
-              </div>
-              <div className="text-xs text-amber-500 dark:text-amber-300">紧急不重要</div>
-            </div>
-            <div className="rounded-lg bg-zinc-100 px-3 py-2 text-center dark:bg-zinc-800">
-              <div className="text-lg font-bold text-zinc-600 dark:text-zinc-200">
-                {stats.quadrantDistribution.not_urgent_not_important || 0}
-              </div>
-              <div className="text-xs text-zinc-500 dark:text-zinc-300">不紧急不重要</div>
+          <div className="border-b border-[color:var(--border-soft)] px-6 py-5">
+            <CalmSectionLabel>{labels.quadrantsLabel}</CalmSectionLabel>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+              {quadrantCards.map((card) => (
+                <div
+                  key={card.key}
+                  className={`rounded-[1rem] border px-3 py-3 text-center ${card.box}`}
+                >
+                  <div className={`text-lg font-semibold ${card.ink}`}>
+                    {stats.quadrantDistribution?.[card.key] || 0}
+                  </div>
+                  <div className="mt-1 text-xs text-[color:var(--ink-subtle)]">{card.label}</div>
+                </div>
+              ))}
             </div>
           </div>
         ) : null}
 
         {job.status === "failed" && job.error ? (
-          <div className="border-b border-rose-200 bg-rose-50 px-6 py-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200">
-            处理失败：{job.error}
+          <div className="border-b border-[color:var(--border-urgent)] bg-[color:var(--surface-urgent)] px-6 py-4 text-sm text-[color:var(--pill-urgent-ink)]">
+            {labels.failedPrefix}: {job.error}
           </div>
         ) : null}
 
-        <div className="flex-1 overflow-hidden px-6 py-4">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <h3 className="text-sm font-medium text-zinc-700 dark:text-zinc-200">处理日志</h3>
+        <div className="px-6 py-5">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <CalmSectionLabel>{labels.logs}</CalmSectionLabel>
             {job.completedAt ? (
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                完成时间：{formatTime(job.completedAt)}
+              <p className="text-xs text-[color:var(--ink-subtle)]">
+                {labels.completedAt}: {formatDateTime(job.completedAt)}
               </p>
             ) : null}
           </div>
 
-          <div className="h-72 overflow-y-auto rounded-lg bg-zinc-950 p-3 font-mono text-sm">
+          <div className="h-80 overflow-y-auto rounded-[1.15rem] border border-[rgba(118,136,170,0.18)] bg-[radial-gradient(circle_at_top,rgba(22,30,46,0.98),rgba(10,14,22,0.98))] p-4 font-mono text-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
             {logs.length === 0 ? (
-              <p className="text-zinc-500">等待日志输出...</p>
+              <p className="text-slate-400">{labels.waitingLogs}</p>
             ) : (
               logs.map((log, index) => (
                 <div key={`${log.timestamp}-${index}`} className={`flex gap-2 py-1 ${getLogClass(log.level)}`}>
-                  <span className="shrink-0 text-zinc-500">[{formatTime(log.timestamp)}]</span>
+                  <span className="shrink-0 text-slate-500">[{formatDateTime(log.timestamp)}]</span>
                   <span>{log.message}</span>
                 </div>
               ))
@@ -472,24 +588,24 @@ export default function MailKBSummaryModal({ jobId, onClose }: MailKBSummaryModa
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-zinc-200 px-6 py-4 dark:border-zinc-800">
+        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-[color:var(--border-soft)] bg-[color:var(--surface-soft)] px-6 py-4">
           {job.status === "completed" ? (
-            <a
-              href="/knowledge-base"
-              className="inline-flex h-10 items-center justify-center rounded-lg bg-blue-600 px-4 text-sm font-medium text-white transition hover:bg-blue-700"
+            <CalmButton
+              type="button"
+              onClick={() => {
+                setCurrentView("knowledgebase");
+                onClose({ refresh: false });
+              }}
+              variant="primary"
             >
-              查看归纳结果
-            </a>
+              {labels.openResults}
+            </CalmButton>
           ) : null}
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-10 items-center justify-center rounded-lg border border-zinc-300 px-4 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
-          >
-            {job.status === "completed" ? "关闭" : "后台处理"}
-          </button>
+          <CalmButton type="button" onClick={() => onClose()} variant="secondary">
+            {job.status === "completed" ? labels.close : labels.continueBackground}
+          </CalmButton>
         </div>
-      </div>
+      </CalmSurface>
     </div>
   );
 }

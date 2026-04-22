@@ -1,5 +1,4 @@
-import React, { useId, useMemo, useRef, useState } from "react";
-import { motion, useReducedMotion } from "motion/react";
+import React, { useId } from "react";
 import { cn } from "../../lib/utils";
 
 type Tone = "default" | "muted" | "info" | "success" | "warning" | "urgent";
@@ -23,74 +22,47 @@ const pillClasses: Record<Tone, string> = {
   urgent: "bg-[color:var(--pill-urgent)] text-[color:var(--pill-urgent-ink)]",
 };
 
+const DECORATIVE_SQUARES = Array.from({ length: 8 }, (_, index) => ({
+  id: index,
+  x: ((index * 19) % 100) + 3,
+  y: ((index * 13) % 70) + 10,
+  large: index % 3 === 0,
+}));
+
 export function CalmBackground({ className }: { className?: string }) {
   const patternId = useId();
-  const reduceMotion = useReducedMotion();
-  const animatedSquares = useMemo(
-    () =>
-      Array.from({ length: 12 }, (_, index) => ({
-        id: index,
-        x: ((index * 17) % 100) + 4,
-        y: ((index * 11) % 72) + 8,
-        duration: 10 + (index % 4) * 2,
-      })),
-    []
-  );
 
   return (
     <div className={cn("pointer-events-none fixed inset-0 overflow-hidden", className)} aria-hidden="true">
       <div className="absolute inset-0 bg-[var(--app-gradient)]" />
-      <motion.div
-        className="absolute left-[-12%] top-[-12%] h-[28rem] w-[28rem] rounded-full bg-[radial-gradient(circle,rgba(92,154,255,0.28),transparent_68%)] blur-3xl"
-        animate={reduceMotion ? undefined : { x: [0, 30, -12, 0], y: [0, 28, 48, 0], scale: [1, 1.08, 0.96, 1] }}
-        transition={{ duration: 22, repeat: Infinity, ease: "easeInOut" }}
-      />
-      <motion.div
-        className="absolute bottom-[-18%] right-[-10%] h-[26rem] w-[26rem] rounded-full bg-[radial-gradient(circle,rgba(42,201,158,0.22),transparent_68%)] blur-3xl"
-        animate={reduceMotion ? undefined : { x: [0, -32, -10, 0], y: [0, -16, 22, 0], scale: [1, 0.95, 1.06, 1] }}
-        transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
-      />
-      <motion.div
-        className="absolute right-[24%] top-[18%] h-[18rem] w-[18rem] rounded-full bg-[radial-gradient(circle,rgba(253,185,93,0.16),transparent_70%)] blur-3xl"
-        animate={reduceMotion ? undefined : { x: [0, -18, 6, 0], y: [0, 12, -14, 0] }}
-        transition={{ duration: 18, repeat: Infinity, ease: "easeInOut" }}
-      />
-      <svg className="absolute inset-0 h-full w-full opacity-[0.44] dark:opacity-[0.22]">
+      <div className="absolute left-[-10%] top-[-10%] h-[26rem] w-[26rem] rounded-full bg-[radial-gradient(circle,rgba(92,154,255,0.18),transparent_70%)] blur-3xl" />
+      <div className="absolute bottom-[-16%] right-[-10%] h-[24rem] w-[24rem] rounded-full bg-[radial-gradient(circle,rgba(42,201,158,0.14),transparent_70%)] blur-3xl" />
+      <div className="absolute right-[24%] top-[16%] h-[16rem] w-[16rem] rounded-full bg-[radial-gradient(circle,rgba(253,185,93,0.12),transparent_72%)] blur-3xl" />
+      <svg className="absolute inset-0 h-full w-full opacity-[0.28] dark:opacity-[0.16]">
         <defs>
-          <pattern id={patternId} width="48" height="48" patternUnits="userSpaceOnUse">
-            <path d="M48 0H0V48" fill="none" stroke="currentColor" strokeOpacity="0.14" />
+          <pattern id={patternId} width="52" height="52" patternUnits="userSpaceOnUse">
+            <path d="M52 0H0V52" fill="none" stroke="currentColor" strokeOpacity="0.12" />
           </pattern>
         </defs>
         <rect width="100%" height="100%" fill={`url(#${patternId})`} className="text-[var(--grid-line)]" />
       </svg>
-      {!reduceMotion ? (
-        <div className="absolute inset-0">
-          {animatedSquares.map((square) => (
-            <motion.span
-              key={square.id}
-              className="absolute block rounded-md border border-white/55 bg-white/35 shadow-[0_12px_32px_rgba(132,157,190,0.14)] dark:border-white/12 dark:bg-white/6"
-              style={{
-                left: `${square.x}%`,
-                top: `${square.y}%`,
-                width: square.id % 3 === 0 ? "2.5rem" : "1.75rem",
-                height: square.id % 3 === 0 ? "2.5rem" : "1.75rem",
-              }}
-              animate={{
-                opacity: [0.08, 0.24, 0.08],
-                scale: [0.92, 1, 0.94],
-              }}
-              transition={{
-                duration: square.duration,
-                repeat: Infinity,
-                ease: "easeInOut",
-                delay: square.id * 0.32,
-              }}
-            />
-          ))}
-        </div>
-      ) : null}
-      <div className="absolute inset-x-0 top-0 h-36 bg-[linear-gradient(to_bottom,rgba(255,255,255,0.55),transparent)] dark:bg-[linear-gradient(to_bottom,rgba(9,12,16,0.55),transparent)]" />
-      <div className="absolute inset-x-0 bottom-0 h-44 bg-[linear-gradient(to_top,rgba(250,248,244,0.7),transparent)] dark:bg-[linear-gradient(to_top,rgba(8,10,14,0.85),transparent)]" />
+      <div className="absolute inset-0">
+        {DECORATIVE_SQUARES.map((square) => (
+          <span
+            key={square.id}
+            className="absolute block rounded-md border border-white/45 bg-white/28 shadow-[0_10px_24px_rgba(132,157,190,0.08)] dark:border-white/8 dark:bg-white/4"
+            style={{
+              left: `${square.x}%`,
+              top: `${square.y}%`,
+              width: square.large ? "2.1rem" : "1.45rem",
+              height: square.large ? "2.1rem" : "1.45rem",
+              opacity: square.large ? 0.24 : 0.14,
+            }}
+          />
+        ))}
+      </div>
+      <div className="absolute inset-x-0 top-0 h-28 bg-[linear-gradient(to_bottom,rgba(255,255,255,0.42),transparent)] dark:bg-[linear-gradient(to_bottom,rgba(9,12,16,0.34),transparent)]" />
+      <div className="absolute inset-x-0 bottom-0 h-36 bg-[linear-gradient(to_top,rgba(248,246,242,0.64),transparent)] dark:bg-[linear-gradient(to_top,rgba(8,10,14,0.74),transparent)]" />
     </div>
   );
 }
@@ -108,13 +80,13 @@ export const CalmSurface = React.forwardRef<
     <div
       ref={ref}
       className={cn(
-        "relative overflow-hidden rounded-[var(--radius-card)] border shadow-[var(--shadow-card)] backdrop-blur-xl",
+        "relative overflow-hidden rounded-[var(--radius-card)] border shadow-[var(--shadow-card)] backdrop-blur-sm",
         toneClasses[tone],
         className
       )}
       {...props}
     >
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.46),transparent_24%,transparent_76%,rgba(255,255,255,0.08))] dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.06),transparent_28%,transparent_72%,rgba(255,255,255,0.02))]" />
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.28),transparent_20%,transparent_80%,rgba(255,255,255,0.04))] dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.04),transparent_24%,transparent_82%,rgba(255,255,255,0.01))]" />
       {beam ? <CalmBorderBeam /> : null}
       <div className="relative">{children}</div>
     </div>
@@ -126,37 +98,18 @@ CalmSurface.displayName = "CalmSurface";
 export function CalmSpotlightCard({
   children,
   className,
-  spotlightColor = "rgba(255,255,255,0.52)",
+  spotlightColor = "rgba(255,255,255,0.42)",
 }: {
   children: React.ReactNode;
   className?: string;
   spotlightColor?: string;
 }) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [opacity, setOpacity] = useState(0);
-
   return (
-    <div
-      ref={ref}
-      onMouseMove={(event) => {
-        const bounds = ref.current?.getBoundingClientRect();
-        if (!bounds) {
-          return;
-        }
-        setPosition({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
-      }}
-      onMouseEnter={() => setOpacity(0.9)}
-      onMouseLeave={() => setOpacity(0)}
-      onFocus={() => setOpacity(0.85)}
-      onBlur={() => setOpacity(0)}
-      className={cn("relative overflow-hidden rounded-[var(--radius-card)]", className)}
-    >
+    <div className={cn("group relative overflow-hidden rounded-[var(--radius-card)]", className)}>
       <div
-        className="pointer-events-none absolute inset-0 transition-opacity duration-500"
+        className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
         style={{
-          opacity,
-          background: `radial-gradient(420px circle at ${position.x}px ${position.y}px, ${spotlightColor}, transparent 70%)`,
+          background: `radial-gradient(120% 120% at 50% 0%, ${spotlightColor}, transparent 66%)`,
         }}
       />
       <div className="relative">{children}</div>
@@ -175,9 +128,9 @@ export function CalmButton({
   return (
     <button
       className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-[var(--radius-pill)] px-4 py-2 text-sm font-semibold transition duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus-ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--focus-offset)] disabled:cursor-not-allowed disabled:opacity-60",
+        "inline-flex items-center justify-center gap-2 rounded-[var(--radius-pill)] px-4 py-2 text-sm font-semibold transition duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus-ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--focus-offset)] disabled:cursor-not-allowed disabled:opacity-60",
         variant === "primary" &&
-          "bg-[color:var(--button-primary)] text-[color:var(--button-primary-ink)] shadow-[0_14px_32px_rgba(21,38,74,0.16)] hover:bg-[color:var(--button-primary-hover)]",
+          "bg-[color:var(--button-primary)] text-[color:var(--button-primary-ink)] shadow-[0_10px_22px_rgba(21,38,74,0.12)] hover:bg-[color:var(--button-primary-hover)]",
         variant === "secondary" &&
           "border border-[color:var(--border-strong)] bg-[color:var(--button-secondary)] text-[color:var(--button-secondary-ink)] hover:bg-[color:var(--button-secondary-hover)]",
         variant === "ghost" &&
@@ -210,12 +163,7 @@ export function CalmPill({
         className
       )}
     >
-      {pulse ? (
-        <span className="relative flex h-1.5 w-1.5" aria-hidden="true">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-current opacity-65" />
-          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-current" />
-        </span>
-      ) : null}
+      {pulse ? <span className="inline-flex h-1.5 w-1.5 rounded-full bg-current opacity-80" aria-hidden="true" /> : null}
       {children}
     </span>
   );
@@ -232,50 +180,25 @@ export function CalmSectionLabel({ children, className }: { children: React.Reac
 export function CalmAnimatedList({
   children,
   className,
-  delay = 0.06,
+  delay: _delay = 0.06,
 }: {
   children: React.ReactNode;
   className?: string;
   delay?: number;
 }) {
-  const items = React.Children.toArray(children);
-  return (
-    <div className={cn("flex flex-col gap-3", className)}>
-      {items.map((item, index) => (
-        <motion.div
-          key={(item as React.ReactElement).key ?? index}
-          initial={{ opacity: 0, y: 8, scale: 0.985 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ duration: 0.28, delay: index * delay, ease: "easeOut" }}
-        >
-          {item}
-        </motion.div>
-      ))}
-    </div>
-  );
+  return <div className={cn("flex flex-col gap-3", className)}>{children}</div>;
 }
 
 export function CalmBorderBeam({ className }: { className?: string }) {
-  const reduceMotion = useReducedMotion();
-  if (reduceMotion) {
-    return null;
-  }
-
   return (
-    <div className="pointer-events-none absolute inset-0 rounded-[inherit] overflow-hidden">
-      <motion.div
+    <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-[inherit]">
+      <div
         className={cn(
-          "absolute left-[-18%] top-0 h-px w-36 bg-[linear-gradient(90deg,transparent,rgba(110,151,255,0.85),transparent)] blur-[0.5px]",
+          "absolute inset-x-4 top-0 h-px bg-[linear-gradient(90deg,transparent,rgba(110,151,255,0.38),transparent)]",
           className
         )}
-        animate={{ x: ["0%", "130%"] }}
-        transition={{ duration: 5.2, ease: "linear", repeat: Infinity }}
       />
-      <motion.div
-        className="absolute bottom-0 left-[-12%] h-px w-28 bg-[linear-gradient(90deg,transparent,rgba(60,191,150,0.75),transparent)] blur-[0.5px]"
-        animate={{ x: ["0%", "144%"] }}
-        transition={{ duration: 6.4, ease: "linear", repeat: Infinity, delay: 1.2 }}
-      />
+      <div className="absolute inset-x-6 bottom-0 h-px bg-[linear-gradient(90deg,transparent,rgba(60,191,150,0.3),transparent)]" />
     </div>
   );
 }
